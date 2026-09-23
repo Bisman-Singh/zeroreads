@@ -262,3 +262,13 @@ func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time) (*Veri
 	}
 	return res, nil
 }
+
+// EmitPolicies writes the rules as Telemetry Policies, each verified against policy-go; rules the
+// format cannot express, or that the engine would apply differently, are returned with reasons.
+func EmitPolicies(rf *RulesFile, scratch string) ([]byte, []emit.PolicySkip, error) {
+	var rules []emit.Rule
+	for _, r := range rf.Rules {
+		rules = append(rules, r.Rule)
+	}
+	return emit.Policies(rules, scratch)
+}

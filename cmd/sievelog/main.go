@@ -21,7 +21,7 @@ import (
 
 const usage = `usage:
   sievelog analyze -c sievelog.yaml -o DIR
-  sievelog emit    -c sievelog.yaml -rules RULES.json -mode shadow|enforce -o COLLECTOR.yaml
+  sievelog emit    -c sievelog.yaml -rules RULES.json [-format collector|policy] [-mode shadow|enforce] -o FILE
   sievelog verify  -c sievelog.yaml -rules RULES.json [-o KEEP-RULES.json]
 `
 
@@ -82,9 +82,37 @@ func runEmit(args []string) error {
 	fs := flag.NewFlagSet("emit", flag.ExitOnError)
 	cfgPath := fs.String("c", "sievelog.yaml", "config file")
 	rulesPath := fs.String("rules", "", "rules.json from analyze")
-	mode := fs.String("mode", "shadow", "shadow or enforce")
-	out := fs.String("o", "", "output collector config (default stdout)")
+	mode := fs.String("mode", "shadow", "shadow or enforce (collector format)")
+	format := fs.String("format", "collector", "collector (OpenTelemetry Collector config) or policy (Telemetry Policy JSON)")
+	out := fs.String("o", "", "output file (default stdout)")
 	_ = fs.Parse(args)
+	if *format == "policy" {
+		rf, err := app.LoadRules(*rulesPath)
+		if err != nil {
+			return err
+		}
+		scratch, err := os.MkdirTemp("", "sievelog-policy")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(scratch)
+		b, skips, err := app.EmitPolicies(rf, scratch)
+		if err != nil {
+			return err
+		}
+		for _, s := range skips {
+			fmt.Fprintf(os.Stderr, "not emitted as a policy: %s: %s\n", s.RuleID, s.Reason)
+		}
+		fmt.Fprintf(os.Stderr, "policies verified against %s\n", emit.PolicyRuntime)
+		if *out == "" {
+			_, err = os.Stdout.Write(b)
+			return err
+		}
+		return os.WriteFile(*out, b, 0o644)
+	}
+	if *format != "collector" {
+		return fmt.Errorf("-format must be collector or policy")
+	}
 	if *mode != string(emit.Shadow) && *mode != string(emit.Enforce) {
 		return fmt.Errorf("-mode must be shadow or enforce")
 	}
