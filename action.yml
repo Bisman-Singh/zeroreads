@@ -1,0 +1,13 @@
+name: sievelog verify
+description: Fail the job when an enforced log reduction rule is no longer safe, and say why.
+inputs:
+  config:
+    description: Path to sievelog.yaml in the workspace
+    default: sievelog.yaml
+  rules:
+    description: Path to the enforced rules.json in the workspace
+    default: rules.json
+runs:
+  using: docker
+  image: Dockerfile
+  args: ["verify", "-c", "${{ inputs.config }}", "-rules", "${{ inputs.rules }}"]

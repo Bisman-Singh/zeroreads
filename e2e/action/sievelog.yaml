@@ -1,0 +1,21 @@
+loki:
+  url: http://loki.sievelog-system.svc:3100
+scope:
+  services: [checkout, auth, orders]
+  structured: {orders: msg}
+evidence:
+  window: 5m
+  query_log: {enabled: true, selector: '{service_name="loki"}', prove_live: true}
+  ruler: true
+  grafana:
+    - {url: http://grafana.sievelog-system.svc:3000, username: admin, password_env: GRAFANA_PASSWORD, datasources: [loki]}
+collector:
+  config_files: [.e2e/act/collector.yaml]
+  pipeline: logs
+  after: transform/prep
+  measure_exporters: [file/metrics]
+  sinks:
+    otlp_http/loki: {loki: true}
+    file/logs: {exempt: "e2e local copy"}
+policy:
+  acknowledge: [grafana-queryhistory, querylog-window]

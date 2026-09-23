@@ -162,6 +162,9 @@ func runVerify(ctx context.Context, args []string) (int, error) {
 			return 0, err
 		}
 	}
+	if err := writeStepSummary(res, len(rf.Rules)); err != nil {
+		return 0, err
+	}
 	if len(res.Violations) == 0 {
 		fmt.Printf("verify: all %d enforced rules are still safe\n", len(rf.Rules))
 		return 0, nil
@@ -174,4 +177,29 @@ func runVerify(ctx context.Context, args []string) (int, error) {
 	}
 	fmt.Printf("verify: %d of %d rules must be reverted; %d remain safe\n", len(res.Violations), len(rf.Rules), len(res.Keep.Rules))
 	return 3, nil
+}
+
+// writeStepSummary appends the verify result to $GITHUB_STEP_SUMMARY when running in GitHub Actions.
+func writeStepSummary(res *app.VerifyResult, total int) error {
+	path := os.Getenv("GITHUB_STEP_SUMMARY")
+	if path == "" {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if len(res.Violations) == 0 {
+		_, err = fmt.Fprintf(f, "### sievelog verify\n\nAll %d enforced rules are still safe.\n", total)
+		return err
+	}
+	fmt.Fprintf(f, "### sievelog verify\n\n%d of %d enforced rules are no longer safe.\n\n", len(res.Violations), total)
+	for _, v := range res.Violations {
+		fmt.Fprintf(f, "- `%s`\n", v.RuleID)
+		for _, r := range v.Reasons {
+			fmt.Fprintf(f, "  - %s\n", r)
+		}
+	}
+	return nil
 }
