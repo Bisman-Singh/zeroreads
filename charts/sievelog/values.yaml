@@ -1,0 +1,45 @@
+image:
+  repository: ghcr.io/bisman-singh/sievelog
+  tag: ""          # defaults to the chart appVersion
+  pullPolicy: IfNotPresent
+
+# How often enforced rules are re-checked. A failed Job (exit code 3) means a rule is no longer safe;
+# its logs list the reason and the revert.
+schedule: "*/15 * * * *"
+concurrencyPolicy: Forbid
+successfulJobsHistoryLimit: 3
+failedJobsHistoryLimit: 5
+backoffLimit: 0
+activeDeadlineSeconds: 900
+
+# sievelog.yaml, verbatim. Paths inside it must point under /etc/sievelog.
+config: ""
+# rules.json produced by `sievelog analyze` and currently enforced, verbatim.
+rules: ""
+# Extra files placed next to the config, e.g. the collector configuration: {name: content}.
+files: {}
+
+# Environment for credentials referenced by *_env settings in the config.
+env: []
+envFrom: []
+
+serviceAccount:
+  create: true
+  name: ""
+
+resources:
+  requests: {cpu: 50m, memory: 128Mi}
+  limits: {memory: 512Mi}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  seccompProfile: {type: RuntimeDefault}
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: [ALL]}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

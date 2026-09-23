@@ -51,6 +51,9 @@ ENTRYPOINT ["/loggen"]
 EOF
 docker build -q -t sievelog/loggen:e2e "${WORK}" >/dev/null
 kind load docker-image --name "${CLUSTER}" sievelog/loggen:e2e >/dev/null
+log "building sievelog image"
+docker build -q -t sievelog/sievelog:e2e "${ROOT}" >/dev/null
+kind load docker-image --name "${CLUSTER}" sievelog/sievelog:e2e >/dev/null
 # The multi-platform collector image fails "kind load" (ctr digest not found); the node pulls it.
 
 log "resetting previous run"
@@ -71,7 +74,10 @@ ${K} rollout restart deployment/grafana -n sievelog-system >/dev/null
 ${K} rollout status deployment/grafana -n sievelog-system --timeout=240s >/dev/null
 
 log "deploying collector"
-( cd "${ROOT}" && go run ./e2e/render "${RUN_NS}" ) > "${WORK}/config.yaml"
+# Only the current Loki pod's logs: kubelet keeps earlier pods' log files, and their query-log
+# lines would otherwise be re-shipped as usage evidence from a previous run.
+LOKI_POD=$(${K} get pods -n sievelog-system -l app=loki --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.name}')
+( cd "${ROOT}" && go run ./e2e/render "${RUN_NS}" "${LOKI_POD}" ) > "${WORK}/config.yaml"
 docker run --rm -v "${WORK}:/cfg" "${COLLECTOR_IMAGE}" validate --config=/cfg/config.yaml
 ${K} apply -f "${ROOT}/e2e/k8s/collector.yaml" >/dev/null
 ${K} create namespace "${RUN_NS}" >/dev/null

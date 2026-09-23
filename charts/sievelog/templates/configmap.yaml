@@ -1,0 +1,17 @@
+{{- if not .Values.config }}{{ fail "config (sievelog.yaml) is required" }}{{ end }}
+{{- if not .Values.rules }}{{ fail "rules (the enforced rules.json) is required" }}{{ end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sievelog.fullname" . }}
+  labels:
+    {{- include "sievelog.labels" . | nindent 4 }}
+data:
+  sievelog.yaml: |
+    {{- .Values.config | nindent 4 }}
+  rules.json: |
+    {{- .Values.rules | nindent 4 }}
+  {{- range $name, $content := .Values.files }}
+  {{ $name }}: |
+    {{- $content | nindent 4 }}
+  {{- end }}

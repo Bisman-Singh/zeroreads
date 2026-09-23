@@ -1,0 +1,6 @@
+apiVersion: v2
+name: sievelog
+description: Re-checks enforced log reduction rules against fresh usage evidence on a schedule.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

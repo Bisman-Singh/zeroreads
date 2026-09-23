@@ -237,6 +237,70 @@ func (e *loopEnv) resetOutputs() {
 	}
 }
 
+// installChart installs charts/sievelog in the cluster with the in-cluster addresses of the stack, and
+// returns a function that runs the verify CronJob once and reports its exit code and logs.
+func (e *loopEnv) installChart(rulesPath, collectorPath, grafanaURL string) func(string) (int, string) {
+	e.t.Helper()
+	rules, _ := os.ReadFile(rulesPath)
+	collector, _ := os.ReadFile(collectorPath)
+	cfg := fmt.Sprintf(`loki:
+  url: http://loki.sievelog-system.svc:3100
+scope:
+  services: [checkout, auth, orders]
+  structured: {orders: msg}
+evidence:
+  window: 5m
+  query_log: {enabled: true, selector: '{service_name="loki"}', prove_live: true}
+  ruler: true
+  grafana:
+    - {url: http://grafana.sievelog-system.svc:3000, username: admin, password_env: GRAFANA_PASSWORD, datasources: [loki]}
+collector:
+  config_files: [/etc/sievelog/collector.yaml]
+  pipeline: logs
+  after: transform/prep
+  measure_exporters: [file/metrics]
+  sinks:
+    otlp_http/loki: {loki: true}
+    file/logs: {exempt: "e2e local copy"}
+policy:
+  acknowledge: [grafana-queryhistory, querylog-window]
+`)
+	values := map[string]any{
+		"image":  map[string]any{"repository": "sievelog/sievelog", "tag": "e2e", "pullPolicy": "Never"},
+		"config": cfg, "rules": string(rules), "files": map[string]any{"collector.yaml": string(collector)},
+		"env": []any{map[string]any{"name": "GRAFANA_PASSWORD", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": "sievelog-grafana", "key": "password"}}}},
+	}
+	vb, _ := json.Marshal(values)
+	vf := filepath.Join(e.t.TempDir(), "values.json")
+	os.WriteFile(vf, vb, 0o644)
+	sec := e.kubectl("create", "secret", "generic", "sievelog-grafana", "-n", "sievelog-system", "--from-literal=password="+grafanaPass, "--dry-run=client", "-o", "yaml")
+	sf := filepath.Join(e.t.TempDir(), "secret.yaml")
+	os.WriteFile(sf, []byte(sec), 0o644)
+	e.kubectl("apply", "-f", sf)
+	if out, code := e.run(e.root, "helm", "upgrade", "--install", "sievelog", "./charts/sievelog", "-n", "sievelog-system",
+		"--kubeconfig", e.kube, "--kube-context", "kind-sievelog", "-f", vf, "--wait"); code != 0 {
+		e.t.Fatalf("helm install: %s", out)
+	}
+	return func(name string) (int, string) {
+		job := "verify-" + name + "-" + strconv.FormatInt(time.Now().Unix(), 10)
+		e.kubectl("create", "job", "--from=cronjob/sievelog-verify", job, "-n", "sievelog-system")
+		for deadline := time.Now().Add(4 * time.Minute); time.Now().Before(deadline); time.Sleep(3 * time.Second) {
+			st := e.kubectl("get", "job", job, "-n", "sievelog-system", "-o", "jsonpath={.status.succeeded}/{.status.failed}")
+			if st == "1/" || strings.HasSuffix(st, "/1") {
+				logs := e.kubectl("logs", "job/"+job, "-n", "sievelog-system")
+				code := 0
+				if strings.HasSuffix(st, "/1") {
+					term := e.kubectl("get", "pods", "-n", "sievelog-system", "-l", "job-name="+job, "-o", "jsonpath={.items[0].status.containerStatuses[0].state.terminated.exitCode}")
+					code, _ = strconv.Atoi(strings.TrimSpace(term))
+				}
+				return code, logs
+			}
+		}
+		e.t.Fatalf("job %s did not finish", job)
+		return 0, ""
+	}
+}
+
 func sampleKeep(text string, ts int64, keep int) bool {
 	sum := sha256.Sum256([]byte(text + "|" + strconv.FormatInt(ts, 10)))
 	return hex.EncodeToString(sum[:]) < emit.SampleThreshold(keep)
@@ -456,6 +520,12 @@ policy:
 		t.Fatalf("verify should pass: %s", out)
 	}
 
+	// 6a. The same check, scheduled in the cluster by the Helm chart: it must pass now.
+	helmVerify := e.installChart(filepath.Join(outDir, "rules.json"), userPath, grafanaURL)
+	if code, logs := helmVerify("pass"); code != 0 || !strings.Contains(logs, "still safe") {
+		t.Fatalf("scheduled verify should pass (exit %d): %s", code, logs)
+	}
+
 	// 5. Someone builds a dashboard that reads cache lines: verify must fail and revert that rule.
 	s, b := grafanaCall(t, grafanaURL, "POST", "/api/dashboards/db", 1, map[string]any{"overwrite": true, "dashboard": map[string]any{
 		"uid": "cache-watch", "title": "Cache watch", "schemaVersion": 41,
@@ -476,5 +546,11 @@ policy:
 		t.Fatalf("revert keeps %+v, want only the heartbeat rule", keep.Rules)
 	}
 	t.Logf("verify caught the new reader and reverted the cache rule")
+
+	// 6b. The scheduled check fails the same way, so an operator is alerted by the failed Job.
+	if code, logs := helmVerify("fail"); code != 3 || !strings.Contains(logs, "cache miss") {
+		t.Fatalf("scheduled verify should fail with exit 3 (got %d): %s", code, logs)
+	}
+	t.Logf("the Helm-scheduled verify passed, then failed with exit 3 once the new dashboard appeared")
 	_ = gen.Corpus
 }

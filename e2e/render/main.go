@@ -20,7 +20,7 @@ const tmpl = `receivers:
         id: container-parser
 
   file_log/loki:
-    include: [/var/log/pods/sievelog-system_loki-*/loki/*.log]
+    include: [/var/log/pods/sievelog-system_%s_*/loki/*.log]
     start_at: beginning
     include_file_path: true
     operators:
@@ -167,15 +167,15 @@ func main() {
 		fmt.Print(loop)
 		return
 	}
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: render <generator-namespace> | render --loop")
+	if len(os.Args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: render <generator-namespace> <loki-pod> | render --loop")
 		os.Exit(2)
 	}
 	var seeds []string
 	for _, s := range gen.SeedTemplates() {
 		seeds = append(seeds, "      - '"+strings.ReplaceAll(s, "'", "''")+"'")
 	}
-	if _, err := fmt.Fprintf(os.Stdout, tmpl, os.Args[1], gen.IPMaskName, gen.IPMaskPattern, strings.Join(seeds, "\n")); err != nil {
+	if _, err := fmt.Fprintf(os.Stdout, tmpl, os.Args[1], os.Args[2], gen.IPMaskName, gen.IPMaskPattern, strings.Join(seeds, "\n")); err != nil {
 		os.Exit(1)
 	}
 }
