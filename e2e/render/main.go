@@ -100,9 +100,75 @@ service:
       exporters: [otlp_http/loki]
 `
 
+// loop is the "user" collector config the full-loop test analyses, emits from and deploys: logs of
+// every sievelog-loop-* namespace go to Loki and a local file, and an independent pipeline keeps a
+// raw copy of every record so removal can be checked line by line.
+const loop = `receivers:
+  file_log/loop:
+    include: [/var/log/pods/sievelog-loop-*_*/*/*.log]
+    start_at: end
+    include_file_path: true
+    operators:
+      - type: container
+        id: container-parser
+  file_log/loki:
+    include: [/var/log/pods/sievelog-system_loki-*/loki/*.log]
+    start_at: end
+    include_file_path: true
+    operators:
+      - type: container
+        id: container-parser
+
+processors:
+  transform/service:
+    error_mode: propagate
+    log_statements:
+      - context: resource
+        statements:
+          - set(resource.attributes["service.name"], resource.attributes["k8s.container.name"])
+  transform/prep:
+    error_mode: propagate
+    log_statements:
+      - context: resource
+        statements:
+          - set(resource.attributes["service.name"], resource.attributes["k8s.container.name"])
+      - context: log
+        statements:
+          - set(log.body, ParseJSON(log.body)) where resource.attributes["k8s.container.name"] == "orders"
+
+exporters:
+  otlp_http/loki:
+    endpoint: http://loki.sievelog-system.svc:3100/otlp
+  file/logs:
+    path: /e2e/out/loop-logs.json
+  file/raw:
+    path: /e2e/out/loop-raw.json
+  file/metrics:
+    path: /e2e/out/loop-metrics.json
+
+service:
+  pipelines:
+    logs:
+      receivers: [file_log/loop]
+      processors: [transform/prep]
+      exporters: [otlp_http/loki, file/logs]
+    logs/raw:
+      receivers: [file_log/loop]
+      processors: [transform/prep]
+      exporters: [file/raw]
+    logs/loki-self:
+      receivers: [file_log/loki]
+      processors: [transform/service]
+      exporters: [otlp_http/loki]
+`
+
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--loop" {
+		fmt.Print(loop)
+		return
+	}
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: render <generator-namespace>")
+		fmt.Fprintln(os.Stderr, "usage: render <generator-namespace> | render --loop")
 		os.Exit(2)
 	}
 	var seeds []string

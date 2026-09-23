@@ -119,6 +119,7 @@ func (c *Client) Read(ctx context.Context) (Result, error) {
 		r.queryHistory(ctx)
 		r.correlations(ctx)
 	}
+	res.Queries = dedupeViews(res.Queries)
 	sort.SliceStable(res.Queries, func(i, j int) bool {
 		if res.Queries[i].Org != res.Queries[j].Org {
 			return res.Queries[i].Org < res.Queries[j].Org
@@ -281,4 +282,24 @@ func (r *orgReader) listK8s(ctx context.Context, group, version, resource string
 		}
 		cont = page.Metadata.Continue
 	}
+}
+
+// dedupeViews drops a dashboard query already seen in another schema view of the same dashboard:
+// Grafana serves every dashboard as v1 and v2, and both views carry the same queries.
+func dedupeViews(qs []Query) []Query {
+	seen := map[string]bool{}
+	var out []Query
+	for _, q := range qs {
+		k := ""
+		if strings.HasPrefix(q.Origin, "dashboard:") {
+			dash := strings.SplitN(strings.TrimPrefix(q.Origin, "dashboard:"), "/", 2)[0]
+			k = fmt.Sprintf("%d|%s|%s|%v|%v", q.Org, dash, q.Expr, q.Datasources, q.Hidden)
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+		}
+		out = append(out, q)
+	}
+	return out
 }

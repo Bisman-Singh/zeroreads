@@ -75,8 +75,8 @@ func (q *QueryLog) Read(ctx context.Context, start, end time.Time) (Result, erro
 		if res.Oldest.IsZero() || e.TS.Before(res.Oldest) {
 			res.Oldest = e.TS
 		}
-		if isOwnQuery(m["source"]) {
-			continue
+		if isOwnQuery(m["source"]) || strings.Contains(m["query"], probePrefix) {
+			continue // the analyzer's own reads and liveness markers are not usage
 		}
 		if m["component"] == "frontend" {
 			frontend = true
@@ -115,6 +115,10 @@ func (q *QueryLog) Read(ctx context.Context, start, end time.Time) (Result, erro
 	return res, nil
 }
 
+// probePrefix starts every liveness marker. The marker selects a label no stream carries, so it
+// reads nothing, and it is never counted as usage.
+const probePrefix = "sievelog_probe_"
+
 // isOwnQuery recognises the analyzer's tag. Loki lower-cases query-tag values in its log line.
 func isOwnQuery(source string) bool { return strings.EqualFold(source, "sievelog") }
 
@@ -135,7 +139,7 @@ func (q *QueryLog) ProveLive(ctx context.Context, target *Client, timeout time.D
 	if _, err := rand.Read(nonce); err != nil {
 		return err
 	}
-	marker := "sievelog_probe_" + hex.EncodeToString(nonce)
+	marker := probePrefix + hex.EncodeToString(nonce)
 	probe := *target
 	probe.untagged = true
 	sent := time.Now().Add(-time.Second)

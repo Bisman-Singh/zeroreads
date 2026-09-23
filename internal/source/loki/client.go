@@ -281,3 +281,9 @@ func (c *Client) LabelValues(ctx context.Context, label string, start, end time.
 	sort.Strings(resp.Data)
 	return resp.Data, nil
 }
+
+// Sample returns at most limit lines of a log query in [start, end), oldest first, in one request.
+// It is for bounded samples; use QueryRange to read everything.
+func (c *Client) Sample(ctx context.Context, query string, start, end time.Time, limit int) ([]Entry, error) {
+	return c.page(ctx, query, start, end, limit)
+}

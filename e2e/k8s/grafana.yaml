@@ -82,7 +82,7 @@ data:
         {
           "id": 2, "type": "timeseries", "title": "Declines by variable",
           "datasource": {"type": "loki", "uid": "loki"},
-          "targets": [{"refId": "A", "expr": "sum(count_over_time({service_name=\"$svc\"} |= \"$search\" [$__auto]))"}]
+          "targets": [{"refId": "A", "expr": "sum(count_over_time({service_name=~\"$svc\"} |= \"declined\" [$__auto]))"}]
         },
         {
           "id": 3, "type": "row", "title": "Collapsed", "collapsed": true,

@@ -127,7 +127,7 @@ done
 log "collector wrote ${got} records"
 sleep 3 # let the metrics file flush the last payloads
 
-printf 'SEED=%s\nCOUNT=%s\n' "${SEED}" "${COUNT}" > "${WORK}/last-run.env"
+printf 'SEED=%s\nCOUNT=%s\nRUN_NS=%s\n' "${SEED}" "${COUNT}" "${RUN_NS}" > "${WORK}/last-run.env"
 fi
 
 log "port-forwarding loki"
@@ -140,5 +140,5 @@ for _ in $(seq 1 30); do curl -sf localhost:13100/ready >/dev/null && break; sle
 for _ in $(seq 1 30); do curl -sf localhost:13000/api/health >/dev/null && break; sleep 1; done
 
 log "running assertions"
-( cd "${ROOT}" && E2E_OUT="${WORK}/out" E2E_SEED="${SEED}" E2E_COUNT="${COUNT}" LOKI_URL="http://localhost:13100" GRAFANA_URL="http://localhost:13000" \
+( cd "${ROOT}" && E2E_OUT="${WORK}/out" E2E_SEED="${SEED}" E2E_COUNT="${COUNT}" LOKI_URL="http://localhost:13100" GRAFANA_URL="http://localhost:13000" E2E_WORK="${WORK}" E2E_NS="${RUN_NS}" \
   go test -tags e2e ./e2e/ -count=1 -v -timeout 30m ${E2E_RUN:+-run "${E2E_RUN}"} )

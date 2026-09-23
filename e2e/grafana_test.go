@@ -90,7 +90,7 @@ func setupGrafanaFixtures(t *testing.T, base string) {
 				"data": map[string]any{"kind": "QueryGroup", "spec": map[string]any{"transformations": []any{}, "queryOptions": map[string]any{},
 					"queries": []any{map[string]any{"kind": "PanelQuery", "spec": map[string]any{"refId": "A", "hidden": false,
 						"query": map[string]any{"kind": "DataQuery", "group": "loki", "version": "v0", "datasource": map[string]any{"name": "loki"},
-							"spec": map[string]any{"expr": `{service_name="checkout"} |= "heartbeat"`}}}}}}},
+							"spec": map[string]any{"expr": `{service_name="checkout"} |= "healthz 200"`}}}}}}},
 				"vizConfig": map[string]any{"kind": "VizConfig", "group": "logs", "version": "", "spec": map[string]any{"options": map[string]any{}, "fieldConfig": map[string]any{"defaults": map[string]any{}, "overrides": []any{}}}},
 			}}},
 			"layout": map[string]any{"kind": "GridLayout", "spec": map[string]any{"items": []any{map[string]any{"kind": "GridLayoutItem",
@@ -124,20 +124,20 @@ func TestGrafanaReadsEveryStoredQuery(t *testing.T) {
 		found[q.Expr] = append(found[q.Expr], fmt.Sprintf("org%d %s %v hidden=%v", q.Org, q.Origin, q.Datasources, q.Hidden))
 	}
 	want := []string{
-		`{service_name="orders"} |= "created"`,                               // disabled annotation
-		`{service_name="checkout"} |= "healthz"`,                             // panel
-		`sum(count_over_time({service_name="$svc"} |= "$search" [$__auto]))`, // variables
-		`{service_name="checkout"} |= "retrying"`,                            // collapsed row
-		`sum(rate({service_name="orders"}[1m]))`,                             // mixed panel
-		`{service_name="auth"} |= "config placeholder"`,                      // hidden target, default datasource
-		`{service_name="auth"} |= "logged in"`,                               // library panel
-		`sum(count_over_time({service_name="auth"} |= "failed MFA" [5m]))`,   // alert rule
-		`{service_name="checkout"} |= "declined"`,                            // short URL, panes format
-		`{service_name="auth"} |= "failed MFA"`,                              // short URL, legacy left format
-		`{service_name="orders"} |= "failed at step"`,                        // query history
-		`{service_name="${service_name}"} |= "retrying"`,                     // correlation
-		`{service_name="checkout"} |= "heartbeat"`,                           // v2-native dashboard
-		`{service_name="orders"} |= "handled route"`,                         // second org
+		`{service_name="orders"} |= "created"`,                                 // disabled annotation
+		`{service_name="checkout"} |= "healthz"`,                               // panel
+		`sum(count_over_time({service_name=~"$svc"} |= "declined" [$__auto]))`, // variables
+		`{service_name="checkout"} |= "retrying"`,                              // collapsed row
+		`sum(rate({service_name="orders"}[1m]))`,                               // mixed panel
+		`{service_name="auth"} |= "config placeholder"`,                        // hidden target, default datasource
+		`{service_name="auth"} |= "logged in"`,                                 // library panel
+		`sum(count_over_time({service_name="auth"} |= "failed MFA" [5m]))`,     // alert rule
+		`{service_name="checkout"} |= "declined"`,                              // short URL, panes format
+		`{service_name="auth"} |= "failed MFA"`,                                // short URL, legacy left format
+		`{service_name="orders"} |= "failed at step"`,                          // query history
+		`{service_name="${service_name}"} |= "retrying"`,                       // correlation
+		`{service_name="checkout"} |= "healthz 200"`,                           // v2-native dashboard
+		`{service_name="orders"} |= "handled route"`,                           // second org
 	}
 	for _, w := range want {
 		if len(found[w]) == 0 {

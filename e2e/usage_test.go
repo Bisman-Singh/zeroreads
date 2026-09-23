@@ -65,9 +65,10 @@ func corpusRules(t *testing.T, recs []gen.Record) []usage.Rule {
 }
 
 type lokiLine struct {
-	service string
-	ts      string
-	line    string
+	service   string
+	namespace string
+	ts        string
+	line      string
 }
 
 // lokiQuery runs a log query over the last hour and returns every line with its service.
@@ -111,7 +112,7 @@ func lokiQuery(t *testing.T, base, q string) ([]lokiLine, int) {
 	var lines []lokiLine
 	for _, r := range out.Data.Result {
 		for _, v := range r.Values {
-			lines = append(lines, lokiLine{service: r.Stream["service_name"], ts: v[0], line: v[1]})
+			lines = append(lines, lokiLine{service: r.Stream["service_name"], namespace: r.Stream["k8s_namespace_name"], ts: v[0], line: v[1]})
 		}
 	}
 	return lines, resp.StatusCode
@@ -123,9 +124,13 @@ func lokiQuery(t *testing.T, base, q string) ([]lokiLine, int) {
 func rulesRead(t *testing.T, rules []usage.Rule, lines []lokiLine, original map[string][]string) map[string]bool {
 	t.Helper()
 	read := map[string]bool{}
+	ns := os.Getenv("E2E_NS")
 	for _, ret := range lines {
 		if ret.service != "checkout" && ret.service != "auth" && ret.service != "orders" {
 			continue // Loki's own logs: no rules there
+		}
+		if ret.namespace != ns {
+			continue // lines from other test runs; this test's ground truth covers only its own run
 		}
 		origs, ok := original[ret.service+"|"+ret.ts]
 		if !ok {
@@ -294,7 +299,7 @@ func TestUsageSoundAgainstLoki(t *testing.T) {
 	deadline := time.Now().Add(90 * time.Second)
 	original := map[string][]string{}
 	for {
-		all, _ := lokiQuery(t, base, `{service_name=~"checkout|auth|orders"}`)
+		all, _ := lokiQuery(t, base, `{service_name=~"checkout|auth|orders", k8s_namespace_name="`+env(t, "E2E_NS")+`"}`)
 		if len(all) == len(recs) {
 			for _, l := range all {
 				k := l.service + "|" + l.ts
