@@ -3,9 +3,11 @@
 package emit
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The user's config: records arrive on stdin tagged app; rewrite_tag keeps an untouched copy tagged
@@ -72,22 +75,61 @@ func runFluentBit(t *testing.T, cfg []byte, recs []record) ([]fbRecord, string) 
 		in.Write(b)
 		in.WriteByte('\n')
 	}
+	// Fluent Bit exits at stdin EOF without draining rewrite_tag's emitter, so part of the raw copy
+	// would be lost (reproduced with the user config alone). stdin stays open until the whole raw
+	// copy is out, then closes so the rest flushes.
 	cmd := exec.Command("docker", "run", "-i", "--rm", "-v", dir+":/w", "fluent/fluent-bit:5.1.2", "-c", "/w/fb.yaml")
-	cmd.Stdin = strings.NewReader(in.String())
+	stdin, _ := cmd.StdinPipe()
+	stdout, _ := cmd.StdoutPipe()
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("fluent-bit: %v\n%s\n%s", err, out, stderr.String())
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
 	}
+	go func() { io.WriteString(stdin, in.String()) }()
+	var outBuf strings.Builder
+	rawSeen := 0
+	closed := false
+	timer := time.AfterFunc(90*time.Second, func() { stdin.Close(); cmd.Process.Kill() })
+	defer timer.Stop()
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 1<<20), 64<<20)
+	for sc.Scan() {
+		l := sc.Text()
+		outBuf.WriteString(l + "\n")
+		rawSeen += strings.Count(l, `"stringValue":"raw"`)
+		if !closed && rawSeen >= len(recs) {
+			closed = true
+			time.AfterFunc(3*time.Second, func() { stdin.Close() })
+		}
+	}
+	if err := cmd.Wait(); err != nil || !closed {
+		t.Fatalf("fluent-bit: %v (raw copy %d of %d records)\n%s", err, rawSeen, len(recs), stderr.String())
+	}
+	out := outBuf.String()
 	var res []fbRecord
 	var metrics strings.Builder
-	for _, l := range strings.Split(string(out), "\n") {
-		l = strings.TrimSpace(l)
-		if !strings.HasPrefix(l, "{") {
-			metrics.WriteString(l + "\n")
-			continue
+	// Both stdout outputs share one stream and their writes can land on the same line, so each
+	// OTLP document is cut out wherever it starts and the text around it is metrics.
+	var docs []string
+	for _, l := range strings.Split(out, "\n") {
+		for {
+			i := strings.Index(l, `{"resourceLogs"`)
+			if i < 0 {
+				metrics.WriteString(l + "\n")
+				break
+			}
+			metrics.WriteString(l[:i] + "\n")
+			dec := json.NewDecoder(strings.NewReader(l[i:]))
+			var raw json.RawMessage
+			if err := dec.Decode(&raw); err != nil {
+				t.Fatalf("otlp_json in %q: %v", l, err)
+			}
+			docs = append(docs, string(raw))
+			l = l[i+int(dec.InputOffset()):]
 		}
+	}
+	for _, l := range docs {
 		var doc struct {
 			ResourceLogs []struct {
 				ScopeLogs []struct {
@@ -192,43 +234,46 @@ func TestFluentBitEnforcesExactly(t *testing.T) {
 		}
 		return nil
 	}
+	// Fluent Bit stamps a whole stdin read with one time, so identical lines can share a key: records
+	// are counted as a multiset, never collapsed.
 	type key struct {
-		svc, text string
-		ts        int64
+		svc, text  string
+		ts         int64
+		structured bool
 	}
-	raw, app := map[key]bool{}, map[key]bool{}
+	raw, app := map[key]int{}, map[key]int{}
 	for _, r := range got {
-		k := key{r.service, r.text, r.ts}
+		k := key{r.service, r.text, r.ts, r.structured}
 		switch r.stream {
 		case "raw":
-			raw[k] = true
+			raw[k]++
 		case "app":
-			app[k] = true
+			app[k]++
 		default:
 			t.Fatalf("record without stream: %+v", r)
 		}
 	}
-	if len(raw) != len(recs) {
-		t.Fatalf("raw copy has %d records, want %d", len(raw), len(recs))
+	total := 0
+	for _, n := range raw {
+		total += n
+	}
+	if total != len(recs) {
+		t.Fatalf("raw copy has %d records, want %d", total, len(recs))
 	}
 	counts := map[string]int{}
-	for k := range raw {
-		structured := false
-		for _, r := range got {
-			if r.stream == "raw" && r.service == k.svc && r.text == k.text && r.ts == k.ts {
-				structured = r.structured
-				break
-			}
-		}
-		x := match(k.svc, k.text, structured)
-		want := true
+	delivered := 0
+	for k, n := range raw {
+		x := match(k.svc, k.text, k.structured)
+		want := n
 		if x != nil {
-			counts[x.ID]++
+			counts[x.ID] += n
 			switch x.Action {
 			case "drop", "aggregate":
-				want = false
+				want = 0
 			case "sample":
-				want = fbKeep(k.text, k.ts, x.Keep)
+				if !fbKeep(k.text, k.ts, x.Keep) {
+					want = 0
+				}
 			}
 		}
 		if app[k] != want {
@@ -236,11 +281,12 @@ func TestFluentBitEnforcesExactly(t *testing.T) {
 			if x != nil {
 				rid = x.ID
 			}
-			t.Fatalf("%+v (rule %s): delivered=%v want %v", k, rid, app[k], want)
+			t.Fatalf("%+v (rule %s): delivered %d of %d, want %d", k, rid, app[k], n, want)
 		}
+		delivered += want
 	}
 	for k := range app {
-		if !raw[k] {
+		if raw[k] == 0 {
 			t.Fatalf("delivered record not in the raw copy: %+v", k)
 		}
 	}
@@ -256,7 +302,7 @@ func TestFluentBitEnforcesExactly(t *testing.T) {
 			t.Fatalf("%s = %d, want %d", name, last, n)
 		}
 	}
-	t.Logf("fluent bit: %d of %d records delivered exactly as predicted; per-rule counts %v", len(app), len(recs), counts)
+	t.Logf("fluent bit: %d of %d records delivered exactly as predicted (%d distinct keys); per-rule counts %v", delivered, len(recs), len(raw), counts)
 }
 
 func TestFluentBitRefusesDedupe(t *testing.T) {
