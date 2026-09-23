@@ -2,3 +2,4 @@ PLAN*.md
 /bin/
 *.out
 /.e2e/
+/dist/
