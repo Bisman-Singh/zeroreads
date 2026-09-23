@@ -19,7 +19,21 @@ const tmpl = `receivers:
       - type: container
         id: container-parser
 
+  file_log/loki:
+    include: [/var/log/pods/sievelog-system_loki-*/loki/*.log]
+    start_at: beginning
+    include_file_path: true
+    operators:
+      - type: container
+        id: container-parser
+
 processors:
+  transform/service:
+    error_mode: propagate
+    log_statements:
+      - context: resource
+        statements:
+          - set(resource.attributes["service.name"], resource.attributes["k8s.container.name"])
   transform/prep:
     error_mode: propagate
     log_statements:
@@ -80,6 +94,10 @@ service:
     metrics:
       receivers: [signal_to_metrics]
       exporters: [file/metrics]
+    logs/loki-self:
+      receivers: [file_log/loki]
+      processors: [transform/service]
+      exporters: [otlp_http/loki]
 `
 
 func main() {

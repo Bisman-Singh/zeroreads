@@ -67,6 +67,7 @@ ${K} rollout status deployment/loki -n sievelog-system --timeout=180s >/dev/null
 
 log "deploying collector"
 ( cd "${ROOT}" && go run ./e2e/render "${RUN_NS}" ) > "${WORK}/config.yaml"
+docker run --rm -v "${WORK}:/cfg" "${COLLECTOR_IMAGE}" validate --config=/cfg/config.yaml
 ${K} apply -f "${ROOT}/e2e/k8s/collector.yaml" >/dev/null
 ${K} create namespace "${RUN_NS}" >/dev/null
 ${K} create configmap collector-config -n sievelog-system --from-file=config.yaml="${WORK}/config.yaml" \

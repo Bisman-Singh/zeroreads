@@ -124,6 +124,9 @@ func rulesRead(t *testing.T, rules []usage.Rule, lines []lokiLine, original map[
 	t.Helper()
 	read := map[string]bool{}
 	for _, ret := range lines {
+		if ret.service != "checkout" && ret.service != "auth" && ret.service != "orders" {
+			continue // Loki's own logs: no rules there
+		}
 		origs, ok := original[ret.service+"|"+ret.ts]
 		if !ok {
 			t.Fatalf("returned line %+v has no baseline original", ret)
@@ -291,7 +294,7 @@ func TestUsageSoundAgainstLoki(t *testing.T) {
 	deadline := time.Now().Add(90 * time.Second)
 	original := map[string][]string{}
 	for {
-		all, _ := lokiQuery(t, base, `{service_name=~".+"}`)
+		all, _ := lokiQuery(t, base, `{service_name=~"checkout|auth|orders"}`)
 		if len(all) == len(recs) {
 			for _, l := range all {
 				k := l.service + "|" + l.ts
