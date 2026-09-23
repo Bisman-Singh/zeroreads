@@ -1,5 +1,7 @@
 package gen
 
+import "strings"
+
 // The ground-truth corpus. Every line the generator emits comes from exactly one of these
 // templates, so per-template counts and bytes are known exactly.
 //
@@ -65,4 +67,32 @@ func Corpus() []Service {
 			},
 		},
 	}
+}
+
+// IPMaskName and IPMaskPattern define the masking rule the corpus is analysed with: IPv4
+// addresses become the named token <ip>.
+const (
+	IPMaskName    = "ip"
+	IPMaskPattern = `\b(?:\d{1,3}\.){3}\d{1,3}\b`
+)
+
+// SeedTemplates returns every ground-truth pattern in drain syntax: variables become <*>, except
+// IPs, which the IP mask turns into <ip>. Order follows the corpus.
+func SeedTemplates() []string {
+	var out []string
+	for _, s := range Corpus() {
+		for _, t := range s.Templates {
+			toks := strings.Split(t.Pattern, " ")
+			for i, tok := range toks {
+				switch {
+				case tok == "{ip}":
+					toks[i] = "<" + IPMaskName + ">"
+				case strings.HasPrefix(tok, "{"):
+					toks[i] = "<*>"
+				}
+			}
+			out = append(out, strings.Join(toks, " "))
+		}
+	}
+	return out
 }

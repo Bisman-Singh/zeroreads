@@ -44,7 +44,7 @@ func main() {
 		}
 	}
 	w.Flush()
-	fmt.Fprintf(os.Stderr, "loggen: service=%s seed=%d lines=%d done\n", *service, *seed, *count)
+	// Nothing else is written to stdout or stderr: the container's log stream is the ground truth.
 	if *hold {
 		select {}
 	}

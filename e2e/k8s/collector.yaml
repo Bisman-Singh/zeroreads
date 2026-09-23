@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sievelog-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: collector
+  namespace: sievelog-system
+spec:
+  selector:
+    matchLabels: {app: collector}
+  template:
+    metadata:
+      labels: {app: collector}
+    spec:
+      containers:
+        - name: otelcol
+          image: otel/opentelemetry-collector-contrib:0.161.0
+          imagePullPolicy: IfNotPresent
+          args: ["--config=/conf/config.yaml"]
+          securityContext:
+            runAsUser: 0 # reads kubelet pod logs and writes to the host mount
+          volumeMounts:
+            - {name: conf, mountPath: /conf}
+            - {name: pods, mountPath: /var/log/pods, readOnly: true}
+            - {name: out, mountPath: /e2e/out}
+      volumes:
+        - name: conf
+          configMap: {name: collector-config}
+        - name: pods
+          hostPath: {path: /var/log/pods}
+        - name: out
+          hostPath: {path: /e2e/out, type: DirectoryOrCreate}

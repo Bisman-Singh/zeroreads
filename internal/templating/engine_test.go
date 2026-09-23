@@ -13,7 +13,7 @@ import (
 	"github.com/Bisman-Singh/sievelog/internal/gen"
 )
 
-var ipMask = MaskRule{Name: "ip", Pattern: `\b(?:\d{1,3}\.){3}\d{1,3}\b`}
+var ipMask = MaskRule{Name: gen.IPMaskName, Pattern: gen.IPMaskPattern}
 
 // corpusConfig is the drain config used for the ground-truth corpus: defaults plus an IP mask and
 // msg as the templated field of structured records.
@@ -22,30 +22,9 @@ func corpusConfig(seed bool) *Config {
 	cfg.BodyField = "msg"
 	cfg.MaskingRules = []MaskRule{ipMask}
 	if seed {
-		cfg.SeedTemplates = seedTemplates()
+		cfg.SeedTemplates = gen.SeedTemplates()
 	}
 	return cfg
-}
-
-// seedTemplates turns each ground-truth pattern into drain syntax: variables become <*>, except
-// IPs, which the mask turns into <ip>.
-func seedTemplates() []string {
-	var out []string
-	for _, s := range gen.Corpus() {
-		for _, t := range s.Templates {
-			toks := strings.Split(t.Pattern, " ")
-			for i, tok := range toks {
-				switch {
-				case tok == "{ip}":
-					toks[i] = "<ip>"
-				case strings.HasPrefix(tok, "{"):
-					toks[i] = "<*>"
-				}
-			}
-			out = append(out, strings.Join(toks, " "))
-		}
-	}
-	return out
 }
 
 func toInputs(t *testing.T, recs []gen.Record) []Input {
