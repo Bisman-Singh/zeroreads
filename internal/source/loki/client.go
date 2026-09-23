@@ -217,3 +217,67 @@ func decodeStreams(body []byte) ([]Entry, error) {
 	}
 	return out, nil
 }
+
+// Sample is one series of an instant metric query.
+type Sample struct {
+	Labels map[string]string
+	Value  float64
+}
+
+// Instant runs a metric query at time at.
+func (c *Client) Instant(ctx context.Context, query string, at time.Time) ([]Sample, error) {
+	q := url.Values{}
+	q.Set("query", query)
+	q.Set("time", strconv.FormatInt(at.UnixNano(), 10))
+	body, err := c.get(ctx, "/loki/api/v1/query", q)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Data struct {
+			ResultType string `json:"resultType"`
+			Result     []struct {
+				Metric map[string]string  `json:"metric"`
+				Value  [2]json.RawMessage `json:"value"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("loki: decode: %w", err)
+	}
+	if resp.Data.ResultType != "vector" {
+		return nil, fmt.Errorf("loki: expected vector, got %q", resp.Data.ResultType)
+	}
+	var out []Sample
+	for _, r := range resp.Data.Result {
+		var s string
+		if err := json.Unmarshal(r.Value[1], &s); err != nil {
+			return nil, err
+		}
+		v, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return nil, fmt.Errorf("loki: value %q: %w", s, err)
+		}
+		out = append(out, Sample{Labels: r.Metric, Value: v})
+	}
+	return out, nil
+}
+
+// LabelValues lists the values of a label seen in [start, end).
+func (c *Client) LabelValues(ctx context.Context, label string, start, end time.Time) ([]string, error) {
+	q := url.Values{}
+	q.Set("start", strconv.FormatInt(start.UnixNano(), 10))
+	q.Set("end", strconv.FormatInt(end.UnixNano(), 10))
+	body, err := c.get(ctx, "/loki/api/v1/label/"+url.PathEscape(label)+"/values", q)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Data []string `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("loki: decode: %w", err)
+	}
+	sort.Strings(resp.Data)
+	return resp.Data, nil
+}
