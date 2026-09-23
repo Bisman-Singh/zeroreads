@@ -291,3 +291,22 @@ func EmitVector(c *Config, rf *RulesFile, mode emit.Mode) ([]byte, error) {
 	return emit.Vector(files, emit.VectorTarget{After: v.After, ScopePath: v.ScopePath, TextPath: v.TextPath, FieldPaths: v.FieldPaths,
 		GroupBy: v.GroupBy, MeasureSink: v.MeasureSink, DedupeMS: v.DedupeMS}, rules, mode)
 }
+
+// EmitFluentBit writes the Fluent Bit YAML configuration for the rules in the given mode.
+func EmitFluentBit(c *Config, rf *RulesFile, mode emit.Mode) ([]byte, error) {
+	var files [][]byte
+	for _, f := range c.FluentBit.ConfigFiles {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, b)
+	}
+	var rules []emit.Rule
+	for _, r := range rf.Rules {
+		rules = append(rules, r.Rule)
+	}
+	f := c.FluentBit
+	return emit.FluentBit(files, emit.FluentBitTarget{Match: f.Match, After: f.After, ScopeKey: f.ScopeKey, TextKey: f.TextKey,
+		FieldKeys: f.FieldKeys, MetricsTag: f.MetricsTag}, rules, mode)
+}

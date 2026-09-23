@@ -27,6 +27,8 @@ func TestConfigValidation(t *testing.T) {
 		{"vector missing", "loki: {url: http://l}\nruntime: vector\nvector: {config_files: [v.yaml]}\n", "required"},
 		{"vector structured needs path", "loki: {url: http://l}\nruntime: vector\nscope: {structured: {orders: msg}}\nvector: {config_files: [v.yaml], after: prep, scope_path: .service, text_path: .message, measure_sink: {type: blackhole}}\n", "field_paths.orders"},
 		{"bad runtime", "loki: {url: http://l}\nruntime: fluent\n", "runtime"},
+		{"fluentbit ok", "loki: {url: http://l}\nruntime: fluentbit\nfluentbit: {config_files: [f.yaml], match: kube.*, scope_key: service, text_key: [log], metrics_tag: m}\n", ""},
+		{"fluentbit missing", "loki: {url: http://l}\nruntime: fluentbit\nfluentbit: {config_files: [f.yaml]}\n", "required"},
 		{"bad sample", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\npolicy: {sample_percent: 100}\n", "sample_percent"},
 		{"days duration", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\nevidence: {window: 30d}\n", ""},
 	}

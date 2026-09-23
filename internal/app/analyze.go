@@ -135,6 +135,17 @@ func Analyze(ctx context.Context, c *Config, now time.Time) (*Report, error) {
 	if pol.ErrorPattern == "" {
 		pol.ErrorPattern = analyze.DefaultErrorPattern
 	}
+	if c.Runtime == "fluentbit" {
+		var acts []string
+		for _, a := range pol.Actions {
+			if a == "dedupe" {
+				rep.Notes = append(rep.Notes, "dedupe is not offered: Fluent Bit cannot collapse lines while keeping their count")
+				continue
+			}
+			acts = append(acts, a)
+		}
+		pol.Actions = acts
+	}
 	recs, err := analyze.Decide(cands, queries, gaps, pol)
 	if err != nil {
 		return nil, err
@@ -475,8 +486,11 @@ func (c *Config) evidence(ctx context.Context, now time.Time, rep *Report) ([]an
 
 // topologyGaps checks every destination downstream of the enforcement point.
 func (c *Config) topologyGaps(rep *Report) ([]analyze.Gap, error) {
-	if c.Runtime == "vector" {
+	switch c.Runtime {
+	case "vector":
 		return c.vectorGaps(rep)
+	case "fluentbit":
+		return c.fluentBitGaps(rep)
 	}
 	var files [][]byte
 	for _, f := range c.Collector.ConfigFiles {
@@ -581,6 +595,52 @@ func (c *Config) vectorGaps(rep *Report) ([]analyze.Gap, error) {
 		}
 		gaps = append(gaps, analyze.Gap{Source: "vector", Origin: d, Key: "derived:" + d,
 			Reason: d + " turns these logs into metrics; removing lines changes them"})
+	}
+	return gaps, nil
+}
+
+func (c *Config) fluentBitGaps(rep *Report) ([]analyze.Gap, error) {
+	var files [][]byte
+	for _, f := range c.FluentBit.ConfigFiles {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, b)
+	}
+	fc, err := topology.LoadFluentBit(files...)
+	if err != nil {
+		return nil, err
+	}
+	outs, derived, err := fc.FluentBitDownstream(c.FluentBit.Match, c.FluentBit.After)
+	if err != nil {
+		return nil, err
+	}
+	var gaps []analyze.Gap
+	var ids []string
+	for id := range outs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		s, ok := c.FluentBit.Sinks[id]
+		switch {
+		case ok && s.Loki:
+			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": analysed Loki")
+		case ok:
+			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": exempt ("+s.Exempt+")")
+		default:
+			gaps = append(gaps, analyze.Gap{Source: "fluentbit", Origin: id + " (" + outs[id] + ")", Key: "sink:" + id,
+				Reason: "removed lines would also vanish from output " + id + ", which has no usage evidence"})
+		}
+	}
+	for _, d := range derived {
+		if why, ok := c.FluentBit.Derived[d]; ok {
+			rep.Evidence.Sinks = append(rep.Evidence.Sinks, d+": exempt ("+why+")")
+			continue
+		}
+		gaps = append(gaps, analyze.Gap{Source: "fluentbit", Origin: d, Key: "derived:" + d,
+			Reason: d + " re-emits or counts these records after the enforcement point"})
 	}
 	return gaps, nil
 }

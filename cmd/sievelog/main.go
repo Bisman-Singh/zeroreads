@@ -21,7 +21,7 @@ import (
 
 const usage = `usage:
   sievelog analyze -c sievelog.yaml -o DIR
-  sievelog emit    -c sievelog.yaml -rules RULES.json [-format collector|vector|policy] [-mode shadow|enforce] -o FILE
+  sievelog emit    -c sievelog.yaml -rules RULES.json [-format collector|vector|fluentbit|policy] [-mode shadow|enforce] -o FILE
   sievelog verify  -c sievelog.yaml -rules RULES.json [-o KEEP-RULES.json]
 `
 
@@ -83,7 +83,7 @@ func runEmit(args []string) error {
 	cfgPath := fs.String("c", "sievelog.yaml", "config file")
 	rulesPath := fs.String("rules", "", "rules.json from analyze")
 	mode := fs.String("mode", "shadow", "shadow or enforce (collector format)")
-	format := fs.String("format", "collector", "collector (OpenTelemetry Collector config), vector (Vector config) or policy (Telemetry Policy JSON)")
+	format := fs.String("format", "collector", "collector (OpenTelemetry Collector config), vector (Vector config), fluentbit (Fluent Bit YAML) or policy (Telemetry Policy JSON)")
 	out := fs.String("o", "", "output file (default stdout)")
 	_ = fs.Parse(args)
 	if *format == "policy" {
@@ -110,8 +110,8 @@ func runEmit(args []string) error {
 		}
 		return os.WriteFile(*out, b, 0o644)
 	}
-	if *format != "collector" && *format != "vector" {
-		return fmt.Errorf("-format must be collector, vector or policy")
+	if *format != "collector" && *format != "vector" && *format != "fluentbit" {
+		return fmt.Errorf("-format must be collector, vector, fluentbit or policy")
 	}
 	if *mode != string(emit.Shadow) && *mode != string(emit.Enforce) {
 		return fmt.Errorf("-mode must be shadow or enforce")
@@ -124,10 +124,8 @@ func runEmit(args []string) error {
 	if err != nil {
 		return err
 	}
-	emitter := app.EmitCollector
-	if *format == "vector" {
-		emitter = app.EmitVector
-	}
+	emitter := map[string]func(*app.Config, *app.RulesFile, emit.Mode) ([]byte, error){
+		"collector": app.EmitCollector, "vector": app.EmitVector, "fluentbit": app.EmitFluentBit}[*format]
 	b, err := emitter(cfg, rf, emit.Mode(*mode))
 	if err != nil {
 		return err

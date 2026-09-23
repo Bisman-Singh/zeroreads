@@ -22,6 +22,7 @@ type Config struct {
 	Runtime   string          `yaml:"runtime"`
 	Collector CollectorConfig `yaml:"collector"`
 	Vector    VectorConfig    `yaml:"vector"`
+	FluentBit FluentBitConfig `yaml:"fluentbit"`
 	Policy    PolicyConfig    `yaml:"policy"`
 	Pricing   PricingConfig   `yaml:"pricing"`
 }
@@ -111,6 +112,19 @@ type VectorConfig struct {
 	MeasureSink map[string]any    `yaml:"measure_sink"`
 	Sinks       map[string]Sink   `yaml:"sinks"`
 	Derived     map[string]string `yaml:"derived_exempt"`
+}
+
+// FluentBitConfig is the Fluent Bit instance the rules are enforced in (YAML configuration).
+type FluentBitConfig struct {
+	ConfigFiles []string            `yaml:"config_files"`
+	Match       string              `yaml:"match"`
+	After       string              `yaml:"after"`
+	ScopeKey    string              `yaml:"scope_key"`
+	TextKey     []string            `yaml:"text_key"`
+	FieldKeys   map[string][]string `yaml:"field_keys"`
+	MetricsTag  string              `yaml:"metrics_tag"`
+	Sinks       map[string]Sink     `yaml:"sinks"`
+	Derived     map[string]string   `yaml:"derived_exempt"`
 }
 
 // Sink says what an exporter downstream of the enforcement point is.
@@ -248,8 +262,23 @@ func (c *Config) validate() error {
 				return fmt.Errorf("vector.field_paths.%s is required for a structured service", svc)
 			}
 		}
+	case "fluentbit":
+		f := c.FluentBit
+		if len(f.ConfigFiles) == 0 || f.Match == "" || f.ScopeKey == "" || len(f.TextKey) == 0 || f.MetricsTag == "" {
+			return fmt.Errorf("fluentbit.config_files, match, scope_key, text_key and metrics_tag are required")
+		}
+		for id, s := range f.Sinks {
+			if s.Loki == (s.Exempt != "") {
+				return fmt.Errorf("fluentbit.sinks.%s: set exactly one of loki: true or exempt: <reason>", id)
+			}
+		}
+		for svc := range c.Scope.Structured {
+			if len(f.FieldKeys[svc]) == 0 {
+				return fmt.Errorf("fluentbit.field_keys.%s is required for a structured service", svc)
+			}
+		}
 	default:
-		return fmt.Errorf("runtime must be collector or vector, got %q", c.Runtime)
+		return fmt.Errorf("runtime must be collector, vector or fluentbit, got %q", c.Runtime)
 	}
 	if c.Policy.SamplePercent < 1 || c.Policy.SamplePercent > 99 {
 		return fmt.Errorf("policy.sample_percent must be 1..99")
