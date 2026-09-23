@@ -409,8 +409,10 @@ policy:
 	e.resetOutputs()
 	e.deployCollector(shadowPath)
 	const count = 2000
+	winA0 := time.Now().Add(-time.Second)
 	nsA := e.batch("shadow", 21, count)
 	linesA := e.nsLines(nsA, 3*count)
+	winA1 := time.Now()
 	if len(linesA) != 3*count {
 		t.Fatalf("shadow: Loki has %d lines, want %d", len(linesA), 3*count)
 	}
@@ -443,6 +445,7 @@ policy:
 	}
 	e.resetOutputs()
 	e.deployCollector(enforcePath)
+	winB0 := time.Now().Add(-time.Second)
 	nsB := e.batch("enforce", 22, count)
 	time.Sleep(8 * time.Second) // dedupe flushes every 3s
 	rawB := e.readRaw(nsB)
@@ -513,6 +516,42 @@ policy:
 		t.Fatalf("dedupe: %d records stored for %d lines", dedupeRecords, dedupeLines)
 	}
 	t.Logf("enforce: %d lines reached Loki exactly as predicted; %d heartbeats stored as %d records with exact counts", len(gotSet), dedupeLines, dedupeRecords)
+	winB1 := time.Now()
+
+	// 3b. Reconcile from Loki's own data: exactly what was stored for each rule before and after.
+	recPath := filepath.Join(e.work, "loop-reconcile.json")
+	w := func(a, b time.Time) string {
+		return a.UTC().Format(time.RFC3339Nano) + "," + b.UTC().Format(time.RFC3339Nano)
+	}
+	out, code = e.run(e.root, e.bin, "reconcile", "-c", cfgPath, "-rules", filepath.Join(outDir, "rules.json"),
+		"-before", w(winA0, winA1), "-after", w(winB0, winB1), "-tolerance", "1", "-o", recPath)
+	if code != 0 {
+		t.Fatalf("reconcile (exit %d): %s", code, out)
+	}
+	var rec app.Reconciliation
+	rb, _ := os.ReadFile(recPath)
+	if err := json.Unmarshal(rb, &rec); err != nil {
+		t.Fatal(err)
+	}
+	keptCache := 0
+	for k := range expect {
+		if x := ruleFor(rawRecord{service: k.svc, text: k.text}); x != nil && x.Action == "sample" {
+			keptCache++
+		}
+	}
+	for _, r := range rec.Rules {
+		switch r.Action {
+		case "sample":
+			if int(r.BeforeLines) != int(wantLines[r.RuleID]) || int(r.AfterLines) != keptCache {
+				t.Fatalf("reconcile %s: before %v after %v, want %v and %d", r.RuleID, r.BeforeLines, r.AfterLines, wantLines[r.RuleID], keptCache)
+			}
+		case "dedupe":
+			if int(r.BeforeLines) != int(wantLines[r.RuleID]) || int(r.AfterLines) != dedupeRecords {
+				t.Fatalf("reconcile %s: before %v after %v, want %v and %d", r.RuleID, r.BeforeLines, r.AfterLines, wantLines[r.RuleID], dedupeRecords)
+			}
+		}
+	}
+	t.Logf("reconcile: per-rule stored lines before and after match the ground truth exactly")
 
 	// 4. Verify: nothing changed, all rules still safe.
 	out, code = e.run(e.root, e.bin, "verify", "-c", cfgPath, "-rules", filepath.Join(outDir, "rules.json"))

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/Bisman-Singh/sievelog/internal/app"
@@ -23,6 +24,7 @@ const usage = `usage:
   sievelog analyze -c sievelog.yaml -o DIR
   sievelog emit    -c sievelog.yaml -rules RULES.json [-format collector|vector|fluentbit|policy] [-mode shadow|enforce] -o FILE
   sievelog verify  -c sievelog.yaml -rules RULES.json [-o KEEP-RULES.json]
+  sievelog reconcile -c sievelog.yaml -rules RULES.json -before START,END -after START,END [-tolerance 0.05] [-o OUT.json]
 `
 
 func main() {
@@ -41,6 +43,8 @@ func main() {
 		err = runEmit(os.Args[2:])
 	case "verify":
 		code, err = runVerify(ctx, os.Args[2:])
+	case "reconcile":
+		code, err = runReconcile(ctx, os.Args[2:])
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -202,4 +206,71 @@ func writeStepSummary(res *app.VerifyResult, total int) error {
 		}
 	}
 	return nil
+}
+
+func parseWindow(s string) (app.Window, error) {
+	parts := strings.Split(s, ",")
+	if len(parts) != 2 {
+		return app.Window{}, fmt.Errorf("window %q: want START,END in RFC3339", s)
+	}
+	a, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return app.Window{}, err
+	}
+	b, err := time.Parse(time.RFC3339Nano, parts[1])
+	if err != nil {
+		return app.Window{}, err
+	}
+	if !b.After(a) {
+		return app.Window{}, fmt.Errorf("window %q ends before it starts", s)
+	}
+	return app.Window{Start: a, End: b}, nil
+}
+
+// runReconcile exits 4 when stored volume does not match what the enforced rules should leave.
+func runReconcile(ctx context.Context, args []string) (int, error) {
+	fs := flag.NewFlagSet("reconcile", flag.ExitOnError)
+	cfgPath := fs.String("c", "sievelog.yaml", "config file")
+	rulesPath := fs.String("rules", "", "rules.json being enforced")
+	beforeS := fs.String("before", "", "START,END of a window before enforcement (RFC3339)")
+	afterS := fs.String("after", "", "START,END of a window after enforcement (RFC3339)")
+	tol := fs.Float64("tolerance", 0.05, "allowed difference of a sample rule's kept share")
+	out := fs.String("o", "", "write the result as JSON here")
+	_ = fs.Parse(args)
+	cfg, err := app.LoadConfig(*cfgPath)
+	if err != nil {
+		return 0, err
+	}
+	rf, err := app.LoadRules(*rulesPath)
+	if err != nil {
+		return 0, err
+	}
+	before, err := parseWindow(*beforeS)
+	if err != nil {
+		return 0, err
+	}
+	after, err := parseWindow(*afterS)
+	if err != nil {
+		return 0, err
+	}
+	res, err := app.Reconcile(ctx, cfg, rf, before, after, *tol)
+	if err != nil {
+		return 0, err
+	}
+	if *out != "" {
+		b, _ := json.MarshalIndent(res, "", "  ")
+		if err := os.WriteFile(*out, b, 0o644); err != nil {
+			return 0, err
+		}
+	}
+	for _, r := range res.Rules {
+		fmt.Printf("reconcile: %s %s (%s): before %.0f lines, after %.0f lines: %s, %s\n", r.RuleID, r.Service, r.Action, r.BeforeLines, r.AfterLines, r.Status, r.Detail)
+	}
+	for _, s := range res.Services {
+		fmt.Printf("reconcile: service %s stored %.0f B/h before, %.0f B/h after\n", s.Service, s.BeforeBytesRate, s.AfterBytesRate)
+	}
+	if !res.OK {
+		return 4, nil
+	}
+	return 0, nil
 }
