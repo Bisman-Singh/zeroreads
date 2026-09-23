@@ -9,6 +9,16 @@ import (
 
 const asciiWord = `[0-9A-Za-z_]`
 
+// onigLit prints a literal rune. Unlike Rust output, a space is escaped too: Fluent Bit splits filter
+// arguments such as "Key_value_matches KEY REGEX" on whitespace.
+func onigLit(b *strings.Builder, r rune) {
+	if r == ' ' {
+		b.WriteString(`\x{20}`)
+		return
+	}
+	lit(b, r)
+}
+
 // Onigmo prints expr for Onigmo with Ruby syntax (Fluent Bit). Ruby's ^ and $ are line anchors, so
 // Go's text anchors become \A and \z; case-insensitive literals become explicit classes of their
 // simple-fold orbits, so Onigmo's full case folding never applies; word boundaries become ASCII
@@ -49,7 +59,7 @@ func printOnigmo(b *strings.Builder, re *syntax.Regexp) error {
 					continue
 				}
 			}
-			lit(b, r)
+			onigLit(b, r)
 		}
 		b.WriteString(")")
 	case syntax.OpCharClass:
