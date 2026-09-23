@@ -272,3 +272,22 @@ func EmitPolicies(rf *RulesFile, scratch string) ([]byte, []emit.PolicySkip, err
 	}
 	return emit.Policies(rules, scratch)
 }
+
+// EmitVector writes the Vector configuration for the rules in the given mode.
+func EmitVector(c *Config, rf *RulesFile, mode emit.Mode) ([]byte, error) {
+	var files [][]byte
+	for _, f := range c.Vector.ConfigFiles {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, b)
+	}
+	var rules []emit.Rule
+	for _, r := range rf.Rules {
+		rules = append(rules, r.Rule)
+	}
+	v := c.Vector
+	return emit.Vector(files, emit.VectorTarget{After: v.After, ScopePath: v.ScopePath, TextPath: v.TextPath, FieldPaths: v.FieldPaths,
+		GroupBy: v.GroupBy, MeasureSink: v.MeasureSink, DedupeMS: v.DedupeMS}, rules, mode)
+}

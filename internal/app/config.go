@@ -18,7 +18,10 @@ type Config struct {
 	Discovery DiscoveryConfig `yaml:"discovery"`
 	Drain     DrainConfig     `yaml:"drain"`
 	Evidence  EvidenceConfig  `yaml:"evidence"`
+	// Runtime is the pipeline the rules are enforced in: collector (OpenTelemetry Collector) or vector.
+	Runtime   string          `yaml:"runtime"`
 	Collector CollectorConfig `yaml:"collector"`
+	Vector    VectorConfig    `yaml:"vector"`
 	Policy    PolicyConfig    `yaml:"policy"`
 	Pricing   PricingConfig   `yaml:"pricing"`
 }
@@ -94,6 +97,20 @@ type CollectorConfig struct {
 	DedupeInterval     string            `yaml:"dedupe_interval"`
 	Sinks              map[string]Sink   `yaml:"sinks"`
 	Derived            map[string]string `yaml:"derived_exempt"` // connector -> reason it may change
+}
+
+// VectorConfig is the Vector instance the rules are enforced in.
+type VectorConfig struct {
+	ConfigFiles []string          `yaml:"config_files"`
+	After       string            `yaml:"after"`
+	ScopePath   string            `yaml:"scope_path"` // VRL path of the scope value, e.g. .service
+	TextPath    string            `yaml:"text_path"`  // VRL path of the plain log text, e.g. .message
+	FieldPaths  map[string]string `yaml:"field_paths"`
+	GroupBy     []string          `yaml:"dedupe_group_by"`
+	DedupeMS    int               `yaml:"dedupe_ms"`
+	MeasureSink map[string]any    `yaml:"measure_sink"`
+	Sinks       map[string]Sink   `yaml:"sinks"`
+	Derived     map[string]string `yaml:"derived_exempt"`
 }
 
 // Sink says what an exporter downstream of the enforcement point is.
@@ -185,6 +202,9 @@ func (c *Config) defaults() {
 	if c.Evidence.QueryLog.URL == "" {
 		c.Evidence.QueryLog.URL = c.Loki.URL
 	}
+	if c.Runtime == "" {
+		c.Runtime = "collector"
+	}
 	if c.Collector.DedupeInterval == "" {
 		c.Collector.DedupeInterval = "10s"
 	}
@@ -203,13 +223,33 @@ func (c *Config) validate() error {
 	if c.Evidence.QueryLog.Enabled && c.Evidence.QueryLog.Selector == "" {
 		return fmt.Errorf("evidence.query_log.selector is required when the query log is enabled")
 	}
-	if len(c.Collector.ConfigFiles) == 0 || c.Collector.Pipeline == "" {
-		return fmt.Errorf("collector.config_files and collector.pipeline are required")
-	}
-	for id, s := range c.Collector.Sinks {
-		if s.Loki == (s.Exempt != "") {
-			return fmt.Errorf("collector.sinks.%s: set exactly one of loki: true or exempt: <reason>", id)
+	switch c.Runtime {
+	case "collector":
+		if len(c.Collector.ConfigFiles) == 0 || c.Collector.Pipeline == "" {
+			return fmt.Errorf("collector.config_files and collector.pipeline are required")
 		}
+		for id, s := range c.Collector.Sinks {
+			if s.Loki == (s.Exempt != "") {
+				return fmt.Errorf("collector.sinks.%s: set exactly one of loki: true or exempt: <reason>", id)
+			}
+		}
+	case "vector":
+		v := c.Vector
+		if len(v.ConfigFiles) == 0 || v.After == "" || v.ScopePath == "" || v.TextPath == "" || v.MeasureSink == nil {
+			return fmt.Errorf("vector.config_files, after, scope_path, text_path and measure_sink are required")
+		}
+		for id, s := range v.Sinks {
+			if s.Loki == (s.Exempt != "") {
+				return fmt.Errorf("vector.sinks.%s: set exactly one of loki: true or exempt: <reason>", id)
+			}
+		}
+		for svc := range c.Scope.Structured {
+			if v.FieldPaths[svc] == "" {
+				return fmt.Errorf("vector.field_paths.%s is required for a structured service", svc)
+			}
+		}
+	default:
+		return fmt.Errorf("runtime must be collector or vector, got %q", c.Runtime)
 	}
 	if c.Policy.SamplePercent < 1 || c.Policy.SamplePercent > 99 {
 		return fmt.Errorf("policy.sample_percent must be 1..99")
