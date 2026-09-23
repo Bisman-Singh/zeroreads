@@ -1,0 +1,281 @@
+// Package usage decides whether a query can read any line a rule would remove.
+//
+// Every decision over-approximates what the query reads. When something cannot be modelled exactly
+// (an unknown label, a filter kind, a regex whose meaning in Loki differs from Go's), that constraint
+// is dropped, which can only make the query read more. So a "not used" verdict is a proof, and a
+// "used" verdict carries a witness line whenever one can be produced.
+package usage
+
+import (
+	"errors"
+	"fmt"
+	"regexp"
+	"regexp/syntax"
+	"strings"
+	"sync"
+	"unicode"
+
+	"github.com/Bisman-Singh/sievelog/internal/automaton"
+	"github.com/Bisman-Singh/sievelog/internal/logql"
+)
+
+// Rule is what a rule removes: lines in streams with these scope labels whose stored text is in
+// Language.
+type Rule struct {
+	ID string
+	// Scope maps backend label names to the values every removed line carries, for example
+	// {"service_name": "checkout"}. Matchers on other labels cannot exclude the rule's lines.
+	Scope map[string]string
+	// Language is the anchored removal language over the stored line.
+	Language *automaton.Pattern
+	// Structured is true when the stored line is a structured record (for example JSON) and
+	// Language describes only one field of it. Line filters then cannot be decided exactly.
+	Structured bool
+}
+
+// Verdict is the answer for one selection and one rule.
+type Verdict struct {
+	Used     bool
+	Counting bool
+	Witness  string // a line in the rule's language the selection reads, when Used and decidable
+	Reason   string
+}
+
+// Limit bounds each automaton question. Exceeding it yields "used".
+var Limit = automaton.DefaultLimit
+
+// Evaluate decides one selection against one rule.
+func Evaluate(sel logql.Selection, r Rule) Verdict {
+	v := Verdict{Counting: sel.Counting}
+	for _, m := range sel.Matchers {
+		val, scoped := r.Scope[m.Name]
+		if !scoped {
+			continue // not a scope label: cannot exclude
+		}
+		ok, known := matchLabel(m, val)
+		if known && !ok {
+			v.Reason = fmt.Sprintf("stream matcher %s%s%q excludes %s=%q", m.Name, m.Op, m.Value, m.Name, val)
+			return v
+		}
+	}
+	if r.Structured && len(sel.Stages) > 0 {
+		v.Used = true
+		v.Reason = "line filters on structured records cannot be decided on one field; treated as reading every line"
+		return v
+	}
+	terms := []automaton.Term{{Pattern: r.Language}}
+	var ignored []string
+	for _, st := range sel.Stages {
+		t, why := stageTerms(st)
+		terms = append(terms, t...)
+		ignored = append(ignored, why...)
+	}
+	w, found, err := automaton.Witness(terms, Limit)
+	switch {
+	case errors.Is(err, automaton.ErrLimit):
+		v.Used = true
+		v.Reason = "too complex to decide; treated as used"
+	case err != nil:
+		v.Used = true
+		v.Reason = "decision error (" + err.Error() + "); treated as used"
+	case found:
+		v.Used = true
+		v.Witness = w
+		v.Reason = "reads lines of this rule"
+	default:
+		v.Reason = "no line of this rule passes the filters"
+	}
+	if len(ignored) > 0 {
+		v.Reason += "; ignored (widening): " + strings.Join(ignored, "; ")
+	}
+	return v
+}
+
+// matchLabel evaluates a stream matcher against a known value. known is false when the matcher
+// cannot be evaluated exactly (template variables, case-insensitive regex).
+func matchLabel(m logql.Matcher, val string) (ok, known bool) {
+	if hasVariable(m.Value) {
+		return false, false
+	}
+	switch m.Op {
+	case "=":
+		return val == m.Value, true
+	case "!=":
+		return val != m.Value, true
+	case "=~", "!~":
+		if foldsCase(m.Value) {
+			return false, false
+		}
+		re, err := regexp.Compile(`\A(?:` + m.Value + `)\z`)
+		if err != nil {
+			return false, false
+		}
+		return re.MatchString(val) == (m.Op == "=~"), true
+	}
+	return false, false
+}
+
+// hasVariable reports Grafana template syntax: $name, ${name...}, [[name]].
+var variableRe = regexp.MustCompile(`\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|\[\[[^\]]*\]\]`)
+
+func hasVariable(s string) bool { return variableRe.MatchString(s) }
+
+// stageTerms turns one line filter stage into automaton terms, and says what it had to ignore.
+func stageTerms(st logql.Stage) ([]automaton.Term, []string) {
+	if !st.Negative {
+		var alts []string
+		for _, f := range st.Alternatives {
+			exprs, ok, why := positiveExprs(f)
+			if !ok {
+				return nil, []string{why}
+			}
+			alts = append(alts, exprs...)
+		}
+		p, err := automaton.Compile("(?:" + strings.Join(alts, ")|(?:") + ")")
+		if err != nil {
+			return nil, []string{"positive stage did not compile: " + err.Error()}
+		}
+		return []automaton.Term{{Pattern: p}}, nil
+	}
+	var terms []automaton.Term
+	var why []string
+	for _, f := range st.Alternatives {
+		p, ok, reason := negativePattern(f)
+		if !ok {
+			why = append(why, reason)
+			continue
+		}
+		terms = append(terms, automaton.Term{Pattern: p, Negate: true})
+	}
+	return terms, why
+}
+
+// positiveExprs returns regexes whose union contains every line Loki's filter keeps.
+func positiveExprs(f logql.Filter) ([]string, bool, string) {
+	if hasVariable(f.Value) {
+		return nil, false, fmt.Sprintf("filter %q uses a template variable", f.Value)
+	}
+	switch f.Kind {
+	case "contains":
+		return []string{regexp.QuoteMeta(f.Value)}, true, ""
+	case "regex":
+		ast, err := syntax.Parse(f.Value, syntax.Perl)
+		if err != nil {
+			return nil, false, fmt.Sprintf("regex %q does not parse", f.Value)
+		}
+		out := []string{f.Value}
+		// Loki re-serialises regexes before compiling them; include that form too.
+		out = append(out, ast.Simplify().String())
+		if hasFold(ast) {
+			// Loki may evaluate case-insensitive literals with unicode.ToLower equality.
+			out = append(out, lowerVariant(ast).String())
+		}
+		return out, true, ""
+	}
+	return nil, false, fmt.Sprintf("%s filter %q not modelled", f.Kind, f.Value)
+}
+
+// negativePattern returns the pattern whose matches Loki's negative filter drops, only when that
+// set is known exactly.
+func negativePattern(f logql.Filter) (*automaton.Pattern, bool, string) {
+	if hasVariable(f.Value) {
+		return nil, false, fmt.Sprintf("filter %q uses a template variable", f.Value)
+	}
+	switch f.Kind {
+	case "contains":
+		return automaton.Literal(f.Value), true, ""
+	case "regex":
+		ast, err := syntax.Parse(f.Value, syntax.Perl)
+		if err != nil {
+			return nil, false, fmt.Sprintf("regex %q does not parse", f.Value)
+		}
+		if hasFold(ast) {
+			return nil, false, fmt.Sprintf("case-insensitive negative regex %q not modelled", f.Value)
+		}
+		orig, err := automaton.Compile(f.Value)
+		if err != nil {
+			return nil, false, fmt.Sprintf("regex %q does not compile", f.Value)
+		}
+		// Loki compiles the re-serialised form. Use it only if it denotes the same language.
+		round, err := automaton.Compile(ast.Simplify().String())
+		if err != nil {
+			return nil, false, fmt.Sprintf("re-serialised regex %q does not compile", f.Value)
+		}
+		if !equivalent(orig, round) {
+			return nil, false, fmt.Sprintf("regex %q changes meaning when re-serialised", f.Value)
+		}
+		return orig, true, ""
+	}
+	return nil, false, fmt.Sprintf("negative %s filter %q not modelled", f.Kind, f.Value)
+}
+
+func equivalent(a, b *automaton.Pattern) bool {
+	ab, _, err1 := automaton.Subset(a, b, Limit)
+	ba, _, err2 := automaton.Subset(b, a, Limit)
+	return err1 == nil && err2 == nil && ab && ba
+}
+
+func foldsCase(expr string) bool {
+	ast, err := syntax.Parse(expr, syntax.Perl)
+	return err != nil || hasFold(ast)
+}
+
+func hasFold(re *syntax.Regexp) bool {
+	if re.Flags&syntax.FoldCase != 0 {
+		return true
+	}
+	for _, s := range re.Sub {
+		if hasFold(s) {
+			return true
+		}
+	}
+	return false
+}
+
+// lowerVariant rewrites case-insensitive literals into classes of every rune whose unicode.ToLower
+// equals the literal rune's, which is how Loki's containsLower compares.
+func lowerVariant(re *syntax.Regexp) *syntax.Regexp {
+	c := *re
+	c.Sub = nil
+	for _, s := range re.Sub {
+		c.Sub = append(c.Sub, lowerVariant(s))
+	}
+	if re.Op == syntax.OpLiteral && re.Flags&syntax.FoldCase != 0 {
+		var parts []*syntax.Regexp
+		for _, r := range re.Rune {
+			class := lowerClass(unicode.ToLower(r))
+			var ranges []rune
+			for _, x := range class {
+				ranges = append(ranges, x, x)
+			}
+			parts = append(parts, &syntax.Regexp{Op: syntax.OpCharClass, Rune: ranges})
+		}
+		if len(parts) == 1 {
+			return parts[0]
+		}
+		return &syntax.Regexp{Op: syntax.OpConcat, Sub: parts}
+	}
+	c.Flags &^= syntax.FoldCase
+	return &c
+}
+
+var (
+	lowerOnce  sync.Once
+	lowerIndex map[rune][]rune
+)
+
+func lowerClass(lower rune) []rune {
+	lowerOnce.Do(func() {
+		lowerIndex = map[rune][]rune{}
+		for r := rune(0); r <= unicode.MaxRune; r++ {
+			if r >= 0xD800 && r <= 0xDFFF {
+				continue
+			}
+			l := unicode.ToLower(r)
+			if l != r {
+				lowerIndex[l] = append(lowerIndex[l], r)
+			}
+		}
+	})
+	return append([]rune{lower}, lowerIndex[lower]...)
+}
