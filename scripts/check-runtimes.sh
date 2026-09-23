@@ -3,4 +3,4 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 go vet -tags docker ./...
-go test -tags docker ./internal/dialect/... -count=1 -timeout 30m
+go test -tags docker ./internal/dialect/... ./internal/emit/... -count=1 -timeout 30m
