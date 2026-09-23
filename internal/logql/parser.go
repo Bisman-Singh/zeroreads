@@ -2,6 +2,7 @@ package logql
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -414,7 +415,29 @@ func (p *parser) selector() (Selection, error) {
 		}
 	}
 	p.i++
+	if !hasNonEmptyMatcher(sel.Matchers) {
+		return sel, p.errf("queries require at least one regexp or equality matcher that does not have an empty-compatible value")
+	}
 	return sel, nil
+}
+
+// hasNonEmptyMatcher mirrors Loki's rule: a selector needs an = or =~ matcher that cannot match the
+// empty value, so {a!="b"} and {a=~".*"} are rejected.
+func hasNonEmptyMatcher(ms []Matcher) bool {
+	for _, m := range ms {
+		switch m.Op {
+		case "=":
+			if m.Value != "" {
+				return true
+			}
+		case "=~":
+			re, err := regexp.Compile(`\A(?:` + m.Value + `)\z`)
+			if err != nil || !re.MatchString("") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (p *parser) matcher() (Matcher, error) {

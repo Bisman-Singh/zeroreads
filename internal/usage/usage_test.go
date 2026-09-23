@@ -52,8 +52,8 @@ func TestEvaluate(t *testing.T) {
 		{`{service_name="auth"}`, health, false},
 		{`{service_name=~"check.*"}`, health, true},
 		{`{service_name=~"check"}`, health, false}, // label regexes are anchored
-		{`{service_name!="checkout"}`, health, false},
-		{`{service_name!~"auth|orders"}`, health, true},
+		{`{service_name!="checkout", k8s_container_name=~".+"}`, health, false},
+		{`{service_name!~"auth|orders", k8s_container_name=~".+"}`, health, true},
 		{`{namespace="prod"}`, health, true}, // not a scope label: cannot exclude
 		{`{service_name="$svc"}`, health, true},
 		{`{service_name=~"(?i)CHECKOUT"}`, health, true}, // not modelled: cannot exclude

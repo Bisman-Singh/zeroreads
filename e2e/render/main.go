@@ -23,6 +23,9 @@ processors:
   transform/prep:
     error_mode: propagate
     log_statements:
+      - context: resource
+        statements:
+          - set(resource.attributes["service.name"], resource.attributes["k8s.container.name"])
       - context: log
         statements:
           - set(log.attributes["service.name"], resource.attributes["k8s.container.name"])
@@ -62,6 +65,8 @@ exporters:
     path: /e2e/out/logs.json
   file/metrics:
     path: /e2e/out/metrics.json
+  otlp_http/loki:
+    endpoint: http://loki.sievelog-system.svc:3100/otlp
 
 service:
   telemetry:
@@ -71,7 +76,7 @@ service:
     logs:
       receivers: [file_log]
       processors: [transform/prep, drain]
-      exporters: [file/logs, signal_to_metrics]
+      exporters: [file/logs, otlp_http/loki, signal_to_metrics]
     metrics:
       receivers: [signal_to_metrics]
       exporters: [file/metrics]

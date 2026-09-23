@@ -75,6 +75,8 @@ func TestParse(t *testing.T) {
 		{`variants(count_over_time({a="b"}[1m]), bytes_over_time({a="b"}[1m])) of ({a="b"} |= "x" [1m])`, `a="b" | #count ;; a="b" | #count ;; a="b" | [contains:x] #count`},
 		{`sort_desc(sum by (a) (count_over_time({a="b"}[5m])))`, `a="b" | #count`},
 		{`{a="b"} | json | duration > -1s`, `a="b" |`},
+		{`{a!="b", c=~".+"}`, `a!="b",c=~".+" |`},
+		{`{a="", c="d"}`, `a="",c="d" |`},
 	}
 	for _, c := range cases {
 		q, err := Parse(c.q)
@@ -104,6 +106,10 @@ func TestParseRejects(t *testing.T) {
 		"{a=\"b\"} |= \"\xff\"",
 		`{a="b"} | logfmt --bogus`,
 		`rate(({a="b"} |= "x"[1m])`,
+		`{a!="b"}`,
+		`{a=~".*"}`,
+		`{a=""}`,
+		`{a!~"x", b!="y"}`,
 	} {
 		if _, err := Parse(q); err == nil {
 			t.Fatalf("%q parsed, want error", q)

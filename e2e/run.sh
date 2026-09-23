@@ -21,6 +21,12 @@ log() { printf '[e2e] %s\n' "$*"; }
 
 mkdir -p "${WORK}/out"
 
+# REUSE=1 re-runs only the assertions against the stack and data of the previous run.
+if [ "${REUSE:-0}" = "1" ]; then
+  # shellcheck disable=SC1091
+  source "${WORK}/last-run.env"
+else
+
 if ! kind get clusters | grep -qx "${CLUSTER}"; then
   log "creating kind cluster ${CLUSTER}"
   cat > "${WORK}/kind.yaml" <<EOF
@@ -52,6 +58,12 @@ for ns in $(${K} get ns -o name | grep '^namespace/sievelog-gen' || true); do ${
 ${K} delete daemonset collector -n sievelog-system --ignore-not-found --wait=true >/dev/null
 ${K} wait --for=delete pod -l app=collector -n sievelog-system --timeout=60s >/dev/null 2>&1 || true
 rm -f "${WORK}/out/"*.json
+
+log "deploying loki"
+${K} apply -f "${ROOT}/e2e/k8s/collector.yaml" >/dev/null # creates the namespace
+${K} apply -f "${ROOT}/e2e/k8s/loki.yaml" >/dev/null
+${K} rollout restart deployment/loki -n sievelog-system >/dev/null
+${K} rollout status deployment/loki -n sievelog-system --timeout=180s >/dev/null
 
 log "deploying collector"
 ( cd "${ROOT}" && go run ./e2e/render "${RUN_NS}" ) > "${WORK}/config.yaml"
@@ -109,6 +121,15 @@ done
 log "collector wrote ${got} records"
 sleep 3 # let the metrics file flush the last payloads
 
+printf 'SEED=%s\nCOUNT=%s\n' "${SEED}" "${COUNT}" > "${WORK}/last-run.env"
+fi
+
+log "port-forwarding loki"
+${K} -n sievelog-system port-forward svc/loki 13100:3100 >/dev/null 2>&1 &
+PF=$!
+trap 'kill ${PF} 2>/dev/null || true' EXIT
+for _ in $(seq 1 30); do curl -sf localhost:13100/ready >/dev/null && break; sleep 1; done
+
 log "running assertions"
-( cd "${ROOT}" && E2E_OUT="${WORK}/out" E2E_SEED="${SEED}" E2E_COUNT="${COUNT}" \
-  go test -tags e2e ./e2e/ -count=1 -v )
+( cd "${ROOT}" && E2E_OUT="${WORK}/out" E2E_SEED="${SEED}" E2E_COUNT="${COUNT}" LOKI_URL="http://localhost:13100" \
+  go test -tags e2e ./e2e/ -count=1 -v -timeout 30m ${E2E_RUN:+-run "${E2E_RUN}"} )
