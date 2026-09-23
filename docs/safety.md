@@ -20,6 +20,16 @@ exactly is treated as reading more, never less:
 - pattern (`|>`) and `ip()` filters, and case-insensitive negative regex filters, are ignored
 - a line filter on a structured (JSON) record reads every line of that service
 
+OpenSearch requests and stored queries are modelled per service, more coarsely. A request reads every
+line of a service unless its target indices provably cannot hold that service's documents (after
+resolving aliases, data streams and wildcards against the cluster), or its DSL query provably selects
+other services through an exact `term` or `terms` filter on the service field (in `filter`, `must`,
+`constant_score`, or a `must_not` naming the service). That filter is only trusted after the cluster
+confirms the field is a plain `keyword` everywhere in scope, with no normalizer, no document missing
+it and no document holding several values. SQL, PPL, Lucene query strings, KQL, `_msearch` and every
+unknown endpoint read everything. A request denied after authentication still counts as a read,
+because the REST audit entry is written before the denial.
+
 When a query can read a rule's lines, the report shows a sample line it would read. That line is
 re-checked with the real regular expression engine before it is shown.
 
@@ -60,5 +70,10 @@ rule gains a reader or loses its evidence, and writes the rules that remain safe
   verified against policy-go with the teroscan engine only.
 - **Measured bytes are not billed bytes.** Vendors bill on their own encoding. Compare the measured
   removal with the backend's own usage meters before and after enforcing.
-- **Not yet connected as evidence sources:** other log services, OpenSearch. A pipeline that
-  also sends logs there reports those destinations as gaps until they are exempted.
+- **OpenSearch evidence depends on the audit log.** The security plugin does not log successful
+  requests by default, ignores `kibanaserver` by default, and keeps audit indices only as long as its
+  retention allows. Each of these is reported as a gap. Queries stored by notebooks, reporting,
+  anomaly detection and observability are not read, and saved queries can apply to any index pattern;
+  both are gaps too.
+- **Not yet connected as evidence sources:** other log services. A pipeline that also sends logs
+  there reports those destinations as gaps until they are exempted.

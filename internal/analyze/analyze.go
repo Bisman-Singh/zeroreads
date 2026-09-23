@@ -49,6 +49,11 @@ type UsageQuery struct {
 	Last   time.Time // last execution (query log)
 }
 
+// ScopedReader is a query in a store other than Loki that may read every line of one service.
+type ScopedReader struct {
+	Service, Source, Origin, Expr, Reason string
+}
+
 // Gap is missing evidence.
 type Gap struct {
 	Source, Origin, Reason string
@@ -103,7 +108,7 @@ type Recommendation struct {
 }
 
 // Decide produces one recommendation per candidate.
-func Decide(cands []Candidate, queries []UsageQuery, gaps []Gap, pol Policy) ([]Recommendation, error) {
+func Decide(cands []Candidate, queries []UsageQuery, scoped []ScopedReader, gaps []Gap, pol Policy) ([]Recommendation, error) {
 	errRe, err := automaton.Compile(pol.ErrorPattern)
 	if err != nil {
 		return nil, fmt.Errorf("analyze: error pattern: %w", err)
@@ -176,6 +181,11 @@ func Decide(cands []Candidate, queries []UsageQuery, gaps []Gap, pol Policy) ([]
 					rec.Readers = append(rec.Readers, Reader{Source: p.q.Source, Origin: p.q.Origin, Expr: p.q.Expr, Counting: v.Counting, Witness: v.Witness, Reason: v.Reason})
 					break
 				}
+			}
+		}
+		for _, sr := range scoped {
+			if sr.Service == c.Service {
+				rec.Readers = append(rec.Readers, Reader{Source: sr.Source, Origin: sr.Origin, Expr: sr.Expr, Counting: true, Reason: sr.Reason})
 			}
 		}
 		// Blockers, in the order an operator should read them.

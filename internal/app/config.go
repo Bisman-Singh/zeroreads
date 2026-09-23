@@ -69,6 +69,8 @@ type EvidenceConfig struct {
 	QueryLog QueryLogConfig  `yaml:"query_log"`
 	Ruler    bool            `yaml:"ruler"`
 	Grafana  []GrafanaConfig `yaml:"grafana"`
+	// OpenSearch clusters that receive the analysed logs, referenced by sinks.
+	OpenSearch []OpenSearchConfig `yaml:"opensearch"`
 }
 
 // QueryLogConfig is where Loki's own logs (with its query log) can be read.
@@ -129,8 +131,26 @@ type FluentBitConfig struct {
 
 // Sink says what an exporter downstream of the enforcement point is.
 type Sink struct {
-	Loki   bool   `yaml:"loki"`   // the analysed Loki: its usage is covered by the evidence sources
-	Exempt string `yaml:"exempt"` // reason the operator accepts removal there without evidence
+	Loki       bool   `yaml:"loki"`       // the analysed Loki: its usage is covered by the evidence sources
+	OpenSearch string `yaml:"opensearch"` // name of the evidence.opensearch cluster this sink writes to
+	Exempt     string `yaml:"exempt"`     // reason the operator accepts removal there without evidence
+}
+
+// check requires exactly one kind and a known OpenSearch cluster.
+func (s Sink) check(path string, clusters map[string]bool) error {
+	n := 0
+	for _, set := range []bool{s.Loki, s.OpenSearch != "", s.Exempt != ""} {
+		if set {
+			n++
+		}
+	}
+	if n != 1 {
+		return fmt.Errorf("%s: set exactly one of loki: true, opensearch: <name> or exempt: <reason>", path)
+	}
+	if s.OpenSearch != "" && !clusters[s.OpenSearch] {
+		return fmt.Errorf("%s: opensearch %q is not in evidence.opensearch", path, s.OpenSearch)
+	}
+	return nil
 }
 
 // PolicyConfig maps to analyze.Policy.
@@ -213,6 +233,15 @@ func (c *Config) defaults() {
 	if c.Evidence.Window.Duration == 0 {
 		c.Evidence.Window.Duration = 30 * 24 * time.Hour
 	}
+	for i := range c.Evidence.OpenSearch {
+		o := &c.Evidence.OpenSearch[i]
+		if o.AuditIndex == "" {
+			o.AuditIndex = "security-auditlog-*"
+		}
+		if o.DashboardsIndex == "" {
+			o.DashboardsIndex = ".kibana*"
+		}
+	}
 	if c.Evidence.QueryLog.URL == "" {
 		c.Evidence.QueryLog.URL = c.Loki.URL
 	}
@@ -237,14 +266,26 @@ func (c *Config) validate() error {
 	if c.Evidence.QueryLog.Enabled && c.Evidence.QueryLog.Selector == "" {
 		return fmt.Errorf("evidence.query_log.selector is required when the query log is enabled")
 	}
+	clusters := map[string]bool{}
+	for i, o := range c.Evidence.OpenSearch {
+		switch {
+		case o.Name == "" || o.URL == "":
+			return fmt.Errorf("evidence.opensearch[%d]: name and url are required", i)
+		case clusters[o.Name]:
+			return fmt.Errorf("evidence.opensearch[%d]: duplicate name %q", i, o.Name)
+		case len(o.Indices) == 0:
+			return fmt.Errorf("evidence.opensearch.%s: indices is required", o.Name)
+		}
+		clusters[o.Name] = true
+	}
 	switch c.Runtime {
 	case "collector":
 		if len(c.Collector.ConfigFiles) == 0 || c.Collector.Pipeline == "" {
 			return fmt.Errorf("collector.config_files and collector.pipeline are required")
 		}
 		for id, s := range c.Collector.Sinks {
-			if s.Loki == (s.Exempt != "") {
-				return fmt.Errorf("collector.sinks.%s: set exactly one of loki: true or exempt: <reason>", id)
+			if err := s.check("collector.sinks."+id, clusters); err != nil {
+				return err
 			}
 		}
 	case "vector":
@@ -253,8 +294,8 @@ func (c *Config) validate() error {
 			return fmt.Errorf("vector.config_files, after, scope_path, text_path and measure_sink are required")
 		}
 		for id, s := range v.Sinks {
-			if s.Loki == (s.Exempt != "") {
-				return fmt.Errorf("vector.sinks.%s: set exactly one of loki: true or exempt: <reason>", id)
+			if err := s.check("vector.sinks."+id, clusters); err != nil {
+				return err
 			}
 		}
 		for svc := range c.Scope.Structured {
@@ -268,8 +309,8 @@ func (c *Config) validate() error {
 			return fmt.Errorf("fluentbit.config_files, match, scope_key, text_key and metrics_tag are required")
 		}
 		for id, s := range f.Sinks {
-			if s.Loki == (s.Exempt != "") {
-				return fmt.Errorf("fluentbit.sinks.%s: set exactly one of loki: true or exempt: <reason>", id)
+			if err := s.check("fluentbit.sinks."+id, clusters); err != nil {
+				return err
 			}
 		}
 		for svc := range c.Scope.Structured {

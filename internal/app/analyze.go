@@ -53,7 +53,10 @@ type EvidenceSummary struct {
 	QueryLogOldest  time.Time `json:"query_log_oldest"`
 	RulerRules      int       `json:"ruler_rules"`
 	GrafanaQueries  int       `json:"grafana_queries"`
-	Sinks           []string  `json:"sinks"`
+	// OpenSearchUses counts audited requests, monitors and saved objects that may read documents.
+	OpenSearchUses       int      `json:"opensearch_uses"`
+	OpenSearchAuditLines int      `json:"opensearch_audit_lines"`
+	Sinks                []string `json:"sinks"`
 }
 
 func (c *Config) lokiClient(url string) *loki.Client {
@@ -119,7 +122,7 @@ func Analyze(ctx context.Context, c *Config, now time.Time) (*Report, error) {
 		rep.Notes = append(rep.Notes, notes...)
 	}
 
-	queries, gaps, err := c.evidence(ctx, now, rep)
+	queries, scoped, gaps, err := c.evidence(ctx, now, services, rep)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +149,7 @@ func Analyze(ctx context.Context, c *Config, now time.Time) (*Report, error) {
 		}
 		pol.Actions = acts
 	}
-	recs, err := analyze.Decide(cands, queries, gaps, pol)
+	recs, err := analyze.Decide(cands, queries, scoped, gaps, pol)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +384,7 @@ func (c *Config) scalar(ctx context.Context, lc *loki.Client, q string, at time.
 }
 
 // evidence reads every usage source. Anything that cannot be read becomes a gap with a stable key.
-func (c *Config) evidence(ctx context.Context, now time.Time, rep *Report) ([]analyze.UsageQuery, []analyze.Gap, error) {
+func (c *Config) evidence(ctx context.Context, now time.Time, services []string, rep *Report) ([]analyze.UsageQuery, []analyze.ScopedReader, []analyze.Gap, error) {
 	var qs []analyze.UsageQuery
 	var gaps []analyze.Gap
 	from := now.Add(-c.Evidence.Window.Duration)
@@ -481,7 +484,9 @@ func (c *Config) evidence(ctx context.Context, now time.Time, rep *Report) ([]an
 			gaps = append(gaps, analyze.Gap{Source: "grafana", Origin: fmt.Sprintf("org %d %s", gp.Org, gp.Origin), Key: key, Reason: gp.Reason})
 		}
 	}
-	return qs, gaps, nil
+	scoped, og := c.openSearchEvidence(ctx, from, now, services, rep)
+	gaps = append(gaps, og...)
+	return qs, scoped, gaps, nil
 }
 
 // topologyGaps checks every destination downstream of the enforcement point.
@@ -535,6 +540,8 @@ func (c *Config) topologyGaps(rep *Report) ([]analyze.Gap, error) {
 		switch {
 		case ok && s.Loki:
 			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": analysed Loki")
+		case ok && s.OpenSearch != "":
+			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": opensearch "+s.OpenSearch)
 		case ok:
 			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": exempt ("+s.Exempt+")")
 		default:
@@ -581,6 +588,8 @@ func (c *Config) vectorGaps(rep *Report) ([]analyze.Gap, error) {
 		switch {
 		case ok && s.Loki:
 			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": analysed Loki")
+		case ok && s.OpenSearch != "":
+			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": opensearch "+s.OpenSearch)
 		case ok:
 			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": exempt ("+s.Exempt+")")
 		default:
@@ -627,6 +636,8 @@ func (c *Config) fluentBitGaps(rep *Report) ([]analyze.Gap, error) {
 		switch {
 		case ok && s.Loki:
 			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": analysed Loki")
+		case ok && s.OpenSearch != "":
+			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": opensearch "+s.OpenSearch)
 		case ok:
 			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": exempt ("+s.Exempt+")")
 		default:

@@ -30,6 +30,12 @@ func TestConfigValidation(t *testing.T) {
 		{"fluentbit ok", "loki: {url: http://l}\nruntime: fluentbit\nfluentbit: {config_files: [f.yaml], match: kube.*, scope_key: service, text_key: [log], metrics_tag: m}\n", ""},
 		{"fluentbit missing", "loki: {url: http://l}\nruntime: fluentbit\nfluentbit: {config_files: [f.yaml]}\n", "required"},
 		{"bad sample", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\npolicy: {sample_percent: 100}\n", "sample_percent"},
+		{"opensearch sink", "loki: {url: http://l}\nevidence: {opensearch: [{name: os, url: https://o, indices: [logs-*]}]}\ncollector: {config_files: [c.yaml], pipeline: logs, sinks: {x: {opensearch: os}}}\n", ""},
+		{"opensearch sink unknown", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs, sinks: {x: {opensearch: os}}}\n", "not in evidence.opensearch"},
+		{"opensearch sink and loki", "loki: {url: http://l}\nevidence: {opensearch: [{name: os, url: https://o, indices: [logs-*]}]}\ncollector: {config_files: [c.yaml], pipeline: logs, sinks: {x: {opensearch: os, loki: true}}}\n", "exactly one"},
+		{"opensearch no indices", "loki: {url: http://l}\nevidence: {opensearch: [{name: os, url: https://o}]}\ncollector: {config_files: [c.yaml], pipeline: logs}\n", "indices is required"},
+		{"opensearch duplicate", "loki: {url: http://l}\nevidence: {opensearch: [{name: os, url: https://o, indices: [a]}, {name: os, url: https://p, indices: [a]}]}\ncollector: {config_files: [c.yaml], pipeline: logs}\n", "duplicate"},
+		{"opensearch vector sink", "loki: {url: http://l}\nruntime: vector\nevidence: {opensearch: [{name: os, url: https://o, indices: [a]}]}\nvector: {config_files: [v.yaml], after: prep, scope_path: .service, text_path: .message, measure_sink: {type: blackhole}, sinks: {s: {opensearch: nope}}}\n", "not in evidence.opensearch"},
 		{"days duration", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\nevidence: {window: 30d}\n", ""},
 	}
 	for _, c := range cases {
@@ -39,6 +45,9 @@ func TestConfigValidation(t *testing.T) {
 			t.Fatalf("%s: %v", c.name, err)
 		case c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err)):
 			t.Fatalf("%s: got %v, want error containing %q", c.name, err, c.err)
+		}
+		if c.name == "opensearch sink" && (cfg.Evidence.OpenSearch[0].AuditIndex != "security-auditlog-*" || cfg.Evidence.OpenSearch[0].DashboardsIndex != ".kibana*") {
+			t.Fatalf("defaults: %+v", cfg.Evidence.OpenSearch[0])
 		}
 		if c.name == "days duration" && cfg.Evidence.Window.Hours() != 720 {
 			t.Fatalf("30d parsed as %v", cfg.Evidence.Window)

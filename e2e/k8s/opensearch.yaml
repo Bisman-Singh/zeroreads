@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensearch
+  namespace: sievelog-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: opensearch}
+  template:
+    metadata:
+      labels: {app: opensearch}
+    spec:
+      initContainers:
+        - name: sysctl
+          image: busybox:1.36
+          command: ["sh", "-c", "sysctl -w vm.max_map_count=262144 || true"]
+          securityContext: {privileged: true}
+      containers:
+        - name: opensearch
+          image: opensearchproject/opensearch:3.8.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: discovery.type, value: single-node}
+            - {name: OPENSEARCH_JAVA_OPTS, value: "-Xms768m -Xmx768m"}
+            - {name: OPENSEARCH_INITIAL_ADMIN_PASSWORD, value: "E2e-only-Passw0rd!"}
+            - {name: plugins.security.audit.type, value: internal_opensearch}
+            - {name: DISABLE_INSTALL_DEMO_CONFIG, value: "false"}
+          ports:
+            - containerPort: 9200
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "curl -sk -u admin:E2e-only-Passw0rd! https://localhost:9200/_cluster/health | grep -q status"]
+            periodSeconds: 5
+            failureThreshold: 60
+          resources:
+            requests: {memory: 1200Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch
+  namespace: sievelog-system
+spec:
+  selector: {app: opensearch}
+  ports:
+    - port: 9200
+      targetPort: 9200

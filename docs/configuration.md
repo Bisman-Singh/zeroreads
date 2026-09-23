@@ -40,6 +40,17 @@ evidence:
     - url: http://grafana:3000
       token_env: GRAFANA_TOKEN   # or username + password_env
       datasources: [loki]        # Grafana datasource UIDs that point at loki.url
+  opensearch:                    # clusters the pipeline also ships to, referenced by sinks
+    - name: search
+      url: https://opensearch:9200
+      username: sievelog
+      password_env: OPENSEARCH_PASSWORD
+      ca_file: ""                # or insecure_skip_verify: true for a self-signed test cluster
+      audit_index: security-auditlog-*  # the security plugin's audit indices
+      dashboards_index: .kibana*        # OpenSearch Dashboards saved objects
+      prove_live: true           # send a marker search and wait until it is audited
+      indices: ["logs-{service}*"]      # where a service's documents land; {service} is replaced
+      service_field: service.name       # keyword field naming the service; "" to not rely on one
 
 runtime: collector               # collector, vector or fluentbit
 
@@ -52,6 +63,7 @@ collector:
   dedupe_interval: 10s
   sinks:                         # every exporter downstream of the enforcement point
     otlp_http/loki: {loki: true}
+    opensearch/logs: {opensearch: search}
     kafka/archive: {exempt: "archive only, never queried"}
   derived_exempt: {}             # connectors turning these logs into metrics, with the reason
 
@@ -102,5 +114,19 @@ pricing:
 | `grafana-not-configured`, `grafana-unreadable` | no Grafana, or it could not be read |
 | `grafana-queryhistory` | only the credentials' own Explore history is readable |
 | `grafana-<kind>` | a Grafana object of that kind could not be read |
+| `opensearch-unreadable` | the cluster, or its index catalog, could not be read |
+| `opensearch-audit-config-unreadable` | the audit configuration could not be read |
+| `opensearch-audit-disabled` | audit logging, REST auditing or the AUTHENTICATED category is off |
+| `opensearch-audit-not-live` | the marker search never appeared in the audit log |
+| `opensearch-audit-ignored-users`, `-requests`, `-headers` | the audit log skips these users, requests or headers |
+| `opensearch-audit-window` | the audit log starts after the evidence window starts, or is empty |
+| `opensearch-audit-unreadable`, `opensearch-audit-unparsed` | the audit log could not be read, or entries did not parse |
+| `opensearch-monitors-unreadable`, `opensearch-monitors-unparsed` | alerting monitors could not be read |
+| `opensearch-dashboards-unreadable`, `opensearch-dashboards-unparsed` | Dashboards saved objects could not be read |
+| `opensearch-saved-queries` | Dashboards saved queries exist; they can be applied to any index pattern |
+| `opensearch-plugins` | queries stored by notebooks, reporting, anomaly detection and observability are not read |
+| `opensearch-scope-empty` | no document of the service is in its configured indices |
+| `opensearch-scope-outside` | some of the service's documents are outside its configured indices |
+| `opensearch-scope-unverified` | it could not be checked that the service's documents stay in its indices |
 | `sink:<id>` | a destination downstream of the enforcement point has no evidence |
 | `derived:<id>` | a connector or transform turns these logs into metrics |

@@ -108,6 +108,9 @@ func Markdown(rep *Report) string {
 	b.WriteString(".\n\n## Evidence\n\n")
 	fmt.Fprintf(&b, "- Query log: %s; %d distinct queries from %d lines, oldest %s\n", rep.Evidence.QueryLogLive, rep.Evidence.QueryLogQueries, rep.Evidence.QueryLogLines, rep.Evidence.QueryLogOldest.Format(time.RFC3339))
 	fmt.Fprintf(&b, "- Loki ruler: %d rules\n- Grafana: %d stored queries against this Loki\n", rep.Evidence.RulerRules, rep.Evidence.GrafanaQueries)
+	if rep.Evidence.OpenSearchAuditLines > 0 || rep.Evidence.OpenSearchUses > 0 {
+		fmt.Fprintf(&b, "- OpenSearch: %d audit entries read, %d requests and stored queries that may read documents\n", rep.Evidence.OpenSearchAuditLines, rep.Evidence.OpenSearchUses)
+	}
 	for _, s := range rep.Evidence.Sinks {
 		fmt.Fprintf(&b, "- Sink %s\n", s)
 	}
@@ -197,7 +200,15 @@ type VerifyResult struct {
 // rules that are no longer safe.
 func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time) (*VerifyResult, error) {
 	rep := &Report{}
-	queries, gaps, err := c.evidence(ctx, now, rep)
+	var services []string
+	seen := map[string]bool{}
+	for _, r := range rf.Rules {
+		if !seen[r.Service] {
+			seen[r.Service] = true
+			services = append(services, r.Service)
+		}
+	}
+	queries, scoped, gaps, err := c.evidence(ctx, now, services, rep)
 	if err != nil {
 		return nil, err
 	}
@@ -251,6 +262,11 @@ func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time) (*Veri
 					reasons = append(reasons, fmt.Sprintf("%s %s reads these lines: %s (e.g. %q)", p.q.Source, p.q.Origin, p.q.Expr, v.Witness))
 					break
 				}
+			}
+		}
+		for _, sr := range scoped {
+			if sr.Service == r.Service {
+				reasons = append(reasons, fmt.Sprintf("%s %s may read these lines: %s", sr.Source, sr.Origin, sr.Reason))
 			}
 		}
 		if len(reasons) > 0 {

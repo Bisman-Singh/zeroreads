@@ -73,6 +73,10 @@ ${K} apply -f "${ROOT}/e2e/k8s/grafana.yaml" >/dev/null
 ${K} rollout restart deployment/grafana -n sievelog-system >/dev/null
 ${K} rollout status deployment/grafana -n sievelog-system --timeout=240s >/dev/null
 
+log "deploying opensearch"
+${K} apply -f "${ROOT}/e2e/k8s/opensearch.yaml" >/dev/null
+${K} rollout status deployment/opensearch -n sievelog-system --timeout=600s >/dev/null
+
 log "deploying collector"
 # Only the current Loki pod's logs: kubelet keeps earlier pods' log files, and their query-log
 # lines would otherwise be re-shipped as usage evidence from a previous run.
@@ -141,10 +145,13 @@ ${K} -n sievelog-system port-forward svc/loki 13100:3100 >/dev/null 2>&1 &
 PF=$!
 ${K} -n sievelog-system port-forward svc/grafana 13000:3000 >/dev/null 2>&1 &
 PF2=$!
-trap 'kill ${PF} ${PF2} 2>/dev/null || true' EXIT
+${K} -n sievelog-system port-forward svc/opensearch 19200:9200 >/dev/null 2>&1 &
+PF3=$!
+trap 'kill ${PF} ${PF2} ${PF3} 2>/dev/null || true' EXIT
 for _ in $(seq 1 30); do curl -sf localhost:13100/ready >/dev/null && break; sleep 1; done
 for _ in $(seq 1 30); do curl -sf localhost:13000/api/health >/dev/null && break; sleep 1; done
+for _ in $(seq 1 30); do curl -skf -u 'admin:E2e-only-Passw0rd!' https://localhost:19200/ >/dev/null && break; sleep 1; done
 
 log "running assertions"
-( cd "${ROOT}" && E2E_OUT="${WORK}/out" E2E_SEED="${SEED}" E2E_COUNT="${COUNT}" LOKI_URL="http://localhost:13100" GRAFANA_URL="http://localhost:13000" E2E_WORK="${WORK}" E2E_NS="${RUN_NS}" \
+( cd "${ROOT}" && E2E_OUT="${WORK}/out" E2E_SEED="${SEED}" E2E_COUNT="${COUNT}" LOKI_URL="http://localhost:13100" GRAFANA_URL="http://localhost:13000" OPENSEARCH_URL="https://localhost:19200" OPENSEARCH_PASSWORD='E2e-only-Passw0rd!' E2E_WORK="${WORK}" E2E_NS="${RUN_NS}" \
   go test -tags e2e ./e2e/ -count=1 -v -timeout 30m ${E2E_RUN:+-run "${E2E_RUN}"} )

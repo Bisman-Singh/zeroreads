@@ -31,7 +31,7 @@ func TestDecide(t *testing.T) {
 		{Source: "grafana", Origin: "dashboard:x/panel:1", Expr: `{service_name="checkout"} |= "healthz"`},
 		{Source: "loki-querylog", Origin: "query-log", Expr: `sum(count_over_time({service_name="auth"}[5m]))`, Count: 3},
 	}
-	recs, err := Decide([]Candidate{heartbeat, health, declined, cache}, queries, nil, DefaultPolicy())
+	recs, err := Decide([]Candidate{heartbeat, health, declined, cache}, queries, nil, nil, DefaultPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestDecide(t *testing.T) {
 }
 
 func TestUnparsedQueryBlocksEverything(t *testing.T) {
-	recs, err := Decide([]Candidate{heartbeat, cache}, []UsageQuery{{Source: "grafana", Origin: "p", Expr: `{service_name="checkout"} | $unknown_syntax`}}, nil, DefaultPolicy())
+	recs, err := Decide([]Candidate{heartbeat, cache}, []UsageQuery{{Source: "grafana", Origin: "p", Expr: `{service_name="checkout"} | $unknown_syntax`}}, nil, nil, DefaultPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,13 +64,13 @@ func TestUnparsedQueryBlocksEverything(t *testing.T) {
 
 func TestGapsBlockUntilAcknowledged(t *testing.T) {
 	gaps := []Gap{{Source: "grafana", Origin: "queryhistory", Reason: "other users", Key: "grafana-query-history"}}
-	recs, _ := Decide([]Candidate{heartbeat}, nil, gaps, DefaultPolicy())
+	recs, _ := Decide([]Candidate{heartbeat}, nil, nil, gaps, DefaultPolicy())
 	if recs[0].Action != "none" || !strings.Contains(recs[0].Blockers[0], "grafana-query-history") {
 		t.Fatalf("%+v", recs[0])
 	}
 	pol := DefaultPolicy()
 	pol.Acknowledged = []string{"grafana-query-history"}
-	recs, _ = Decide([]Candidate{heartbeat}, nil, gaps, pol)
+	recs, _ = Decide([]Candidate{heartbeat}, nil, nil, gaps, pol)
 	if recs[0].Action != "aggregate" {
 		t.Fatalf("%+v", recs[0])
 	}
@@ -79,7 +79,7 @@ func TestGapsBlockUntilAcknowledged(t *testing.T) {
 func TestActionPreferences(t *testing.T) {
 	pol := DefaultPolicy()
 	pol.Actions = []string{"dedupe", "sample"}
-	recs, _ := Decide([]Candidate{heartbeat, cache}, nil, nil, pol)
+	recs, _ := Decide([]Candidate{heartbeat, cache}, nil, nil, nil, pol)
 	m := byTemplate(recs)
 	if r := m[heartbeat.Template]; r.Action != "dedupe" || !r.UpperBound {
 		t.Fatalf("constant template: %+v", r)
@@ -88,7 +88,7 @@ func TestActionPreferences(t *testing.T) {
 		t.Fatalf("variable template: %+v", r)
 	}
 	pol.Actions = []string{"dedupe"}
-	recs, _ = Decide([]Candidate{cache}, nil, nil, pol)
+	recs, _ = Decide([]Candidate{cache}, nil, nil, nil, pol)
 	if recs[0].Action != "none" || !strings.Contains(strings.Join(recs[0].Blockers, ";"), "no allowed action") {
 		t.Fatalf("%+v", recs[0])
 	}
@@ -100,7 +100,7 @@ func TestSeverityExemptAndSize(t *testing.T) {
 	pol := DefaultPolicy()
 	pol.Exempt = []string{heartbeat.ID(), `^DEBUG`}
 	pol.MinDailyBytes = 1
-	recs, _ := Decide([]Candidate{warn, heartbeat}, nil, nil, pol)
+	recs, _ := Decide([]Candidate{warn, heartbeat}, nil, nil, nil, pol)
 	for _, r := range recs {
 		if r.Action != "none" {
 			t.Fatalf("%+v", r)
@@ -110,7 +110,7 @@ func TestSeverityExemptAndSize(t *testing.T) {
 	small.Bytes = 10
 	pol = DefaultPolicy()
 	pol.MinDailyBytes = 1000
-	recs, _ = Decide([]Candidate{small}, nil, nil, pol)
+	recs, _ = Decide([]Candidate{small}, nil, nil, nil, pol)
 	if recs[0].Action != "none" {
 		t.Fatalf("%+v", recs[0])
 	}
@@ -119,7 +119,7 @@ func TestSeverityExemptAndSize(t *testing.T) {
 func TestBadPolicy(t *testing.T) {
 	pol := DefaultPolicy()
 	pol.Actions = []string{"shred"}
-	if _, err := Decide(nil, nil, nil, pol); err == nil {
+	if _, err := Decide(nil, nil, nil, nil, pol); err == nil {
 		t.Fatal("unknown action accepted")
 	}
 }
@@ -133,5 +133,24 @@ func TestIDStable(t *testing.T) {
 	b.Language = `\Ax\z`
 	if a.ID() == b.ID() {
 		t.Fatal("ID ignores language")
+	}
+}
+
+func TestScopedReadersBlockOnlyTheirService(t *testing.T) {
+	other := heartbeat
+	other.Service = "auth"
+	other.Scope = map[string]string{"service_name": "auth"}
+	recs, err := Decide([]Candidate{heartbeat, other}, nil, []ScopedReader{{Service: heartbeat.Service, Source: "opensearch", Origin: "audit POST /logs-*/_search", Reason: "targets logs-*"}}, nil, DefaultPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range recs {
+		blocked := r.Action == "none"
+		if blocked != (r.Candidate.Service == heartbeat.Service) {
+			t.Fatalf("%s: %+v", r.Candidate.Service, r)
+		}
+		if blocked && (len(r.Readers) != 1 || !r.Readers[0].Counting || r.Readers[0].Source != "opensearch") {
+			t.Fatalf("%+v", r.Readers)
+		}
 	}
 }

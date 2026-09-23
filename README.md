@@ -20,11 +20,15 @@ infrastructure, and shows its evidence for every decision.
    - Loki ruler alerts and recording rules
    - Grafana dashboards (both schemas), library panels, annotations, alert and recording rules,
      Explore short links, query history and correlations, across every organisation
+   - OpenSearch, when the pipeline also ships there: every search in the security audit log (proven
+     live with a marker search first), alerting monitors, and Dashboards saved searches and
+     visualizations
 4. **Proof, not guesses.** For every query it decides whether the query can select any line the rule
    would remove, and shows a sample line when it can. Anything it cannot model exactly counts as
    reading everything. An unparseable query blocks every rule.
 5. **Every destination.** It follows the pipeline from the enforcement point to every exporter. A
-   removal counts only if every destination is either the analysed Loki or explicitly exempted.
+   removal counts only if every destination is the analysed Loki, a connected OpenSearch, or
+   explicitly exempted.
 6. **The least lossy action.** A rule nobody reads gets, in order of preference: aggregate (lines
    become a counter), dedupe (identical lines collapse into one with a count), or sample. Drop only
    when your policy allows it. Error and warning lines are never touched.
@@ -66,7 +70,7 @@ See [docs/configuration.md](docs/configuration.md) for every setting and
 go build ./cmd/sievelog
 ./scripts/check.sh            # formatting, vet, unit tests
 ./scripts/check-runtimes.sh   # dialect and runtime tests against real Vector and Fluent Bit (docker)
-./e2e/run.sh                  # full loop on kind: Loki, Grafana, the Collector, the Helm chart
+./e2e/run.sh                  # full loop on kind: Loki, Grafana, OpenSearch, the Collector, the Helm chart
 ```
 
 ## License
