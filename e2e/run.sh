@@ -65,6 +65,11 @@ ${K} apply -f "${ROOT}/e2e/k8s/loki.yaml" >/dev/null
 ${K} rollout restart deployment/loki -n sievelog-system >/dev/null
 ${K} rollout status deployment/loki -n sievelog-system --timeout=180s >/dev/null
 
+log "deploying grafana"
+${K} apply -f "${ROOT}/e2e/k8s/grafana.yaml" >/dev/null
+${K} rollout restart deployment/grafana -n sievelog-system >/dev/null
+${K} rollout status deployment/grafana -n sievelog-system --timeout=240s >/dev/null
+
 log "deploying collector"
 ( cd "${ROOT}" && go run ./e2e/render "${RUN_NS}" ) > "${WORK}/config.yaml"
 docker run --rm -v "${WORK}:/cfg" "${COLLECTOR_IMAGE}" validate --config=/cfg/config.yaml
@@ -128,9 +133,12 @@ fi
 log "port-forwarding loki"
 ${K} -n sievelog-system port-forward svc/loki 13100:3100 >/dev/null 2>&1 &
 PF=$!
-trap 'kill ${PF} 2>/dev/null || true' EXIT
+${K} -n sievelog-system port-forward svc/grafana 13000:3000 >/dev/null 2>&1 &
+PF2=$!
+trap 'kill ${PF} ${PF2} 2>/dev/null || true' EXIT
 for _ in $(seq 1 30); do curl -sf localhost:13100/ready >/dev/null && break; sleep 1; done
+for _ in $(seq 1 30); do curl -sf localhost:13000/api/health >/dev/null && break; sleep 1; done
 
 log "running assertions"
-( cd "${ROOT}" && E2E_OUT="${WORK}/out" E2E_SEED="${SEED}" E2E_COUNT="${COUNT}" LOKI_URL="http://localhost:13100" \
+( cd "${ROOT}" && E2E_OUT="${WORK}/out" E2E_SEED="${SEED}" E2E_COUNT="${COUNT}" LOKI_URL="http://localhost:13100" GRAFANA_URL="http://localhost:13000" \
   go test -tags e2e ./e2e/ -count=1 -v -timeout 30m ${E2E_RUN:+-run "${E2E_RUN}"} )

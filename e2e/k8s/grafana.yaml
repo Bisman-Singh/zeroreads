@@ -1,0 +1,172 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  namespace: sievelog-system
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Loki
+        uid: loki
+        type: loki
+        access: proxy
+        url: http://loki.sievelog-system.svc:3100
+        isDefault: true
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: sievelog
+        folder: E2E
+        type: file
+        options:
+          path: /var/lib/grafana/dashboards
+  alerting.yaml: |
+    apiVersion: 1
+    groups:
+      - orgId: 1
+        name: auth-alerts
+        folder: E2E
+        interval: 1m
+        rules:
+          - uid: mfa-failures
+            title: MFA failures
+            condition: C
+            data:
+              - refId: A
+                datasourceUid: loki
+                relativeTimeRange: {from: 600, to: 0}
+                model:
+                  refId: A
+                  expr: sum(count_over_time({service_name="auth"} |= "failed MFA" [5m]))
+                  queryType: range
+              - refId: C
+                datasourceUid: __expr__
+                model:
+                  refId: C
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator: {type: gt, params: [10]}
+            for: 1m
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: sievelog-system
+data:
+  checkout.json: |
+    {
+      "uid": "checkout-e2e",
+      "title": "Checkout E2E",
+      "schemaVersion": 41,
+      "annotations": {
+        "list": [
+          {"name": "Deploys", "enable": false, "datasource": {"type": "loki", "uid": "loki"},
+           "expr": "{service_name=\"orders\"} |= \"created\""}
+        ]
+      },
+      "templating": {
+        "list": [
+          {"name": "svc", "type": "custom", "query": "checkout,auth", "current": {"text": "checkout", "value": "checkout"}},
+          {"name": "search", "type": "textbox", "query": ""}
+        ]
+      },
+      "panels": [
+        {
+          "id": 1, "type": "logs", "title": "Health checks",
+          "datasource": {"type": "loki", "uid": "loki"},
+          "targets": [{"refId": "A", "expr": "{service_name=\"checkout\"} |= \"healthz\""}]
+        },
+        {
+          "id": 2, "type": "timeseries", "title": "Declines by variable",
+          "datasource": {"type": "loki", "uid": "loki"},
+          "targets": [{"refId": "A", "expr": "sum(count_over_time({service_name=\"$svc\"} |= \"$search\" [$__auto]))"}]
+        },
+        {
+          "id": 3, "type": "row", "title": "Collapsed", "collapsed": true,
+          "panels": [
+            {
+              "id": 4, "type": "logs", "title": "Retries (nested in collapsed row)",
+              "datasource": {"type": "loki", "uid": "loki"},
+              "targets": [{"refId": "A", "expr": "{service_name=\"checkout\"} |= \"retrying\""}]
+            }
+          ]
+        },
+        {
+          "id": 5, "type": "timeseries", "title": "Mixed",
+          "datasource": {"type": "datasource", "uid": "-- Mixed --"},
+          "targets": [
+            {"refId": "A", "datasource": {"type": "loki", "uid": "loki"}, "expr": "sum(rate({service_name=\"orders\"}[1m]))"},
+            {"refId": "B", "datasource": {"type": "prometheus", "uid": "prom"}, "expr": "up"}
+          ]
+        },
+        {
+          "id": 6, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+          "libraryPanel": {"uid": "lib-login", "name": "Logins (library)"}
+        },
+        {
+          "id": 7, "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20},
+          "libraryPanel": {"uid": "lib-missing", "name": "Deleted library panel"}
+        },
+        {
+          "id": 8, "type": "logs", "title": "Hidden target and default datasource",
+          "targets": [
+            {"refId": "A", "hide": true, "expr": "{service_name=\"auth\"} |= \"config placeholder\""},
+            {"refId": "B", "datasource": {"type": "datasource", "uid": "-- Dashboard --"}, "panelId": 1}
+          ]
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: sievelog-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: grafana}
+  template:
+    metadata:
+      labels: {app: grafana}
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:13.2.2
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: GF_SECURITY_ADMIN_USER, value: admin}
+            - {name: GF_SECURITY_ADMIN_PASSWORD, value: e2e-only-password}
+            - {name: GF_ANALYTICS_REPORTING_ENABLED, value: "false"}
+            - {name: GF_ANALYTICS_CHECK_FOR_UPDATES, value: "false"}
+            - {name: GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES, value: "false"}
+            - {name: GF_PLUGINS_PREINSTALL_DISABLED, value: "true"}
+          ports:
+            - containerPort: 3000
+          readinessProbe:
+            httpGet: {path: /api/health, port: 3000}
+            periodSeconds: 3
+          volumeMounts:
+            - {name: prov, mountPath: /etc/grafana/provisioning/datasources/ds.yaml, subPath: datasources.yaml}
+            - {name: prov, mountPath: /etc/grafana/provisioning/dashboards/db.yaml, subPath: dashboards.yaml}
+            - {name: prov, mountPath: /etc/grafana/provisioning/alerting/alerts.yaml, subPath: alerting.yaml}
+            - {name: dash, mountPath: /var/lib/grafana/dashboards}
+      volumes:
+        - name: prov
+          configMap: {name: grafana-provisioning}
+        - name: dash
+          configMap: {name: grafana-dashboards}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: sievelog-system
+spec:
+  selector: {app: grafana}
+  ports:
+    - port: 3000
+      targetPort: 3000
