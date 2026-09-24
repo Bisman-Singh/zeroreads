@@ -51,6 +51,7 @@ type record struct {
 	text    string // plain body, or the msg field of a map body
 	mapBody bool
 	ts      int64
+	extra   map[string]any // extra record fields for runtime tests; "body." keys go inside a map body
 }
 
 // testRules covers every action. Languages are shaped like inferred ones.
@@ -74,25 +75,25 @@ func genRecords(n int) []record {
 		ts += int64(1 + r.IntN(1000000))
 		switch r.IntN(10) {
 		case 0:
-			out = append(out, record{"checkout", "INFO GET /healthz 200 " + strconv.Itoa(1+r.IntN(900)) + "ms", false, ts})
+			out = append(out, record{"checkout", "INFO GET /healthz 200 " + strconv.Itoa(1+r.IntN(900)) + "ms", false, ts, nil})
 		case 1:
-			out = append(out, record{"checkout", "DEBUG cache " + []string{"hit", "miss"}[r.IntN(2)] + " key " + hex8(r), false, ts})
+			out = append(out, record{"checkout", "DEBUG cache " + []string{"hit", "miss"}[r.IntN(2)] + " key " + hex8(r), false, ts, nil})
 		case 2:
-			out = append(out, record{"checkout", "INFO request " + hex8(r) + hex8(r) + " status 200 took 5ms", false, ts})
+			out = append(out, record{"checkout", "INFO request " + hex8(r) + hex8(r) + " status 200 took 5ms", false, ts, nil})
 		case 3:
-			out = append(out, record{"checkout", "INFO heartbeat ok", false, ts})
+			out = append(out, record{"checkout", "INFO heartbeat ok", false, ts, nil})
 		case 4:
-			out = append(out, record{"orders", "handled route in " + strconv.Itoa(1+r.IntN(900)) + "ms", true, ts})
+			out = append(out, record{"orders", "handled route in " + strconv.Itoa(1+r.IntN(900)) + "ms", true, ts, nil})
 		case 5:
-			out = append(out, record{"orders", "handled route in 5ms", false, ts}) // plain body: the field rule must not apply
+			out = append(out, record{"orders", "handled route in 5ms", false, ts, nil}) // plain body: the field rule must not apply
 		case 6:
-			out = append(out, record{"auth", `says "hi" \ bye`, false, ts})
+			out = append(out, record{"auth", `says "hi" \ bye`, false, ts, nil})
 		case 7:
-			out = append(out, record{"auth", "INFO GET /healthz 200 5ms", false, ts}) // right text, wrong service
+			out = append(out, record{"auth", "INFO GET /healthz 200 5ms", false, ts, nil}) // right text, wrong service
 		case 8:
-			out = append(out, record{"checkout", "INFO GET /healthz 200 5000ms", false, ts}) // outside the language
+			out = append(out, record{"checkout", "INFO GET /healthz 200 5000ms", false, ts, nil}) // outside the language
 		default:
-			out = append(out, record{"checkout", "ERROR payment pay_123456 declined", false, ts})
+			out = append(out, record{"checkout", "ERROR payment pay_123456 declined", false, ts, nil})
 		}
 	}
 	return out
@@ -375,9 +376,14 @@ func TestShadowAddsNoEnforcement(t *testing.T) {
 	if got, _ := json.Marshal(logs["processors"]); string(got) != `["transform/prep"]` {
 		t.Fatalf("head processors %s", got)
 	}
+	// The user's later processors run before measurement, so shadow counts what enforce would see.
 	out := pipes["logs/sievelog"].(map[string]any)
-	if got, _ := json.Marshal(out); !strings.Contains(string(got), `"processors":["batch"]`) || !strings.Contains(string(got), `"exporters":["debug"]`) {
-		t.Fatalf("out pipeline %s", got)
+	if got, _ := json.Marshal(out); string(got) != `{"exporters":["forward/sievelog_enforce","signal_to_metrics/sievelog"],"processors":["batch"],"receivers":["forward/sievelog"]}` {
+		t.Fatalf("measurement pipeline %s", got)
+	}
+	enf := pipes["logs/sievelog_enforce"].(map[string]any)
+	if got, _ := json.Marshal(enf); string(got) != `{"exporters":["debug"],"processors":[],"receivers":["forward/sievelog_enforce"]}` {
+		t.Fatalf("shadow enforcement pipeline must be empty: %s", got)
 	}
 }
 
@@ -427,8 +433,8 @@ func TestRollupCountsExactly(t *testing.T) {
 	if err := yaml.Unmarshal(out, &m); err != nil {
 		t.Fatal(err)
 	}
-	procs := m["service"].(map[string]any)["pipelines"].(map[string]any)["logs/sievelog"].(map[string]any)["processors"].([]any)
-	if strings.Join(toStrings(procs), ",") != "batch,transform/sievelog_rollup,logdedup/sievelog,filter/sievelog" {
+	procs := m["service"].(map[string]any)["pipelines"].(map[string]any)["logs/sievelog_enforce"].(map[string]any)["processors"].([]any)
+	if strings.Join(toStrings(procs), ",") != "transform/sievelog_rollup,logdedup/sievelog,filter/sievelog" {
 		t.Fatalf("processor order %v", procs)
 	}
 	df := logdedupprocessor.NewFactory()
@@ -525,4 +531,195 @@ func toStrings(v []any) []string {
 		out = append(out, x.(string))
 	}
 	return out
+}
+
+// The runtime severity guard, with the real filter processor and signal_to_metrics connector: a
+// record in a drop rule's language is kept, and not counted, when any level says warning or worse.
+func TestSeverityGuard(t *testing.T) {
+	rules := []Rule{
+		{ID: "r-plain", ScopeAttr: "service.name", ScopeValue: "checkout", Language: `\AINFO heartbeat ok\z`, Action: "drop"},
+		{ID: "r-field", ScopeAttr: "service.name", ScopeValue: "orders", Language: `\Ahandled route in 5ms\z`, Field: "msg", Action: "drop"},
+	}
+	out, err := Collector([][]byte{[]byte(userConfig)}, Target{Pipeline: "logs", After: "transform/prep",
+		MeasureExporters: []string{"file/metrics"}}, rules, Enforce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	yaml.Unmarshal(out, &m)
+	type rec struct {
+		name    string
+		svc     string
+		setup   func(lr plog.LogRecord)
+		removed bool
+	}
+	plain := func(f func(lr plog.LogRecord)) func(lr plog.LogRecord) {
+		return func(lr plog.LogRecord) { lr.Body().SetStr("INFO heartbeat ok"); f(lr) }
+	}
+	field := func(f func(bm pcommon.Map)) func(lr plog.LogRecord) {
+		return func(lr plog.LogRecord) {
+			bm := lr.Body().SetEmptyMap()
+			bm.PutStr("msg", "handled route in 5ms")
+			f(bm)
+		}
+	}
+	cases := []rec{
+		{"no level", "checkout", plain(func(plog.LogRecord) {}), true},
+		{"info number", "checkout", plain(func(lr plog.LogRecord) { lr.SetSeverityNumber(plog.SeverityNumberInfo) }), true},
+		{"warn number", "checkout", plain(func(lr plog.LogRecord) { lr.SetSeverityNumber(plog.SeverityNumberWarn) }), false},
+		{"fatal number", "checkout", plain(func(lr plog.LogRecord) { lr.SetSeverityNumber(plog.SeverityNumberFatal4) }), false},
+		{"error text", "checkout", plain(func(lr plog.LogRecord) { lr.SetSeverityText("Error") }), false},
+		{"info text", "checkout", plain(func(lr plog.LogRecord) { lr.SetSeverityText("INFO") }), true},
+		{"level attribute", "checkout", plain(func(lr plog.LogRecord) { lr.Attributes().PutStr("level", "WARNING") }), false},
+		{"severity attribute", "checkout", plain(func(lr plog.LogRecord) { lr.Attributes().PutStr("severity", " critical") }), false},
+		{"debug attribute", "checkout", plain(func(lr plog.LogRecord) { lr.Attributes().PutStr("level", "debug") }), true},
+		{"numeric attribute", "checkout", plain(func(lr plog.LogRecord) { lr.Attributes().PutInt("level", 50) }), true},
+		{"body level", "orders", field(func(bm pcommon.Map) { bm.PutStr("level", "error") }), false},
+		{"body info", "orders", field(func(bm pcommon.Map) { bm.PutStr("level", "info") }), true},
+		{"body without level", "orders", field(func(pcommon.Map) {}), true},
+	}
+	ld := plog.NewLogs()
+	for i, c := range cases {
+		rl := ld.ResourceLogs().AppendEmpty()
+		rl.Resource().Attributes().PutStr("service.name", c.svc)
+		lr := rl.ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+		lr.Attributes().PutInt("case", int64(i))
+		c.setup(lr)
+	}
+	f := filterprocessor.NewFactory()
+	cfg := f.CreateDefaultConfig()
+	componentConfig(t, m, "processors", "filter/sievelog", cfg)
+	sink := new(consumertest.LogsSink)
+	proc, err := f.CreateLogs(context.Background(), processortest.NewNopSettings(f.Type()), cfg, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proc.Start(context.Background(), componenttest.NewNopHost())
+	defer proc.Shutdown(context.Background())
+	in := plog.NewLogs()
+	ld.CopyTo(in)
+	if err := proc.ConsumeLogs(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	kept := map[int64]bool{}
+	for _, out := range sink.AllLogs() {
+		for i := 0; i < out.ResourceLogs().Len(); i++ {
+			lrs := out.ResourceLogs().At(i).ScopeLogs().At(0).LogRecords()
+			for j := 0; j < lrs.Len(); j++ {
+				v, _ := lrs.At(j).Attributes().Get("case")
+				kept[v.Int()] = true
+			}
+		}
+	}
+	measured := measureRules(t, m, ld)
+	for i, c := range cases {
+		if kept[int64(i)] == c.removed {
+			t.Fatalf("%s: kept=%v, want removed=%v", c.name, kept[int64(i)], c.removed)
+		}
+	}
+	var wantPlain, wantField int
+	for _, c := range cases {
+		if c.removed && c.svc == "checkout" {
+			wantPlain++
+		}
+		if c.removed && c.svc == "orders" {
+			wantField++
+		}
+	}
+	if measured["r-plain"] != wantPlain || measured["r-field"] != wantField {
+		t.Fatalf("measured %v, want r-plain %d, r-field %d: shadow numbers must match what enforcement removes", measured, wantPlain, wantField)
+	}
+}
+
+// measureRules runs the emitted signal_to_metrics connector and returns lines counted per rule.
+func measureRules(t *testing.T, m map[string]any, ld plog.Logs) map[string]int {
+	t.Helper()
+	f := signaltometricsconnector.NewFactory()
+	cfg := f.CreateDefaultConfig()
+	componentConfig(t, m, "connectors", "signal_to_metrics/sievelog", cfg)
+	sink := new(consumertest.MetricsSink)
+	conn, err := f.CreateLogsToMetrics(context.Background(), connectortest.NewNopSettings(f.Type()), cfg, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Start(context.Background(), componenttest.NewNopHost())
+	defer conn.Shutdown(context.Background())
+	in := plog.NewLogs()
+	ld.CopyTo(in)
+	if err := conn.ConsumeLogs(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]int{}
+	for _, md := range sink.AllMetrics() {
+		rms := md.ResourceMetrics()
+		for i := 0; i < rms.Len(); i++ {
+			sms := rms.At(i).ScopeMetrics()
+			for j := 0; j < sms.Len(); j++ {
+				ms := sms.At(j).Metrics()
+				for k := 0; k < ms.Len(); k++ {
+					mt := ms.At(k)
+					if !strings.HasPrefix(mt.Name(), "sievelog.rule.lines.") {
+						continue
+					}
+					dps := mt.Sum().DataPoints()
+					for d := 0; d < dps.Len(); d++ {
+						out[strings.TrimPrefix(mt.Name(), "sievelog.rule.lines.")] += int(dps.At(d).IntValue() + int64(dps.At(d).DoubleValue()))
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// A record without a timestamp is sampled by its observed time, exactly and independently.
+func TestSampleUntimedRecords(t *testing.T) {
+	rules := []Rule{{ID: "r-s", ScopeAttr: "service.name", ScopeValue: "checkout", Language: `\AINFO heartbeat ok\z`, Action: "sample", Keep: 30}}
+	out, err := Collector([][]byte{[]byte(userConfig)}, Target{Pipeline: "logs", After: "transform/prep", MeasureExporters: []string{"file/metrics"}}, rules, Enforce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	yaml.Unmarshal(out, &m)
+	f := filterprocessor.NewFactory()
+	cfg := f.CreateDefaultConfig()
+	componentConfig(t, m, "processors", "filter/sievelog", cfg)
+	sink := new(consumertest.LogsSink)
+	proc, err := f.CreateLogs(context.Background(), processortest.NewNopSettings(f.Type()), cfg, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proc.Start(context.Background(), componenttest.NewNopHost())
+	defer proc.Shutdown(context.Background())
+	ld := plog.NewLogs()
+	lrs := ld.ResourceLogs().AppendEmpty()
+	lrs.Resource().Attributes().PutStr("service.name", "checkout")
+	recs := lrs.ScopeLogs().AppendEmpty().LogRecords()
+	const n = 4000
+	for i := 0; i < n; i++ {
+		lr := recs.AppendEmpty()
+		lr.Body().SetStr("INFO heartbeat ok")
+		lr.SetObservedTimestamp(pcommon.Timestamp(1790000000000000000 + int64(i)*997))
+		lr.Attributes().PutInt("i", int64(i))
+	}
+	if err := proc.ConsumeLogs(context.Background(), ld); err != nil {
+		t.Fatal(err)
+	}
+	kept := map[int64]bool{}
+	for _, out := range sink.AllLogs() {
+		l := out.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
+		for j := 0; j < l.Len(); j++ {
+			v, _ := l.At(j).Attributes().Get("i")
+			kept[v.Int()] = true
+		}
+	}
+	for i := 0; i < n; i++ {
+		want := sampleDigest("INFO heartbeat ok", 1790000000000000000+int64(i)*997) < SampleThreshold(30)
+		if kept[int64(i)] != want {
+			t.Fatalf("record %d: kept=%v want %v", i, kept[int64(i)], want)
+		}
+	}
+	if frac := float64(len(kept)) / n; frac < 0.25 || frac > 0.35 {
+		t.Fatalf("untimed records kept %.3f, want about 0.30", frac)
+	}
 }

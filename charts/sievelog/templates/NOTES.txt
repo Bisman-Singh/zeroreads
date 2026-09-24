@@ -1,6 +1,6 @@
 sievelog re-checks the enforced rules on schedule {{ .Values.schedule | quote }}.
 
-A failed Job means an enforced rule is no longer safe. Its logs list every reason and the rules that
-remain safe. Run it now with:
+A failed Job means an enforced rule is no longer safe. Its logs list every reason and print the rules
+that remain safe as JSON: emit and deploy those to revert. Run it now with:
 
   kubectl create job --from=cronjob/{{ include "sievelog.fullname" . }}-verify {{ include "sievelog.fullname" . }}-verify-now -n {{ .Release.Namespace }}

@@ -116,7 +116,9 @@ func Query(expr string, rules []Rule, streamLabels map[string]bool) (Result, err
 		for _, i := range covered {
 			excl += " !~ " + quote(rules[i].Language)
 		}
-		terms := []string{fmt.Sprintf("sum%s(%s(%s%s%s %s))", group, ra.Func, ra.Selector, filters, excl, win)}
+		// The original filters, minus the rule's lines and minus every rollup record: a record's marker
+		// text could pass the filters (!= "/healthz" does) and would be counted twice.
+		terms := []string{fmt.Sprintf("sum%s(%s(%s%s%s | %s=\"\" %s))", group, ra.Func, ra.Selector, filters, excl, RuleLabel, win)}
 		for _, i := range covered {
 			r := rules[i]
 			y := fmt.Sprintf("sum%s(sum_over_time(%s |= %s | %s=%s | unwrap %s %s))", group, ra.Selector, quote(Marker(r.ID)), RuleLabel, strconv.Quote(r.ID), CountLabel, win)
@@ -173,6 +175,23 @@ func seconds(r string) (float64, bool) {
 		total += n * unit[m[2]]
 	}
 	return total, total > 0
+}
+
+// MarkerLanguage is the anchored language of a rule's rollup record text.
+func MarkerLanguage(id string) string { return `\A` + regexp.QuoteMeta(Marker(id)) + `\z` }
+
+// ReadsRollups reports whether sel can select rule id's rollup records other than as a sievelog
+// rollup term: such a query's numbers or lines change once the rule rolls up.
+func ReadsRollups(sel logql.Selection, id string, scope map[string]string) bool {
+	if sel.NoRollups {
+		return false
+	}
+	for _, st := range sel.Stages {
+		if !st.Negative && len(st.Alternatives) == 1 && st.Alternatives[0].Kind == "contains" && st.Alternatives[0].Value == Marker(id) {
+			return false // the rollup term itself
+		}
+	}
+	return usage.Evaluate(sel, usage.Rule{ID: id, Scope: scope, Language: automaton.MustCompile(MarkerLanguage(id))}).Used
 }
 
 // Compensated reports whether sel is a sievelog raw-line term (Z) for rule id inside a rewritten

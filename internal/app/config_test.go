@@ -36,6 +36,14 @@ func TestConfigValidation(t *testing.T) {
 		{"opensearch no indices", "loki: {url: http://l}\nevidence: {opensearch: [{name: os, url: https://o}]}\ncollector: {config_files: [c.yaml], pipeline: logs}\n", "indices is required"},
 		{"opensearch duplicate", "loki: {url: http://l}\nevidence: {opensearch: [{name: os, url: https://o, indices: [a]}, {name: os, url: https://p, indices: [a]}]}\ncollector: {config_files: [c.yaml], pipeline: logs}\n", "duplicate"},
 		{"opensearch vector sink", "loki: {url: http://l}\nruntime: vector\nevidence: {opensearch: [{name: os, url: https://o, indices: [a]}]}\nvector: {config_files: [v.yaml], after: prep, scope_path: .service, text_path: .message, measure_sink: {type: blackhole}, sinks: {s: {opensearch: nope}}}\n", "not in evidence.opensearch"},
+		{"grafana without datasources", "loki: {url: http://l}\nevidence: {grafana: [{url: http://g}]}\ncollector: {config_files: [c.yaml], pipeline: logs}\n", "datasources"},
+		{"rollup gated", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\npolicy: {actions: [rollup]}\n", "experimental"},
+		{"rollup enabled", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\npolicy: {actions: [rollup], experimental_rollup: true}\n", ""},
+		{"negative slices", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\ndiscovery: {slices: -1}\n", "discovery.slices"},
+		{"negative samples", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\ndiscovery: {min_samples: -5}\n", "discovery.min_samples"},
+		{"negative window", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\ndiscovery: {window: -1h}\n", "discovery.window"},
+		{"bad dedupe interval", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs, dedupe_interval: soon}\n", "dedupe_interval"},
+		{"negative min bytes", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\npolicy: {min_daily_bytes: -1}\n", "min_daily_bytes"},
 		{"days duration", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\nevidence: {window: 30d}\n", ""},
 	}
 	for _, c := range cases {

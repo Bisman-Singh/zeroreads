@@ -228,3 +228,58 @@ func TestCompensatedQueryOnlyAllowsRollup(t *testing.T) {
 		t.Fatalf("rollup keeps it, with nothing to rewrite: %+v", recs[0])
 	}
 }
+
+// An OpenSearch reader cannot be rewritten: with one present a rule never rolls up, even when every
+// Loki reader could be rewritten. Found by an external review.
+func TestScopedReaderBlocksRollup(t *testing.T) {
+	c := cache
+	c.StreamLabels = map[string]bool{"service_name": true}
+	pol := DefaultPolicy()
+	pol.Actions = []string{"rollup"}
+	stored := UsageQuery{Source: "grafana", Origin: "g", Store: "grafana", StoreURL: "http://g", Org: 1, Path: "alertrule:a/0",
+		Expr: `sum(count_over_time({service_name="checkout"} [5m]))`}
+	os := []ScopedReader{{Service: "checkout", Source: "opensearch", Origin: "audit POST /logs/_search", Reason: "targets logs"}}
+	for _, qs := range [][]UsageQuery{nil, {stored}} {
+		recs, err := Decide([]Candidate{c}, qs, os, nil, pol)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if recs[0].Action != "none" {
+			t.Fatalf("with an OpenSearch reader and %d rewritable readers: %+v", len(qs), recs[0])
+		}
+	}
+}
+
+// A query that does not read a rule's lines but would select its rollup records rules the rollup
+// out, and only the rollup: the next allowed action still applies.
+func TestQuerySeeingRollupRecordsBlocksOnlyRollup(t *testing.T) {
+	c := cache
+	c.StreamLabels = map[string]bool{"service_name": true}
+	pol := DefaultPolicy()
+	pol.Actions = []string{"rollup", "sample"}
+	q := UsageQuery{Source: "grafana", Origin: "p", Store: "grafana", Path: "dashboard:d/panel:1/A",
+		Expr: `sum(count_over_time({service_name="checkout"} !~ "DEBUG" [5m]))`}
+	recs, err := Decide([]Candidate{c}, []UsageQuery{q}, nil, nil, pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recs[0].Action != "sample" {
+		t.Fatalf("%+v", recs[0])
+	}
+	pol.Actions = []string{"rollup"}
+	recs, _ = Decide([]Candidate{c}, []UsageQuery{q}, nil, nil, pol)
+	if recs[0].Action != "none" || !strings.Contains(strings.Join(recs[0].Blockers, ";"), "rollup records") {
+		t.Fatalf("%+v", recs[0])
+	}
+}
+
+func TestSampledSeveritiesUseTheGuardPattern(t *testing.T) {
+	for sev, blocked := range map[string]bool{"WARNING": true, " Error": true, "crit": true, "fatal": true, "info": false, "debug": false, "notice": false} {
+		c := heartbeat
+		c.Severities = []string{sev}
+		recs, _ := Decide([]Candidate{c}, nil, nil, nil, DefaultPolicy())
+		if (recs[0].Action == "none") != blocked {
+			t.Fatalf("severity %q: %+v", sev, recs[0])
+		}
+	}
+}

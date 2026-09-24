@@ -137,3 +137,27 @@ func TestLexNumbers(t *testing.T) {
 		}
 	}
 }
+
+func TestCanonical(t *testing.T) {
+	same := [][2]string{
+		{`sum(count_over_time({a="b"} |= "x" [5m])) > 100`, `(sum(count_over_time({a="b"} |= "x"[5m])) > 100)`}, // ruler form
+		{`sum(count_over_time({a="b"} |= "x" [1h]))`, `sum(count_over_time({a="b"} |= "x"[1h] offset 2h0m0s))`}, // a time split
+		{"{a=`b`} |~ `x.y`", `{a="b"} |~ "x.y"`},
+		{`{a="b"}`, `  { a = "b" }  `},
+	}
+	for _, p := range same {
+		if Canonical(p[0]) != Canonical(p[1]) {
+			t.Fatalf("%q and %q should be one query: %q vs %q", p[0], p[1], Canonical(p[0]), Canonical(p[1]))
+		}
+	}
+	different := [][2]string{
+		{`sum(count_over_time({a="b"}[5m]))`, `sum(count_over_time({a="b"}[1h]))`},
+		{`{a="b"} |= "x"`, `{a="b"} |= "X"`},
+		{`{a="b"} |= "offset"`, `{a="b"}`},
+	}
+	for _, p := range different {
+		if Canonical(p[0]) == Canonical(p[1]) {
+			t.Fatalf("%q and %q must stay different", p[0], p[1])
+		}
+	}
+}

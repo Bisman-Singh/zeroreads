@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Bisman-Singh/sievelog/internal/automaton"
+	"github.com/Bisman-Singh/sievelog/internal/emit"
 	"github.com/Bisman-Singh/sievelog/internal/logql"
 	"github.com/Bisman-Singh/sievelog/internal/rewrite"
 	"github.com/Bisman-Singh/sievelog/internal/usage"
@@ -93,6 +94,9 @@ type Policy struct {
 	// MinDailyBytes skips rules too small to matter.
 	MinDailyBytes float64
 }
+
+// severe is the runtime guard's notion of warning or above, so analysis and enforcement agree.
+var severe = regexp.MustCompile(emit.SeverePattern)
 
 // DefaultErrorPattern flags any language that can contain an error-like word.
 const DefaultErrorPattern = `(?i)(?:\b|_)(?:err|error|errors|warn|warning|fatal|crit|critical|panic|exception|fail|failed|failure|denied|refused|timeout|timed out|unavailable|declined|emerg|alert)(?:\b|_)`
@@ -232,7 +236,7 @@ func Decide(cands []Candidate, queries []UsageQuery, scoped []ScopedReader, gaps
 			// An executed query (query log) is covered when it is exactly a stored query being rewritten.
 			if rd.Source == "loki-querylog" {
 				for _, o := range rec.Readers {
-					if o.Rewrite != nil && o.Expr == rd.Expr {
+					if o.Rewrite != nil && logql.Canonical(o.Expr) == logql.Canonical(rd.Expr) {
 						cp := *o.Rewrite
 						cp.Source, cp.Origin, cp.Store, cp.Path = rd.Source, rd.Origin, "", ""
 						rec.Readers[i].Rewrite = &cp
@@ -245,9 +249,35 @@ func Decide(cands []Candidate, queries []UsageQuery, scoped []ScopedReader, gaps
 			}
 			rollupOK = false
 		}
+		// Rollup records are new lines in the rule's streams: any other query that can select them
+		// would count or show them, so it rules a rollup out (and nothing else).
+		var rollupBlockedBy []string
+		replaced := map[string]bool{}
+		for _, rd := range rec.Readers {
+			if rd.Rewrite != nil || rd.Compensated {
+				replaced[logql.Canonical(rd.Expr)] = true
+			}
+		}
+		if rollup && !c.Structured {
+			for _, p := range pqs {
+				if p.err != nil || replaced[logql.Canonical(p.q.Expr)] {
+					continue // already a reader of everything, or replaced by this rule's rewrite
+				}
+				for _, sel := range p.sel {
+					if rewrite.ReadsRollups(sel, rec.ID, c.Scope) {
+						rollupBlockedBy = append(rollupBlockedBy, fmt.Sprintf("%s %s would also select this rule's rollup records: %s", p.q.Source, p.q.Origin, p.q.Expr))
+						break
+					}
+				}
+			}
+		}
+		if len(rollupBlockedBy) > 0 {
+			rollupOK = false
+		}
 		for _, sr := range scoped {
 			if sr.Service == c.Service {
 				rec.Readers = append(rec.Readers, Reader{Source: sr.Source, Origin: sr.Origin, Expr: sr.Expr, Counting: true, Reason: sr.Reason})
+				rollupOK = false // only Loki queries can be rewritten for a rollup
 			}
 		}
 		// Blockers, in the order an operator should read them.
@@ -263,8 +293,7 @@ func Decide(cands []Candidate, queries []UsageQuery, scoped []ScopedReader, gaps
 			}
 		}
 		for _, s := range c.Severities {
-			switch strings.ToLower(s) {
-			case "warn", "warning", "error", "err", "fatal", "critical", "crit", "alert", "emergency", "emerg", "panic":
+			if severe.MatchString(s) {
 				rec.Blockers = append(rec.Blockers, "sampled lines carry severity "+s)
 			}
 		}
@@ -294,6 +323,9 @@ func Decide(cands []Candidate, queries []UsageQuery, scoped []ScopedReader, gaps
 				if len(rec.Readers) > 0 && a != "rollup" {
 					continue // only a rollup with its rewrites keeps readers' numbers
 				}
+				if a == "rollup" && len(rollupBlockedBy) > 0 {
+					continue
+				}
 				rec.Action = a
 				break
 			}
@@ -319,6 +351,7 @@ func Decide(cands []Candidate, queries []UsageQuery, scoped []ScopedReader, gaps
 				rec.Keep = pol.SamplePercent
 				rec.RemovedBytesPerDay = perDay * float64(100-pol.SamplePercent) / 100
 			case "none":
+				rec.Blockers = append(rec.Blockers, rollupBlockedBy...)
 				rec.Blockers = append(rec.Blockers, "no allowed action applies")
 			}
 		}
@@ -392,7 +425,7 @@ func combineRewrites(recs []Recommendation) {
 				}
 				for j := range recs[i].Rewrites {
 					rw := &recs[i].Rewrites[j]
-					if rw.Old == k.old {
+					if logql.Canonical(rw.Old) == logql.Canonical(k.old) {
 						rw.New = res.Expr // the same combined text for every rule, and for executions of it
 					}
 				}

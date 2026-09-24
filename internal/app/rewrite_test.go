@@ -226,3 +226,47 @@ func TestReportFiles(t *testing.T) {
 		t.Fatal("missing rules file accepted")
 	}
 }
+
+// A Grafana Loki datasource the config does not classify must never hide its queries.
+func TestGrafanaDatasourcesFailClosed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/orgs":
+			w.Write([]byte(`[{"id":1}]`))
+		case "/api/datasources":
+			w.Write([]byte(`[{"uid":"listed","type":"loki","url":"http://a"},{"uid":"same","type":"loki","url":"http://analysed/"},` +
+				`{"uid":"other","type":"loki","url":"http://b"},{"uid":"forgotten","type":"loki","url":"http://c"}]`))
+		case "/apis/dashboard.grafana.app/v1/namespaces/default/dashboards":
+			w.Write([]byte(`{"items":[{"metadata":{"name":"d"},"spec":{"panels":[` +
+				`{"id":1,"datasource":{"uid":"listed"},"targets":[{"refId":"A","expr":"{s=\"listed\"}"}]},` +
+				`{"id":2,"datasource":{"uid":"same"},"targets":[{"refId":"A","expr":"{s=\"same\"}"}]},` +
+				`{"id":3,"datasource":{"uid":"other"},"targets":[{"refId":"A","expr":"{s=\"other\"}"}]},` +
+				`{"id":4,"datasource":{"uid":"forgotten"},"targets":[{"refId":"A","expr":"{s=\"forgotten\"}"}]}]}}]}`))
+		default:
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+	c := &Config{Loki: LokiConfig{URL: "http://analysed"}, Evidence: EvidenceConfig{
+		Grafana: []GrafanaConfig{{URL: srv.URL, Datasources: []string{"listed"}, OtherDatasources: []string{"other"}}}}}
+	qs, _, gaps, err := c.evidence(context.Background(), time.Now(), nil, &Report{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, q := range qs {
+		got[q.Expr] = true
+	}
+	if !got[`{s="listed"}`] || !got[`{s="same"}`] || !got[`{s="forgotten"}`] || got[`{s="other"}`] {
+		t.Fatalf("queries %v", got)
+	}
+	found := false
+	for _, g := range gaps {
+		if g.Key == "grafana-datasource-unmapped" {
+			found = strings.Contains(g.Reason, "forgotten") && !strings.Contains(g.Reason, "same") && !strings.Contains(g.Reason, "listed")
+		}
+	}
+	if !found {
+		t.Fatalf("no unmapped gap naming only the forgotten datasource: %+v", gaps)
+	}
+}

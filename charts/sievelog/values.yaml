@@ -18,6 +18,9 @@ config: ""
 rules: ""
 # Extra files placed next to the config, e.g. the collector configuration: {name: content}.
 files: {}
+# The pipeline config actually deployed, verbatim. When set, verify also fails if it is not exactly
+# what emit produces for the rules (a hand edit, or rules deployed from another rules.json).
+deployed: ""
 
 # Environment for credentials referenced by *_env settings in the config.
 env: []

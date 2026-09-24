@@ -264,7 +264,7 @@ evidence:
   query_log: {enabled: true, selector: '{service_name="loki"}', prove_live: true}
   ruler: true
   grafana:
-    - {url: http://grafana.sievelog-system.svc:3000, username: admin, password_env: GRAFANA_PASSWORD, datasources: [loki]}
+    - {url: http://grafana.sievelog-system.svc:3000, username: admin, password_env: GRAFANA_PASSWORD, datasources: [loki, loki2]}
 collector:
   config_files: [/etc/sievelog/collector.yaml]
   pipeline: logs
@@ -349,7 +349,7 @@ evidence:
   query_log: {enabled: true, selector: '{service_name="loki"}', prove_live: true}
   ruler: true
   grafana:
-    - {url: %s, username: admin, password_env: E2E_GRAFANA_PASSWORD, datasources: [loki]}
+    - {url: %s, username: admin, password_env: E2E_GRAFANA_PASSWORD, datasources: [loki, loki2]}
 collector:
   config_files: [%s]
   pipeline: logs
@@ -627,7 +627,7 @@ policy:
 	t.Logf("verify caught the new reader and reverted the cache rule")
 
 	// 6b. The scheduled check fails the same way, so an operator is alerted by the failed Job.
-	if code, logs := helmVerify("fail"); code != 3 || !strings.Contains(logs, "cache miss") {
+	if code, logs := helmVerify("fail"); code != 3 || !strings.Contains(logs, "cache miss") || !strings.Contains(logs, "rules that remain safe") {
 		t.Fatalf("scheduled verify should fail with exit 3 (got %d): %s", code, logs)
 	}
 	t.Logf("the Helm-scheduled verify passed, then failed with exit 3 once the new dashboard appeared")

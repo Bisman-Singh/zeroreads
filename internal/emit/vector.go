@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"strconv"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -18,7 +19,11 @@ type VectorTarget struct {
 	ScopePath  string            // VRL path of the scope value, e.g. .service
 	TextPath   string            // VRL path of the templated text for plain logs, e.g. .message
 	FieldPaths map[string]string // service -> VRL path of the templated field for structured logs
-	GroupBy    []string          // extra reduce keys for dedupe, e.g. kubernetes.pod_name
+	// SeverityPaths are VRL paths of level fields; an event at warning or above in any of them, or
+	// with severity_number >= 13 (OTLP WARN), never matches a rule. Nil means the defaults: the
+	// DefaultSeverityKeys at the top level and beside every structured field.
+	SeverityPaths []string
+	GroupBy       []string // extra reduce keys for dedupe, e.g. kubernetes.pod_name
 	// MeasureSink is a complete sink definition (type and options) that receives the per-rule metrics.
 	MeasureSink map[string]any
 	DedupeMS    int
@@ -66,6 +71,46 @@ func checkVRLSafe(rules []Rule) error {
 		}
 	}
 	return nil
+}
+
+func (t VectorTarget) severityPaths() []string {
+	if t.SeverityPaths != nil {
+		return t.SeverityPaths
+	}
+	var out []string
+	seen := map[string]bool{}
+	add := func(parent string) {
+		for _, k := range DefaultSeverityKeys {
+			p := parent + "." + vrlField(k)
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	add("")
+	var svcs []string
+	for svc := range t.FieldPaths {
+		svcs = append(svcs, svc)
+	}
+	sort.Strings(svcs)
+	for _, svc := range svcs {
+		fp := t.FieldPaths[svc]
+		if i := strings.LastIndex(fp, "."); i > 0 {
+			add(fp[:i])
+		}
+	}
+	return out
+}
+
+// vrlField quotes a field name for a VRL path when it is not a plain identifier.
+func vrlField(k string) string {
+	for _, r := range k {
+		if !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+			return strconv.Quote(k)
+		}
+	}
+	return k
 }
 
 func (t VectorTarget) textPath(r Rule) (string, error) {
@@ -119,8 +164,18 @@ func Vector(files [][]byte, t VectorTarget, rules []Rule, mode Mode) ([]byte, er
 		return nil, fmt.Errorf("emit: sink %s already exists", vSink)
 	}
 
-	// Tag: exactly one rule per matching event (rules are disjoint), plus its byte length.
+	// Tag: exactly one rule per matching event (rules are disjoint), plus its byte length. An event
+	// whose level says warning or worse is never tagged, so it is neither measured nor removed.
+	severe, err := dialect.Rust(SeverePattern)
+	if err != nil {
+		return nil, err
+	}
 	var tag strings.Builder
+	tag.WriteString("sievelog_severe = is_integer(.severity_number) && int!(.severity_number) >= 13\n")
+	for _, p := range t.severityPaths() {
+		fmt.Fprintf(&tag, "if is_string(%s) && match(string!(%s), r'%s') { sievelog_severe = true }\n", p, p, severe)
+	}
+	tag.WriteString("if !sievelog_severe {\n")
 	first := true
 	for _, r := range rules {
 		path, err := t.textPath(r)
@@ -145,6 +200,7 @@ func Vector(files [][]byte, t VectorTarget, rules []Rule, mode Mode) ([]byte, er
 	if !first {
 		tag.WriteString("}\n")
 	}
+	tag.WriteString("}\n")
 	transforms[vTag] = map[string]any{"type": "remap", "inputs": []any{t.After}, "source": tag.String()}
 	metrics := []any{
 		map[string]any{"type": "counter", "field": "sievelog_rule", "name": "sievelog_rule_lines", "tags": map[string]any{"rule": "{{ sievelog_rule }}"}},

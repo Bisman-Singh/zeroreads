@@ -3,6 +3,7 @@ package logql
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -53,6 +54,9 @@ type Selection struct {
 	Counting bool
 	// Rewritten is true when the pipeline rewrites the line at some point.
 	Rewritten bool
+	// NoRollups is true when a stage keeps only lines without a sievelog rollup rule
+	// (| sievelog_rule=""), so the selection reads no rollup record.
+	NoRollups bool
 }
 
 // Matcher is one stream selector matcher.
@@ -755,7 +759,15 @@ func (p *parser) pipeStage(sel *Selection, inRange bool) error {
 		p.i++
 		return nil
 	}
-	return p.labelFilter()
+	start := p.i
+	if err := p.labelFilter(); err != nil {
+		return err
+	}
+	// sievelog_rule="" keeps only lines without a rollup rule: it excludes every rollup record.
+	if p.i-start == 3 && p.toks[start].text == "sievelog_rule" && p.isOp2(start+1, "=") && p.toks[start+2].kind == tString && p.toks[start+2].text == "" {
+		sel.NoRollups = true
+	}
+	return nil
 }
 
 func (p *parser) extractionList() error {
@@ -843,4 +855,64 @@ func (p *parser) labelFilterTerm() error {
 		return p.errf("expected value in label filter, got %s", v)
 	}
 	return nil
+}
+
+// Canonical renders a query so that formatting cannot tell two executions of it apart: whitespace,
+// quoting style, parentheses around the whole query and "offset <duration>" (added when a query is
+// split by time) are dropped. Queries that differ in anything else stay different.
+func Canonical(src string) string {
+	toks, err := lex(src)
+	if err != nil {
+		return src
+	}
+	toks = toks[:len(toks)-1] // EOF
+	var kept []token
+	for i := 0; i < len(toks); i++ {
+		t := toks[i]
+		if t.kind == tIdent && strings.EqualFold(t.text, "offset") && i+1 < len(toks) {
+			j := i + 1
+			if toks[j].kind == tOp && toks[j].text == "-" && j+1 < len(toks) {
+				j++
+			}
+			if toks[j].kind == tDuration {
+				i = j
+				continue
+			}
+		}
+		kept = append(kept, t)
+	}
+	// Drop parentheses that wrap the whole query.
+	for len(kept) >= 2 && kept[0].kind == tOp && kept[0].text == "(" && kept[len(kept)-1].kind == tOp && kept[len(kept)-1].text == ")" {
+		depth, whole := 0, true
+		for i, t := range kept {
+			if t.kind == tOp && t.text == "(" {
+				depth++
+			} else if t.kind == tOp && t.text == ")" {
+				depth--
+				if depth == 0 && i != len(kept)-1 {
+					whole = false
+					break
+				}
+			}
+		}
+		if !whole {
+			break
+		}
+		kept = kept[1 : len(kept)-1]
+	}
+	var b strings.Builder
+	for i, t := range kept {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		switch t.kind {
+		case tString:
+			b.WriteString(strconv.Quote(t.text))
+		case tRange:
+			b.WriteString("[" + t.text + "]")
+		default:
+			b.WriteString(t.text)
+		}
+	}
+	return b.String()
 }

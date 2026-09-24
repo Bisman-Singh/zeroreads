@@ -81,7 +81,7 @@ func lokiQuery(t *testing.T, base, q string) ([]lokiLine, int) {
 	v.Set("direction", "forward")
 	v.Set("start", strconv.FormatInt(time.Now().Add(-time.Hour).UnixNano(), 10))
 	v.Set("end", strconv.FormatInt(time.Now().Add(time.Minute).UnixNano(), 10))
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second) // the scale test leaves a million lines in this Loki
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/loki/api/v1/query_range?"+v.Encode(), nil)
 	req.Header.Set("X-Query-Tags", "Source=sievelog-e2e")
@@ -191,6 +191,7 @@ func predicted(q string, rules []usage.Rule) (map[string]bool, bool) {
 type queryGen struct {
 	r     *rand.Rand
 	lines []gen.Record
+	ns    string // restricts every selector to one namespace when set
 }
 
 func quote(s string) string { return strconv.Quote(s) }
@@ -269,15 +270,22 @@ func (g *queryGen) stage() string {
 
 func (g *queryGen) selector() string {
 	svcs := []string{"checkout", "auth", "orders"}
+	// Every selector also names this run's namespace: other tests leave far more data in the same Loki,
+	// and a wide selector would otherwise exceed Loki's response limit (413) and go unchecked. The
+	// analyzer never excludes by namespace, so the check is unchanged.
+	ns := ""
+	if g.ns != "" {
+		ns = `, k8s_namespace_name="` + g.ns + `"`
+	}
 	switch g.r.IntN(6) {
 	case 0:
-		return `{service_name=~"` + svcs[g.r.IntN(3)] + `|` + svcs[g.r.IntN(3)] + `"}`
+		return `{service_name=~"` + svcs[g.r.IntN(3)] + `|` + svcs[g.r.IntN(3)] + `"` + ns + `}`
 	case 1:
-		return `{service_name!="` + svcs[g.r.IntN(3)] + `", k8s_container_name=~".+"}`
+		return `{service_name!="` + svcs[g.r.IntN(3)] + `", k8s_container_name=~".+"` + ns + `}`
 	case 2:
-		return `{k8s_container_name="` + svcs[g.r.IntN(3)] + `"}`
+		return `{k8s_container_name="` + svcs[g.r.IntN(3)] + `"` + ns + `}`
 	}
-	return `{service_name="` + svcs[g.r.IntN(3)] + `"}`
+	return `{service_name="` + svcs[g.r.IntN(3)] + `"` + ns + `}`
 }
 
 func (g *queryGen) query() string {
@@ -313,7 +321,7 @@ func TestUsageSoundAgainstLoki(t *testing.T) {
 		time.Sleep(2 * time.Second)
 	}
 
-	g := &queryGen{r: rand.New(rand.NewPCG(99, 7)), lines: recs}
+	g := &queryGen{r: rand.New(rand.NewPCG(99, 7)), lines: recs, ns: env(t, "E2E_NS")}
 	n := 800
 	if s := strings.TrimSpace(getenvDefault("E2E_QUERIES", "")); s != "" {
 		n, _ = strconv.Atoi(s)
@@ -352,6 +360,9 @@ func TestUsageSoundAgainstLoki(t *testing.T) {
 	}
 	t.Logf("queries=%d sound=%d loki_rejected=%d parse_fallback=%d with_rule_lines=%d proven_unused_pairs=%d",
 		n, sound, lokiRejected, parseFallback, readSomething, preciseNotUsed)
+	if lokiRejected > n/50 {
+		t.Fatalf("Loki rejected %d of %d queries: too many went unchecked", lokiRejected, n)
+	}
 	if readSomething < n/4 {
 		t.Fatalf("generator too weak: only %d queries returned rule lines", readSomething)
 	}

@@ -85,3 +85,37 @@ func TestSeconds(t *testing.T) {
 		t.Fatal("variable parsed")
 	}
 }
+
+// Rollup records must never be counted as ordinary lines: the rewritten query excludes them from
+// its first term, and a query that could select them is detected. Found by an external review.
+func TestRollupRecordsNotCountedTwice(t *testing.T) {
+	res, err := Query(`sum(count_over_time({service_name="checkout"} != "/healthz" [5m]))`, []Rule{cache}, streams)
+	if err != nil || !res.Changed {
+		t.Fatalf("%v %+v", err, res)
+	}
+	q, err := logql.Parse(res.Expr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sel := range q.Selections {
+		if ReadsRollups(sel, cache.ID, cache.Scope) {
+			t.Fatalf("a term of the rewritten query counts rollup records: %+v\n%s", sel, res.Expr)
+		}
+	}
+	for q, reads := range map[string]bool{
+		`sum(count_over_time({service_name="checkout"} != "/healthz" [5m]))`: true,
+		`sum(count_over_time({service_name="checkout"} !~ "DEBUG" [5m]))`:    true,
+		`{service_name="checkout"} | sievelog_rule=""`:                       false,
+		`sum(count_over_time({service_name="checkout"} |= "healthz" [5m]))`:  false,
+		`{service_name="auth"}`: false,
+	} {
+		pq, _ := logql.Parse(q)
+		got := false
+		for _, sel := range pq.Selections {
+			got = got || ReadsRollups(sel, cache.ID, cache.Scope)
+		}
+		if got != reads {
+			t.Fatalf("%s: reads rollups %v, want %v", q, got, reads)
+		}
+	}
+}

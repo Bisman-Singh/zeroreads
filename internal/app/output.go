@@ -203,7 +203,7 @@ func EmitCollector(c *Config, rf *RulesFile, mode emit.Mode) ([]byte, error) {
 	}
 	return emit.Collector(files, emit.Target{Pipeline: c.Collector.Pipeline, After: c.Collector.After,
 		MeasureExporters: c.Collector.MeasureExporters, AggregateExporters: c.Collector.AggregateExporters,
-		DedupeInterval: c.Collector.DedupeInterval}, rules, mode)
+		DedupeInterval: c.Collector.DedupeInterval, SeverityKeys: c.Collector.SeverityKeys}, rules, mode)
 }
 
 // Violation is why an enforced rule is no longer safe.
@@ -313,7 +313,7 @@ func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time, opt Ve
 		ur := usage.Rule{ID: r.ID, Scope: map[string]string{rf.LokiLabel: r.Service}, Language: lang, Structured: r.Field != ""}
 		replaced := map[string]bool{} // original queries this rule's rewrites replaced
 		for _, rw := range r.Rewrites {
-			replaced[rw.Old] = true
+			replaced[logql.Canonical(rw.Old)] = true
 		}
 		for _, p := range pqs {
 			if p.err != nil {
@@ -321,12 +321,16 @@ func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time, opt Ve
 				continue
 			}
 			// An original query executed only before its rewrite was applied is history.
-			if p.q.Source == "loki-querylog" && replaced[p.q.Expr] && !rf.RewritesAppliedAt.IsZero() && p.q.Last.Before(rf.RewritesAppliedAt) {
+			if p.q.Source == "loki-querylog" && replaced[logql.Canonical(p.q.Expr)] && !rf.RewritesAppliedAt.IsZero() && p.q.Last.Before(rf.RewritesAppliedAt) {
 				continue
 			}
 			for _, sel := range p.sel {
 				if r.Action == "rollup" && rewrite.Compensated(p.parsed, sel, r.ID, r.Language) {
 					continue
+				}
+				if r.Action == "rollup" && rewrite.ReadsRollups(sel, r.ID, ur.Scope) {
+					reasons = append(reasons, fmt.Sprintf("%s %s would count or show this rule's rollup records: %s", p.q.Source, p.q.Origin, p.q.Expr))
+					break
 				}
 				if v := usage.Evaluate(sel, ur); v.Used {
 					reasons = append(reasons, fmt.Sprintf("%s %s reads these lines: %s (e.g. %q)", p.q.Source, p.q.Origin, p.q.Expr, v.Witness))
@@ -375,7 +379,7 @@ func EmitVector(c *Config, rf *RulesFile, mode emit.Mode) ([]byte, error) {
 	}
 	v := c.Vector
 	return emit.Vector(files, emit.VectorTarget{After: v.After, ScopePath: v.ScopePath, TextPath: v.TextPath, FieldPaths: v.FieldPaths,
-		GroupBy: v.GroupBy, MeasureSink: v.MeasureSink, DedupeMS: v.DedupeMS}, rules, mode)
+		GroupBy: v.GroupBy, MeasureSink: v.MeasureSink, DedupeMS: v.DedupeMS, SeverityPaths: v.SeverityPaths}, rules, mode)
 }
 
 // EmitFluentBit writes the Fluent Bit YAML configuration for the rules in the given mode.
@@ -394,5 +398,5 @@ func EmitFluentBit(c *Config, rf *RulesFile, mode emit.Mode) ([]byte, error) {
 	}
 	f := c.FluentBit
 	return emit.FluentBit(files, emit.FluentBitTarget{Match: f.Match, After: f.After, ScopeKey: f.ScopeKey, TextKey: f.TextKey,
-		FieldKeys: f.FieldKeys, MetricsTag: f.MetricsTag}, rules, mode)
+		FieldKeys: f.FieldKeys, MetricsTag: f.MetricsTag, SeverityKeys: f.SeverityKeys}, rules, mode)
 }

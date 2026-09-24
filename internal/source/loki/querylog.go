@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Bisman-Singh/sievelog/internal/logfmt"
+	"github.com/Bisman-Singh/sievelog/internal/logql"
 )
 
 // QueryLog reads the queries Loki executed from Loki's own logs. Loki writes one line per query
@@ -153,36 +154,75 @@ func (q *QueryLog) Read(ctx context.Context, start, end time.Time) (Result, erro
 		return Result{}, err
 	}
 	// The frontend logs every query once; queriers log sub-queries. Prefer the frontend when present.
-	byQuery := byComponent["frontend"]
-	res.Component = "frontend"
-	if byQuery == nil {
-		// No query frontend: queriers log the queries themselves, without a component field.
-		res.Component, byQuery = "querier", map[string]*ExecutedQuery{}
-		for _, m := range byComponent {
-			for k, eq := range m {
-				if prev, ok := byQuery[k]; ok {
-					prev.Count += eq.Count
-					if eq.First.Before(prev.First) {
-						prev.First = eq.First
-					}
-					if eq.Last.After(prev.Last) {
-						prev.Last = eq.Last
-					}
-					continue
-				}
-				byQuery[k] = eq
-			}
-		}
-	}
-	for k, eq := range other {
-		if prev, ok := byQuery[k]; ok {
+	// Every component counts. The frontend logs each query once, as sent; queriers log it again split
+	// by time (with an offset) and the ruler logs its own evaluations re-formatted. A line whose
+	// canonical form matches a frontend query adds to that query; anything else is its own reader:
+	// a query that bypassed the frontend is still a query.
+	byQuery := map[string]*ExecutedQuery{}
+	canon := map[string]string{} // canonical form -> key in byQuery
+	merge := func(k string, eq *ExecutedQuery) {
+		c := logql.Canonical(k)
+		if key, ok := canon[c]; ok {
+			prev := byQuery[key]
 			prev.Count += eq.Count
+			if eq.First.Before(prev.First) {
+				prev.First = eq.First
+			}
 			if eq.Last.After(prev.Last) {
 				prev.Last = eq.Last
 			}
-			continue
+			return
 		}
+		canon[c] = k
 		byQuery[k] = eq
+	}
+	res.Component = "querier"
+	if fe, ok := byComponent["frontend"]; ok {
+		res.Component = "frontend"
+		for k, eq := range fe {
+			merge(k, eq)
+		}
+	}
+	var comps []string
+	for comp := range byComponent {
+		if comp != "frontend" {
+			comps = append(comps, comp)
+		}
+	}
+	sort.Strings(comps)
+	// The frontend splits a query into legs (each side of a binary operation, each time range) and
+	// queriers log every leg. A leg of a frontend query executed around the same time is part of that
+	// execution, not a query of its own: someone who ran it alone went through the frontend too.
+	type fq struct {
+		canon       string
+		first, last time.Time
+		key         string
+	}
+	var fronts []fq
+	for k, eq := range byComponent["frontend"] {
+		fronts = append(fronts, fq{" " + logql.Canonical(k) + " ", eq.First, eq.Last, k})
+	}
+	const near = 2 * time.Minute
+	legOf := func(k string, eq *ExecutedQuery) string {
+		c := " " + logql.Canonical(k) + " "
+		for _, f := range fronts {
+			if strings.Contains(f.canon, c) && !eq.First.Before(f.first.Add(-near)) && !eq.Last.After(f.last.Add(near)) {
+				return f.key
+			}
+		}
+		return ""
+	}
+	for _, comp := range comps {
+		for k, eq := range byComponent[comp] {
+			if parent := legOf(k, eq); parent != "" {
+				byQuery[canon[logql.Canonical(parent)]].Count += eq.Count
+				continue
+			}
+			merge(k, eq)
+		}
+	}
+	for k, eq := range other {
+		merge(k, eq)
 	}
 	for _, eq := range byQuery {
 		res.Queries = append(res.Queries, *eq)

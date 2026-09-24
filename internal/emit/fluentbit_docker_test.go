@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -70,6 +71,13 @@ func runFluentBit(t *testing.T, cfg []byte, recs []record) ([]fbRecord, string) 
 			ev["body"] = map[string]any{"msg": r.text, "route": "/cart"}
 		} else {
 			ev["text"] = r.text // not "log": otlp_json output would make it the whole body and drop the other keys
+		}
+		for k, v := range r.extra {
+			if bk, ok := strings.CutPrefix(k, "body."); ok && r.mapBody {
+				ev["body"].(map[string]any)[bk] = v
+			} else {
+				ev[k] = v
+			}
 		}
 		b, _ := json.Marshal(ev)
 		in.Write(b)
@@ -297,5 +305,62 @@ func TestFluentBitEnforcesExactly(t *testing.T) {
 func TestFluentBitRefusesDedupe(t *testing.T) {
 	if _, err := FluentBit([][]byte{[]byte(fluentBitUserConfig)}, fluentBitTarget(), testRules, Enforce); err == nil || !strings.Contains(err.Error(), "deduplicate") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// The runtime severity guard under real Fluent Bit: a drop rule's record at warning or above in a
+// level field passes through and is not counted.
+func TestFluentBitSeverityGuard(t *testing.T) {
+	rules := []Rule{
+		{ID: "r-plain", ScopeAttr: "service.name", ScopeValue: "checkout", Language: `\AINFO heartbeat [0-9]+\z`, Action: "drop"},
+		{ID: "r-field", ScopeAttr: "service.name", ScopeValue: "orders", Language: `\Ahandled route in [0-9]+ms\z`, Field: "msg", Action: "drop"},
+	}
+	cfg, err := FluentBit([][]byte{[]byte(fluentBitUserConfig)}, fluentBitTarget(), rules, Enforce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		extra   map[string]any
+		body    bool
+		removed bool
+	}{
+		{nil, false, true},
+		{map[string]any{"level": "ERROR"}, false, false},
+		{map[string]any{"severity": " warning"}, false, false},
+		{map[string]any{"level": "info"}, false, true},
+		{map[string]any{"lvl": "Fatal"}, false, false},
+		{map[string]any{"body.level": "crit"}, true, false},
+		{nil, true, true},
+	}
+	var recs []record
+	for i, c := range cases {
+		r := record{service: "checkout", text: fmt.Sprintf("INFO heartbeat %d", i), extra: c.extra}
+		if c.body {
+			r = record{service: "orders", text: fmt.Sprintf("handled route in %dms", i), mapBody: true, extra: c.extra}
+		}
+		recs = append(recs, r)
+	}
+	got, metrics := runFluentBit(t, cfg, recs)
+	delivered := map[string]bool{}
+	for _, r := range got {
+		if r.stream == "app" {
+			delivered[r.text] = true
+		}
+	}
+	counted := map[string]int{}
+	for i, c := range cases {
+		if delivered[recs[i].text] == c.removed {
+			t.Fatalf("case %d %v: delivered=%v, want removed=%v", i, c.extra, delivered[recs[i].text], c.removed)
+		}
+		if c.removed {
+			counted[map[bool]string{false: "r-plain", true: "r-field"}[c.body]]++
+		}
+	}
+	for id, n := range counted {
+		re := regexp.MustCompile(regexp.QuoteMeta(metricName("sievelog_rule_lines", id)) + `\S* = (\d+)`)
+		m := re.FindAllStringSubmatch(metrics, -1)
+		if len(m) == 0 || m[len(m)-1][1] != strconv.Itoa(n) {
+			t.Fatalf("%s: counted %v, want %d (severe records must not be measured)", id, m, n)
+		}
 	}
 }

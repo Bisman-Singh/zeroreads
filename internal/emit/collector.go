@@ -34,6 +34,33 @@ type Target struct {
 	AggregateExporters []string
 	// DedupeInterval is the logdedup interval, e.g. 10s.
 	DedupeInterval string
+	// SeverityKeys are log attributes (and, for structured records, body fields) that carry a level
+	// such as "error". Records at warning or above there, or in severity_number or severity_text,
+	// never match a rule. Nil means DefaultSeverityKeys.
+	SeverityKeys []string
+}
+
+// DefaultSeverityKeys are the level fields checked when none are configured.
+var DefaultSeverityKeys = []string{"level", "severity", "lvl", "loglevel", "log.level"}
+
+// SeverePattern matches a level of warning or above, case-insensitively, in any common spelling
+// (warn, warning, error, err, fatal, critical, crit, alert, emerg, emergency, panic, severe).
+const SeverePattern = `(?i)\A\s*(?:warn|err|fatal|crit|alert|emerg|panic|severe)`
+
+// GuardedCondition is Condition plus the runtime severity guard: whatever analysis concluded, a
+// record at warning or above is never measured as removable and never removed.
+func (r Rule) GuardedCondition(keys []string) string {
+	if keys == nil {
+		keys = DefaultSeverityKeys
+	}
+	g := []string{r.Condition(), "log.severity_number < SEVERITY_NUMBER_WARN", "not IsMatch(log.severity_text, " + ottlString(SeverePattern) + ")"}
+	for _, k := range keys {
+		g = append(g, "not IsMatch(log.attributes["+ottlString(k)+"], "+ottlString(SeverePattern)+")")
+		if r.Field != "" {
+			g = append(g, "not IsMatch(log.body["+ottlString(k)+"], "+ottlString(SeverePattern)+")")
+		}
+	}
+	return strings.Join(g, " and ")
 }
 
 // Mode selects shadow (measure only) or enforce (measure and act).
@@ -47,6 +74,8 @@ const (
 // Component and pipeline names this package adds.
 const (
 	nameForward  = "forward/sievelog"
+	nameEnforceF = "forward/sievelog_enforce"
+	pipeEnforce  = "logs/sievelog_enforce"
 	nameMeasure  = "signal_to_metrics/sievelog"
 	nameFilter   = "filter/sievelog"
 	nameDedupe   = "logdedup/sievelog"
@@ -106,6 +135,16 @@ func (r Rule) SampleKey() string {
 	return fmt.Sprintf(`SHA256(Concat([%s, String(log.time_unix_nano)], "|"))`, r.target())
 }
 
+// sampleDrop is the condition under which a sample rule drops a line. A record without a timestamp
+// is keyed by its observed time instead, which is also the time Loki stores for it, so identical
+// untimed lines are still sampled independently and every decision can be recomputed.
+func (r Rule) sampleDrop(guarded string) string {
+	th := ottlString(SampleThreshold(r.Keep))
+	observed := strings.Replace(r.SampleKey(), "log.time_unix_nano", "log.observed_time_unix_nano", 1)
+	return fmt.Sprintf("%s and ((log.time_unix_nano != 0 and %s >= %s) or (log.time_unix_nano == 0 and %s >= %s))",
+		guarded, r.SampleKey(), th, observed, th)
+}
+
 // CheckDisjoint proves no two rules in the same scope and field can match the same line.
 func CheckDisjoint(rules []Rule) error {
 	for i := range rules {
@@ -160,13 +199,13 @@ func Collector(files [][]byte, t Target, rules []Rule, mode Mode) ([]byte, error
 	if !strings.HasPrefix(t.Pipeline, "logs") {
 		return nil, fmt.Errorf("emit: pipeline %s is not a logs pipeline", t.Pipeline)
 	}
-	for _, name := range []string{pipeOut, pipeMetrics} {
+	for _, name := range []string{pipeOut, pipeMetrics, pipeEnforce} {
 		if _, taken := pipelines[name]; taken {
 			return nil, fmt.Errorf("emit: pipeline %s already exists", name)
 		}
 	}
 	connectors, processors, exporters := child(cfg, "connectors"), child(cfg, "processors"), child(cfg, "exporters")
-	for _, n := range []string{nameForward, nameMeasure} {
+	for _, n := range []string{nameForward, nameMeasure, nameEnforceF} {
 		if _, taken := connectors[n]; taken {
 			return nil, fmt.Errorf("emit: connector %s already exists", n)
 		}
@@ -229,7 +268,7 @@ func Collector(files [][]byte, t Target, rules []Rule, mode Mode) ([]byte, error
 	// Measurement: per rule, lines and bytes before any enforcement; aggregate counters too.
 	var metrics []any
 	for _, r := range rules {
-		cond := []any{r.Condition()}
+		cond := []any{r.GuardedCondition(t.SeverityKeys)}
 		attrs := []any{map[string]any{"key": RuleAttr, "default_value": r.ID}}
 		metrics = append(metrics,
 			map[string]any{"name": MeasureLines(r.ID), "description": "lines matching rule " + r.ID, "conditions": cond, "attributes": attrs,
@@ -243,12 +282,12 @@ func Collector(files [][]byte, t Target, rules []Rule, mode Mode) ([]byte, error
 		}
 	}
 	connectors[nameForward] = map[string]any{}
+	connectors[nameEnforceF] = map[string]any{}
 	// error_mode ignore: a record an expression cannot evaluate is skipped for measurement, never
 	// failing the batch of real logs this connector sits beside.
 	connectors[nameMeasure] = map[string]any{"error_mode": "ignore", "logs": metrics}
 
-	var outProcs []any
-	outProcs = append(outProcs, tail...)
+	enforceProcs := []any{}
 	if mode == Enforce {
 		var drops []any
 		var dedupes []any
@@ -256,16 +295,16 @@ func Collector(files [][]byte, t Target, rules []Rule, mode Mode) ([]byte, error
 		for _, r := range rules {
 			switch r.Action {
 			case "aggregate", "drop":
-				drops = append(drops, r.Condition())
+				drops = append(drops, r.GuardedCondition(t.SeverityKeys))
 			case "sample":
-				drops = append(drops, fmt.Sprintf("%s and %s >= %s", r.Condition(), r.SampleKey(), ottlString(SampleThreshold(r.Keep))))
+				drops = append(drops, r.sampleDrop(r.GuardedCondition(t.SeverityKeys)))
 			case "dedupe":
-				dedupes = append(dedupes, r.Condition())
+				dedupes = append(dedupes, r.GuardedCondition(t.SeverityKeys))
 			case "rollup":
 				// The record keeps its resource (so its stream) and loses everything that would split
 				// the count: attributes are replaced by the rule, the body by the marker. The body is
 				// set last because the condition reads it.
-				cond := r.Condition()
+				cond := r.GuardedCondition(t.SeverityKeys)
 				rollups = append(rollups,
 					"keep_keys(log.attributes, []) where "+cond,
 					fmt.Sprintf("set(log.attributes[%s], %s) where %s", ottlString(RuleAttr), ottlString(r.ID), cond),
@@ -276,7 +315,7 @@ func Collector(files [][]byte, t Target, rules []Rule, mode Mode) ([]byte, error
 		if len(rollups) > 0 {
 			processors[nameRollup] = map[string]any{"error_mode": "ignore",
 				"log_statements": []any{map[string]any{"context": "log", "statements": rollups}}}
-			outProcs = append(outProcs, nameRollup)
+			enforceProcs = append(enforceProcs, nameRollup)
 		}
 		if len(dedupes) > 0 {
 			interval := t.DedupeInterval
@@ -284,17 +323,20 @@ func Collector(files [][]byte, t Target, rules []Rule, mode Mode) ([]byte, error
 				interval = "10s"
 			}
 			processors[nameDedupe] = map[string]any{"interval": interval, "conditions": dedupes, "log_count_attribute": DedupCounter}
-			outProcs = append(outProcs, nameDedupe)
+			enforceProcs = append(enforceProcs, nameDedupe)
 		}
 		if len(drops) > 0 {
 			processors[nameFilter] = map[string]any{"error_mode": "ignore", "log_conditions": drops}
-			outProcs = append(outProcs, nameFilter)
+			enforceProcs = append(enforceProcs, nameFilter)
 		}
 	}
+	// The user's processors after t.After run first; measurement then sees exactly the records
+	// enforcement sees, so shadow numbers are what enforce removes.
 	praw["processors"] = head
-	praw["exporters"] = []any{nameForward, nameMeasure}
+	praw["exporters"] = []any{nameForward}
 	pipelines[t.Pipeline] = praw
-	pipelines[pipeOut] = map[string]any{"receivers": []any{nameForward}, "processors": outProcs, "exporters": origExporters}
+	pipelines[pipeOut] = map[string]any{"receivers": []any{nameForward}, "processors": tail, "exporters": []any{nameEnforceF, nameMeasure}}
+	pipelines[pipeEnforce] = map[string]any{"receivers": []any{nameEnforceF}, "processors": enforceProcs, "exporters": origExporters}
 	var mexp []any
 	for _, e := range dedupStrings(append(append([]string(nil), t.MeasureExporters...), t.AggregateExporters...)) {
 		mexp = append(mexp, e)

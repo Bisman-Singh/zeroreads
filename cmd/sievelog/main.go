@@ -1,9 +1,11 @@
-// Command sievelog finds log lines nobody reads, proves it, and emits the collector configuration
+// Command sievelog finds log lines nobody reads, proves it, and emits the pipeline configuration
 // that removes them.
 //
-//	sievelog analyze -c sievelog.yaml -o out/
-//	sievelog emit    -c sievelog.yaml -rules out/rules.json -mode shadow|enforce -o collector.yaml
-//	sievelog verify  -c sievelog.yaml -rules out/rules.json [-o revert-rules.json]
+//	sievelog analyze   -c sievelog.yaml -o out/
+//	sievelog emit      -c sievelog.yaml -rules out/rules.json -format collector|vector|fluentbit|policy -mode shadow|enforce -o FILE
+//	sievelog rewrite   -c sievelog.yaml -rules out/rules.json -o DIR [-apply]
+//	sievelog verify    -c sievelog.yaml -rules out/rules.json [-o KEEP.json] [-deployed FILE]
+//	sievelog reconcile -c sievelog.yaml -rules out/rules.json -before START,END -after START,END
 package main
 
 import (
@@ -22,7 +24,7 @@ import (
 
 const usage = `usage:
   sievelog analyze -c sievelog.yaml -o DIR
-  sievelog emit    -c sievelog.yaml -rules RULES.json [-format collector|vector|fluentbit|policy] [-mode shadow|enforce] -o FILE
+  sievelog emit    -c sievelog.yaml -rules RULES.json [-format collector|vector|fluentbit|policy] [-mode shadow|enforce] [-allow-no-severity-guard] -o FILE
   sievelog verify  -c sievelog.yaml -rules RULES.json [-o KEEP-RULES.json] [-deployed PIPELINE.yaml] [-drift=false] [-json OUT.json]
   sievelog rewrite -c sievelog.yaml -rules RULES.json -o DIR [-apply]
   sievelog reconcile -c sievelog.yaml -rules RULES.json -before START,END -after START,END [-tolerance 0.05] [-o OUT.json]
@@ -92,8 +94,14 @@ func runEmit(args []string) error {
 	mode := fs.String("mode", "shadow", "shadow or enforce (collector format)")
 	format := fs.String("format", "collector", "collector (OpenTelemetry Collector config), vector (Vector config), fluentbit (Fluent Bit YAML) or policy (Telemetry Policy JSON)")
 	out := fs.String("o", "", "output file (default stdout)")
+	unguarded := fs.Bool("allow-no-severity-guard", false, "policy format only: emit although the format cannot keep warning and error records out of a rule")
 	_ = fs.Parse(args)
 	if *format == "policy" {
+		// policy-go 1.12.1 treats a negated matcher on an absent field as no match, and the most
+		// restrictive policy wins, so "unless the level is warning or worse" cannot be expressed.
+		if !*unguarded {
+			return fmt.Errorf("the Telemetry Policy format cannot express the severity guard: a warning or error record in a rule's language would be removed; pass -allow-no-severity-guard to emit anyway")
+		}
 		rf, err := app.LoadRules(*rulesPath)
 		if err != nil {
 			return err
@@ -144,7 +152,7 @@ func runEmit(args []string) error {
 	return os.WriteFile(*out, b, 0o644)
 }
 
-// runVerify exits 3 when any enforced rule is no longer safe.
+// runRewrite exits 5 when any stored query could not be rewritten.
 func runRewrite(ctx context.Context, args []string) (int, error) {
 	fs := flag.NewFlagSet("rewrite", flag.ExitOnError)
 	cfgPath := fs.String("c", "sievelog.yaml", "config file")
@@ -187,11 +195,12 @@ func runRewrite(ctx context.Context, args []string) (int, error) {
 	return 0, nil
 }
 
+// runVerify exits 3 when any enforced rule is no longer safe.
 func runVerify(ctx context.Context, args []string) (int, error) {
 	fs := flag.NewFlagSet("verify", flag.ExitOnError)
 	cfgPath := fs.String("c", "sievelog.yaml", "config file")
 	rulesPath := fs.String("rules", "", "rules.json being enforced")
-	out := fs.String("o", "", "write the rules that are still safe here (the revert)")
+	out := fs.String("o", "", "write the rules that are still safe here (the revert); - prints them after the report")
 	deployed := fs.String("deployed", "", "the pipeline config actually deployed, checked against what emit produces")
 	drift := fs.Bool("drift", true, "report template traffic each rule no longer covers")
 	jsonOut := fs.String("json", "", "write the full verify result as JSON here")
@@ -214,7 +223,7 @@ func runVerify(ctx context.Context, args []string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if *out != "" {
+	if *out != "" && *out != "-" {
 		b, _ := json.MarshalIndent(res.Keep, "", "  ")
 		if err := os.WriteFile(*out, b, 0o644); err != nil {
 			return 0, err
@@ -230,10 +239,15 @@ func runVerify(ctx context.Context, args []string) (int, error) {
 		return 0, err
 	}
 	for _, d := range res.Drift {
-		if d.Status == "drifting" {
-			fmt.Printf("verify: rule %s drifts: %.0f of %.0f stored lines of its template are outside the rule (re-analyse to cover them), e.g. %q\n",
-				d.RuleID, d.OutOfRule, d.TemplateLines, d.Examples[0])
+		if d.Status != "drifting" {
+			continue
 		}
+		example := ""
+		if len(d.Examples) > 0 { // the sample can come back empty when lines age out between queries
+			example = fmt.Sprintf(", e.g. %q", d.Examples[0])
+		}
+		fmt.Printf("verify: rule %s drifts: %.0f of %.0f stored lines of its template are outside the rule (re-analyse to cover them)%s\n",
+			d.RuleID, d.OutOfRule, d.TemplateLines, example)
 	}
 	if len(res.Violations) == 0 {
 		fmt.Printf("verify: all %d enforced rules are still safe\n", len(rf.Rules))
@@ -246,6 +260,11 @@ func runVerify(ctx context.Context, args []string) (int, error) {
 		}
 	}
 	fmt.Printf("verify: %d of %d rules must be reverted; %d remain safe\n", len(res.Violations), len(rf.Rules), len(res.Keep.Rules))
+	if *out == "-" {
+		// Printed so a scheduled Job keeps it in its log: emit and deploy these rules to revert.
+		b, _ := json.MarshalIndent(res.Keep, "", "  ")
+		fmt.Printf("verify: rules that remain safe (emit and deploy these to revert):\n%s\n", b)
+	}
 	return 3, nil
 }
 

@@ -250,3 +250,68 @@ func TestProofsOfTailAndPatterns(t *testing.T) {
 		t.Fatalf("patterns served but never logged must fail the proof: %v", err)
 	}
 }
+
+// Every component counts; copies of a frontend query (a querier's time split, the ruler's own
+// formatting) fold into it, and a query only a querier logged stays a reader of its own.
+func TestQueryLogKeepsEveryComponent(t *testing.T) {
+	base := time.Now().Add(-time.Minute).UnixNano()
+	line := func(comp, query string) string {
+		c := ""
+		if comp != "" {
+			c = " component=" + comp
+		}
+		return `level=info caller=metrics.go:237` + c + ` org_id=fake query_type=metric query=` + strconv.Quote(query)
+	}
+	lines := []fakeLine{
+		{"loki", base, line("frontend", `sum(count_over_time({a="b"} |= "x" [5m])) > 1`)},
+		{"loki", base + 1, line("querier", `sum(count_over_time({a="b"} |= "x"[5m] offset 1h0m0s)) > 1`)},
+		{"loki", base + 2, line("ruler", `(sum(count_over_time({a="b"} |= "x"[5m])) > 1)`)},
+		{"loki", base + 3, line("querier", `{a="direct"}`)},
+		{"loki", base + 4, line("", `{a="nocomponent"}`)},
+	}
+	calls := 0
+	srv := fakeLoki(t, lines, &calls)
+	defer srv.Close()
+	res, err := (&QueryLog{Logs: &Client{Base: srv.URL}, Selector: `{s="loki"}`}).Read(context.Background(), time.Unix(0, base-1), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, q := range res.Queries {
+		got[q.Query] = q.Count
+	}
+	if len(got) != 3 || got[`sum(count_over_time({a="b"} |= "x" [5m])) > 1`] != 3 || got[`{a="direct"}`] != 1 || got[`{a="nocomponent"}`] != 1 {
+		t.Fatalf("%v", got)
+	}
+}
+
+// Queriers log each leg of a frontend query; a leg logged around the frontend execution is part of
+// it, a leg logged at another time is a query of its own.
+func TestQueryLogFoldsLegsOfFrontendQueries(t *testing.T) {
+	now := time.Now().Add(-10 * time.Minute)
+	at := func(d time.Duration) int64 { return now.Add(d).UnixNano() }
+	line := func(comp, query string) string {
+		return `level=info caller=metrics.go:237 component=` + comp + ` org_id=fake query_type=metric query=` + strconv.Quote(query)
+	}
+	full := `(sum(count_over_time({a="b"} != "x" | sievelog_rule="" [5m])) + sum(count_over_time({a="b"} |~ "y" [5m])))`
+	leg := `sum(count_over_time({a="b"} |~ "y"[5m] offset 1m0s))`
+	lines := []fakeLine{
+		{"loki", at(0), line("querier", leg)},
+		{"loki", at(time.Second), line("frontend", full)},
+		{"loki", at(8 * time.Minute), line("querier", `sum(count_over_time({a="b"} |~ "y"[5m]))`)},
+	}
+	calls := 0
+	srv := fakeLoki(t, lines, &calls)
+	defer srv.Close()
+	res, err := (&QueryLog{Logs: &Client{Base: srv.URL}, Selector: `{s="loki"}`}).Read(context.Background(), now.Add(-time.Minute), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, q := range res.Queries {
+		got[q.Query] = q.Count
+	}
+	if len(got) != 2 || got[full] != 2 || got[`sum(count_over_time({a="b"} |~ "y"[5m]))`] != 1 {
+		t.Fatalf("%v", got)
+	}
+}

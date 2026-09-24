@@ -273,10 +273,27 @@ func (c *Config) discover(ctx context.Context, lc *loki.Client, svc string, star
 	var texts []string
 	var levels []string
 	unstructured := 0
+	// levelOf reads a line's level from Loki's labels and structured metadata (dots become
+	// underscores there) and, for structured records, from the record's own fields.
+	levelOf := func(e loki.Entry, m map[string]any) string {
+		for _, k := range c.Scope.SeverityKeys {
+			if v := e.Labels[k]; v != "" {
+				return v
+			}
+			if v := e.Labels[strings.ReplaceAll(k, ".", "_")]; v != "" {
+				return v
+			}
+			if v, ok := m[k].(string); ok && v != "" {
+				return v
+			}
+		}
+		return ""
+	}
 	for _, e := range entries {
 		if field == "" {
 			inputs = append(inputs, templating.Input{Body: e.Line})
 			texts = append(texts, e.Line)
+			levels = append(levels, levelOf(e, nil))
 			continue
 		}
 		var m map[string]any
@@ -291,8 +308,7 @@ func (c *Config) discover(ctx context.Context, lc *loki.Client, svc string, star
 		}
 		inputs = append(inputs, templating.Input{Fields: m})
 		texts = append(texts, v)
-		l, _ := m["level"].(string)
-		levels = append(levels, l) // aligned with inputs
+		levels = append(levels, levelOf(e, m)) // aligned with inputs
 	}
 	if unstructured > 0 {
 		notes = append(notes, fmt.Sprintf("%s: %d sampled lines are not JSON records with a string %q field; they get no rule", svc, unstructured, field))
@@ -324,7 +340,7 @@ func (c *Config) discover(ctx context.Context, lc *loki.Client, svc string, star
 	levelsBy := map[string]map[string]bool{}
 	for i, t := range tmpls {
 		groups[t] = append(groups[t], texts[i])
-		if field != "" && levels[i] != "" {
+		if levels[i] != "" {
 			if levelsBy[t] == nil {
 				levelsBy[t] = map[string]bool{}
 			}
@@ -585,9 +601,34 @@ func (c *Config) evidence(ctx context.Context, now time.Time, services []string,
 			gaps = append(gaps, analyze.Gap{Source: "grafana", Origin: g.URL, Key: "grafana-unreadable", Reason: err.Error()})
 			continue
 		}
+		// A query counts when its datasource is the analysed Loki: listed, or pointing at exactly
+		// loki.url. A Loki datasource that is neither listed nor declared other counts too, and is a
+		// gap until the config says which Loki it is: a forgotten entry must never hide readers.
 		want := map[string]bool{grafana.AnyLoki: true}
 		for _, d := range g.Datasources {
 			want[d] = true
+		}
+		other := map[string]bool{}
+		for _, d := range g.OtherDatasources {
+			other[d] = true
+		}
+		var unmapped []string
+		for org, dss := range res.LokiDatasources {
+			for uid, u := range dss {
+				switch {
+				case want[uid] || other[uid]:
+				case strings.TrimRight(u, "/") == strings.TrimRight(c.Loki.URL, "/"):
+					want[uid] = true
+				default:
+					want[uid] = true
+					unmapped = append(unmapped, fmt.Sprintf("%s (org %d, %s)", uid, org, u))
+				}
+			}
+		}
+		if len(unmapped) > 0 {
+			sort.Strings(unmapped)
+			gaps = append(gaps, analyze.Gap{Source: "grafana", Origin: g.URL, Key: "grafana-datasource-unmapped",
+				Reason: "these Loki datasources are in neither datasources nor other_datasources, so their queries count as reading the analysed Loki: " + strings.Join(unmapped, ", ")})
 		}
 		for _, q := range res.Queries {
 			hit := false

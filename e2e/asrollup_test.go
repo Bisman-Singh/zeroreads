@@ -92,7 +92,7 @@ evidence:
   query_log: {enabled: true, selector: '{service_name="loki"}', prove_live: true}
   ruler: true
   grafana:
-    - {url: %s, username: admin, password_env: E2E_GRAFANA_PASSWORD, datasources: [loki]}
+    - {url: %s, username: admin, password_env: E2E_GRAFANA_PASSWORD, datasources: [loki, loki2]}
 collector:
   config_files: [%s]
   pipeline: logs
@@ -104,6 +104,7 @@ collector:
     file/logs: {exempt: "e2e local copy"}
 policy:
   actions: [rollup]
+  experimental_rollup: true
   acknowledge: [grafana-queryhistory, querylog-window]
 `, e.loki, gen.IPMaskName, gen.IPMaskPattern, grafanaURL, userPath)), 0o644)
 	os.Setenv("E2E_GRAFANA_PASSWORD", grafanaPass)
@@ -284,6 +285,30 @@ policy:
 		t.Fatalf("the original query should have lost the %d removed lines", removed)
 	}
 	t.Logf("enforce: %d cache lines removed and stored as rollups with exact counts; the rewritten count equals the ground truth %d", removed, cacheLike)
+
+	// A count whose filter the rollup records' text would pass (!= "/healthz"), rewritten for every
+	// rolled-up rule, still equals the ground truth: rollup records are never counted as lines.
+	var all []rewrite.Rule
+	for _, r := range rf.Rules {
+		if r.Action == "rollup" {
+			all = append(all, rewrite.Rule{ID: r.ID, Language: r.Language, Scope: map[string]string{"service_name": r.Service}})
+		}
+	}
+	notHealth := 0
+	for _, r := range raw {
+		if r.service == "checkout" && !strings.Contains(r.text, "/healthz") {
+			notHealth++
+		}
+	}
+	orig2 := "sum(count_over_time(" + sel + ` != "/healthz" [` + rng + "]))"
+	res2, err := rewrite.Query(orig2, all, map[string]bool{"service_name": true, "k8s_namespace_name": true})
+	if err != nil || !res2.Changed {
+		t.Fatalf("rewrite: %v %+v", err, res2)
+	}
+	if got := instant(t, lc, res2.Expr, at); got != strconv.Itoa(notHealth) {
+		t.Fatalf("!= \"/healthz\" after enforcement: rewritten %s, ground truth %d (original now %s)\n%s", got, notHealth, instant(t, lc, orig2, at), res2.Expr)
+	}
+	t.Logf("enforce: a != \"/healthz\" count rewritten for %d rolled-up rules equals the ground truth %d", len(all), notHealth)
 
 	// 5. Verify passes against the deployed config; a new dashboard with the original query fails it.
 	out, code = e.run(e.root, e.bin, "verify", "-c", cfgPath, "-rules", rulesPath, "-deployed", enforcePath)

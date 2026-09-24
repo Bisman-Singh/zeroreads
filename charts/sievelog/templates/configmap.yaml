@@ -11,6 +11,10 @@ data:
     {{- .Values.config | nindent 4 }}
   rules.json: |
     {{- .Values.rules | nindent 4 }}
+  {{- with .Values.deployed }}
+  deployed.yaml: |
+    {{- . | nindent 4 }}
+  {{- end }}
   {{- range $name, $content := .Values.files }}
   {{ $name }}: |
     {{- $content | nindent 4 }}

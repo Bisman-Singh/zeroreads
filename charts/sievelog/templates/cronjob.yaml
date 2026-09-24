@@ -29,7 +29,8 @@ spec:
             - name: verify
               image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
               imagePullPolicy: {{ .Values.image.pullPolicy }}
-              args: ["verify", "-c", "/etc/sievelog/sievelog.yaml", "-rules", "/etc/sievelog/rules.json", "-o", "/tmp/keep-rules.json"]
+              # The rules that remain safe are printed into the Job's log, which outlives the pod.
+              args: ["verify", "-c", "/etc/sievelog/sievelog.yaml", "-rules", "/etc/sievelog/rules.json", "-o", "-"{{ if .Values.deployed }}, "-deployed", "/etc/sievelog/deployed.yaml"{{ end }}]
               {{- with .Values.env }}
               env:
                 {{- toYaml . | nindent 16 }}

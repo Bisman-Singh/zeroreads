@@ -44,6 +44,9 @@ type ScopeConfig struct {
 	// Structured maps a service to the body field its records are templated on. Records of these
 	// services reach the enforcement point as map bodies.
 	Structured map[string]string `yaml:"structured"`
+	// SeverityKeys are the fields that carry a line's level in Loki (labels, structured metadata) and
+	// in structured records. Sampled lines at warning or above there block their template's rule.
+	SeverityKeys []string `yaml:"severity_keys"`
 }
 
 // DiscoveryConfig bounds template discovery and volume measurement.
@@ -88,6 +91,10 @@ type GrafanaConfig struct {
 	PasswordEnv string   `yaml:"password_env"`
 	TokenEnv    string   `yaml:"token_env"`
 	Datasources []string `yaml:"datasources"` // Loki datasource UIDs that point at loki.url
+	// OtherDatasources are Loki datasource UIDs that point at a different Loki: their queries cannot
+	// read the analysed lines. A Loki datasource in neither list counts as the analysed one and is
+	// reported as a gap.
+	OtherDatasources []string `yaml:"other_datasources"`
 }
 
 // CollectorConfig is the collector the rules are enforced in.
@@ -100,6 +107,9 @@ type CollectorConfig struct {
 	DedupeInterval     string            `yaml:"dedupe_interval"`
 	Sinks              map[string]Sink   `yaml:"sinks"`
 	Derived            map[string]string `yaml:"derived_exempt"` // connector -> reason it may change
+	// SeverityKeys are the log attributes (and structured body fields) that carry a level; nil means
+	// the defaults. A record at warning or above is never removed, whatever the rules say.
+	SeverityKeys []string `yaml:"severity_keys"`
 }
 
 // VectorConfig is the Vector instance the rules are enforced in.
@@ -114,6 +124,8 @@ type VectorConfig struct {
 	MeasureSink map[string]any    `yaml:"measure_sink"`
 	Sinks       map[string]Sink   `yaml:"sinks"`
 	Derived     map[string]string `yaml:"derived_exempt"`
+	// SeverityPaths are VRL paths of level fields; nil means the defaults.
+	SeverityPaths []string `yaml:"severity_paths"`
 }
 
 // FluentBitConfig is the Fluent Bit instance the rules are enforced in (YAML configuration).
@@ -127,6 +139,8 @@ type FluentBitConfig struct {
 	MetricsTag  string              `yaml:"metrics_tag"`
 	Sinks       map[string]Sink     `yaml:"sinks"`
 	Derived     map[string]string   `yaml:"derived_exempt"`
+	// SeverityKeys are record paths of level fields; nil means the defaults.
+	SeverityKeys [][]string `yaml:"severity_keys"`
 }
 
 // Sink says what an exporter downstream of the enforcement point is.
@@ -161,6 +175,9 @@ type PolicyConfig struct {
 	Exempt        []string `yaml:"exempt"`
 	ErrorPattern  string   `yaml:"error_pattern"`
 	MinDailyBytes float64  `yaml:"min_daily_bytes"`
+	// ExperimentalRollup must be true for rollup to be allowed in actions: it rewrites dashboards and
+	// alerts, and is newer and less proven in the field than the other actions.
+	ExperimentalRollup bool `yaml:"experimental_rollup"`
 }
 
 // PricingConfig selects the price table.
@@ -218,6 +235,9 @@ func (c *Config) defaults() {
 	if c.Scope.LokiLabel == "" {
 		c.Scope.LokiLabel = "service_name"
 	}
+	if c.Scope.SeverityKeys == nil {
+		c.Scope.SeverityKeys = []string{"level", "severity", "severity_text", "detected_level", "lvl", "loglevel", "log.level"}
+	}
 	if c.Discovery.Window.Duration == 0 {
 		c.Discovery.Window.Duration = 24 * time.Hour
 	}
@@ -263,6 +283,24 @@ func (c *Config) validate() error {
 	if c.Loki.URL == "" {
 		return fmt.Errorf("loki.url is required")
 	}
+	for name, v := range map[string]int64{
+		"discovery.window": int64(c.Discovery.Window.Duration), "discovery.slices": int64(c.Discovery.Slices),
+		"discovery.sample_lines_per_service": int64(c.Discovery.SampleLinesPerService), "discovery.min_samples": int64(c.Discovery.MinSamples),
+		"evidence.window": int64(c.Evidence.Window.Duration), "vector.dedupe_ms": int64(c.Vector.DedupeMS),
+	} {
+		if v < 0 || (v == 0 && name != "vector.dedupe_ms") {
+			return fmt.Errorf("%s must be positive", name)
+		}
+	}
+	if c.Policy.MinDailyBytes < 0 {
+		return fmt.Errorf("policy.min_daily_bytes must not be negative")
+	}
+	if c.Discovery.Slices > 10000 {
+		return fmt.Errorf("discovery.slices must be at most 10000")
+	}
+	if d, err := time.ParseDuration(c.Collector.DedupeInterval); err != nil || d <= 0 {
+		return fmt.Errorf("collector.dedupe_interval %q must be a positive duration", c.Collector.DedupeInterval)
+	}
 	if c.Evidence.QueryLog.Enabled && c.Evidence.QueryLog.Selector == "" {
 		return fmt.Errorf("evidence.query_log.selector is required when the query log is enabled")
 	}
@@ -277,6 +315,11 @@ func (c *Config) validate() error {
 			return fmt.Errorf("evidence.opensearch.%s: indices is required", o.Name)
 		}
 		clusters[o.Name] = true
+	}
+	for i, g := range c.Evidence.Grafana {
+		if g.URL == "" || len(g.Datasources) == 0 {
+			return fmt.Errorf("evidence.grafana[%d]: url and datasources (the Loki datasource UIDs of loki.url) are required", i)
+		}
 	}
 	switch c.Runtime {
 	case "collector":
@@ -320,6 +363,11 @@ func (c *Config) validate() error {
 		}
 	default:
 		return fmt.Errorf("runtime must be collector, vector or fluentbit, got %q", c.Runtime)
+	}
+	for _, a := range c.Policy.Actions {
+		if a == "rollup" && !c.Policy.ExperimentalRollup {
+			return fmt.Errorf("policy.actions: rollup is experimental; set policy.experimental_rollup: true to allow it")
+		}
 	}
 	if c.Policy.SamplePercent < 1 || c.Policy.SamplePercent > 99 {
 		return fmt.Errorf("policy.sample_percent must be 1..99")

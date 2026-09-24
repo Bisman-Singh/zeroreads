@@ -241,7 +241,7 @@ evidence:
   query_log: {enabled: true, selector: '{service_name="loki"}', prove_live: true}
   ruler: true
   grafana:
-    - {url: %s, username: admin, password_env: E2E_GRAFANA_PASSWORD, datasources: [loki]}
+    - {url: %s, username: admin, password_env: E2E_GRAFANA_PASSWORD, datasources: [loki, loki2]}
 `+rc.section+`policy:
   actions: %s
   sample_percent: 30

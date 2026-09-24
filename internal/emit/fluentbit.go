@@ -20,6 +20,39 @@ type FluentBitTarget struct {
 	TextKey    []string            // path of the plain text, e.g. [log]
 	FieldKeys  map[string][]string // service -> path of the templated field of structured records
 	MetricsTag string              // tag of the measurement metrics; outputs matching it receive them
+	// SeverityKeys are record paths of level fields; a record at warning or above in any of them
+	// never matches a rule. Nil means DefaultSeverityKeys at the top level and beside every
+	// structured field.
+	SeverityKeys [][]string
+}
+
+func (t FluentBitTarget) severityKeys() [][]string {
+	if t.SeverityKeys != nil {
+		return t.SeverityKeys
+	}
+	var out [][]string
+	seen := map[string]bool{}
+	add := func(parent []string) {
+		for _, k := range DefaultSeverityKeys {
+			p := append(append([]string(nil), parent...), k)
+			if key := strings.Join(p, "\x00"); !seen[key] {
+				seen[key] = true
+				out = append(out, p)
+			}
+		}
+	}
+	add(nil)
+	var svcs []string
+	for svc := range t.FieldKeys {
+		svcs = append(svcs, svc)
+	}
+	sort.Strings(svcs)
+	for _, svc := range svcs {
+		if fk := t.FieldKeys[svc]; len(fk) > 1 {
+			add(fk[:len(fk)-1])
+		}
+	}
+	return out
 }
 
 // FluentBitSampleThreshold is the integer below which the first 13 hex digits of the SHA-256 of a
@@ -113,6 +146,19 @@ func FluentBit(files [][]byte, t FluentBitTarget, rules []Rule, mode Mode) ([]by
 			"name": "modify", "alias": "sievelog_tag_" + strings.ReplaceAll(r.ID, "-", "_"), "match": t.Match,
 			"condition": []any{"Key_value_matches " + t.ScopeKey + " " + scope, "Key_value_matches " + accessor(path) + " " + pat},
 			"add":       "sievelog_rule " + r.ID,
+		})
+	}
+	// A record whose level says warning or worse loses its rule tag before anything counts or removes
+	// it (modify conditions only combine with AND, so this is its own filter per level field).
+	severe, err := dialect.Onigmo(SeverePattern)
+	if err != nil {
+		return nil, err
+	}
+	for i, k := range t.severityKeys() {
+		added = append(added, map[string]any{
+			"name": "modify", "alias": fmt.Sprintf("sievelog_severe_%d", i), "match": t.Match,
+			"condition": []any{"Key_value_matches " + accessor(k) + " " + severe},
+			"remove":    "sievelog_rule",
 		})
 	}
 	for _, r := range rules {
