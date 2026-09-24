@@ -54,12 +54,15 @@ sievelog analyze -c sievelog.yaml -o out/          # report.md, report.json, rul
 sievelog emit -c sievelog.yaml -rules out/rules.json -mode shadow  -o collector.yaml
 # deploy the shadow config: it only measures, per rule, what would be removed
 sievelog emit -c sievelog.yaml -rules out/rules.json -mode enforce -o collector.yaml
-sievelog verify -c sievelog.yaml -rules out/rules.json   # exit code 3 when a rule is no longer safe
+sievelog verify -c sievelog.yaml -rules out/rules.json -deployed collector.yaml
+# exit code 3 when a rule is no longer safe or the deployed config is not the emitted one
 ```
 
 Run `verify` on a schedule with the Helm chart in `charts/sievelog`, or in CI with the GitHub Action in
 this repository. When someone adds a dashboard or alert that reads removed lines, `verify` fails and
-writes the rules that are still safe, which is the revert.
+writes the rules that are still safe, which is the revert. It also reports drift: lines of a rule's
+template that the rule no longer covers. Those pass through untouched, so drift never fails `verify`; it
+means the template is worth re-analysing.
 
 See [docs/configuration.md](docs/configuration.md) for every setting and
 [docs/safety.md](docs/safety.md) for exactly what is guaranteed and what is not.

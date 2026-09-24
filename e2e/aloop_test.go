@@ -4,11 +4,14 @@ package e2e
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -248,6 +251,9 @@ func (e *loopEnv) installChart(rulesPath, collectorPath, grafanaURL string) func
 scope:
   services: [checkout, auth, orders]
   structured: {orders: msg}
+drain:
+  masking_rules:
+    - {name: %s, pattern: '%s'}
 evidence:
   window: 5m
   query_log: {enabled: true, selector: '{service_name="loki"}', prove_live: true}
@@ -264,7 +270,7 @@ collector:
     file/logs: {exempt: "e2e local copy"}
 policy:
   acknowledge: [grafana-queryhistory, querylog-window]
-`)
+`, gen.IPMaskName, gen.IPMaskPattern)
 	values := map[string]any{
 		"image":  map[string]any{"repository": "sievelog/sievelog", "tag": "e2e", "pullPolicy": "Never"},
 		"config": cfg, "rules": string(rules), "files": map[string]any{"collector.yaml": string(collector)},
@@ -559,6 +565,79 @@ policy:
 		t.Fatalf("verify should pass: %s", out)
 	}
 
+	// 4b. The deployed config is exactly the emitted enforce config; an edit to it fails verify.
+	out, code = e.run(e.root, e.bin, "verify", "-c", cfgPath, "-rules", filepath.Join(outDir, "rules.json"), "-deployed", enforcePath)
+	if code != 0 {
+		t.Fatalf("verify against the deployed enforce config should pass (exit %d): %s", code, out)
+	}
+	eb, _ := os.ReadFile(enforcePath)
+	editedPath := filepath.Join(e.work, "loop-enforce-edited.yaml")
+	// Someone raises the sample rule's keep share by hand.
+	edited := strings.Replace(string(eb), emit.SampleThreshold(30), emit.SampleThreshold(90), 1)
+	if edited == string(eb) {
+		t.Fatalf("enforce config has no sample key to edit:\n%s", eb)
+	}
+	os.WriteFile(editedPath, []byte(edited), 0o644)
+	out, code = e.run(e.root, e.bin, "verify", "-c", cfgPath, "-rules", filepath.Join(outDir, "rules.json"), "-deployed", editedPath)
+	if code != 3 || !strings.Contains(out, "deployed pipeline config is not what emit produces") {
+		t.Fatalf("verify should fail on an edited deployed config (exit %d): %s", code, out)
+	}
+	t.Logf("verify: the deployed config matches the emitted one, and a hand edit is caught")
+
+	// 4c. Drift: lines of the sampled template that its rule does not cover are reported, exactly,
+	// and do not fail verify (they pass through untouched).
+	var sampled *app.EnforcedRule
+	for i := range rf.Rules {
+		if rf.Rules[i].Action == "sample" {
+			sampled = &rf.Rules[i]
+		}
+	}
+	driftLine := strings.ReplaceAll(sampled.Template, "<*>", "zz~drift~zz")
+	if langs[sampled.ID].MatchString(driftLine) || !strings.Contains(sampled.Template, "<*>") {
+		t.Fatalf("drift line %q must be in template %q and outside the rule", driftLine, sampled.Template)
+	}
+	driftOf := func() app.RuleDrift {
+		p := filepath.Join(e.work, "loop-verify-drift.json")
+		out, code := e.run(e.root, e.bin, "verify", "-c", cfgPath, "-rules", filepath.Join(outDir, "rules.json"), "-json", p)
+		if code != 0 {
+			t.Fatalf("verify with drift should pass (exit %d): %s", code, out)
+		}
+		var vr app.VerifyResult
+		b, _ := os.ReadFile(p)
+		json.Unmarshal(b, &vr)
+		for _, d := range vr.Drift {
+			if d.RuleID == sampled.ID {
+				return d
+			}
+		}
+		t.Fatalf("no drift entry for %s: %s", sampled.ID, b)
+		return app.RuleDrift{}
+	}
+	before := driftOf()
+	const drifted = 7
+	lokiPush(t, e.loki, map[string]string{"service_name": sampled.Service, "k8s_namespace_name": "drift"}, driftLine, drifted)
+	var after app.RuleDrift
+	for i := 0; i < 30; i++ {
+		if after = driftOf(); after.OutOfRule-before.OutOfRule >= drifted {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if after.OutOfRule-before.OutOfRule != drifted || after.Status != "drifting" || after.TemplateLines-before.TemplateLines != drifted {
+		t.Fatalf("drift: before %+v after %+v, want exactly %d more out-of-rule lines", before, after, drifted)
+	}
+	t.Logf("drift: %d pushed out-of-rule lines of %q reported exactly (examples %q)", drifted, sampled.Template, after.Examples)
+
+	// 4d. A changed masking rule invalidates every rule.
+	cb, _ := os.ReadFile(cfgPath)
+	changedCfg := filepath.Join(e.work, "sievelog-changed-masks.yaml")
+	os.WriteFile(changedCfg, []byte(strings.Replace(string(cb), "  masking_rules:\n", "  masking_rules:\n    - {name: hex, pattern: '\\b[0-9a-f]{8}\\b'}\n", 1)), 0o644)
+	out, code = e.run(e.root, e.bin, "verify", "-c", changedCfg, "-rules", filepath.Join(outDir, "rules.json"), "-drift=false")
+	if code != 3 || !strings.Contains(out, "masking rules or seed templates changed") {
+		t.Fatalf("verify should fail after a masking change (exit %d): %s", code, out)
+	}
+	t.Logf("verify: a masking-rule change invalidates the rules")
+
 	// 6a. The same check, scheduled in the cluster by the Helm chart: it must pass now.
 	helmVerify := e.installChart(filepath.Join(outDir, "rules.json"), userPath, grafanaURL)
 	if code, logs := helmVerify("pass"); code != 0 || !strings.Contains(logs, "still safe") {
@@ -592,4 +671,24 @@ policy:
 	}
 	t.Logf("the Helm-scheduled verify passed, then failed with exit 3 once the new dashboard appeared")
 	_ = gen.Corpus
+}
+
+// lokiPush writes n copies of line to the e2e Loki under the given labels, a nanosecond apart.
+func lokiPush(t *testing.T, base string, labels map[string]string, line string, n int) {
+	t.Helper()
+	now := time.Now().UnixNano()
+	var values [][]string
+	for i := 0; i < n; i++ {
+		values = append(values, []string{strconv.FormatInt(now+int64(i), 10), line})
+	}
+	b, _ := json.Marshal(map[string]any{"streams": []any{map[string]any{"stream": labels, "values": values}}})
+	resp, err := http.Post(base+"/loki/api/v1/push", "application/json", bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("loki push: %d %s", resp.StatusCode, body)
+	}
 }

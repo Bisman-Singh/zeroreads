@@ -23,7 +23,7 @@ import (
 const usage = `usage:
   sievelog analyze -c sievelog.yaml -o DIR
   sievelog emit    -c sievelog.yaml -rules RULES.json [-format collector|vector|fluentbit|policy] [-mode shadow|enforce] -o FILE
-  sievelog verify  -c sievelog.yaml -rules RULES.json [-o KEEP-RULES.json]
+  sievelog verify  -c sievelog.yaml -rules RULES.json [-o KEEP-RULES.json] [-deployed PIPELINE.yaml] [-drift=false] [-json OUT.json]
   sievelog reconcile -c sievelog.yaml -rules RULES.json -before START,END -after START,END [-tolerance 0.05] [-o OUT.json]
 `
 
@@ -147,6 +147,9 @@ func runVerify(ctx context.Context, args []string) (int, error) {
 	cfgPath := fs.String("c", "sievelog.yaml", "config file")
 	rulesPath := fs.String("rules", "", "rules.json being enforced")
 	out := fs.String("o", "", "write the rules that are still safe here (the revert)")
+	deployed := fs.String("deployed", "", "the pipeline config actually deployed, checked against what emit produces")
+	drift := fs.Bool("drift", true, "report template traffic each rule no longer covers")
+	jsonOut := fs.String("json", "", "write the full verify result as JSON here")
 	_ = fs.Parse(args)
 	cfg, err := app.LoadConfig(*cfgPath)
 	if err != nil {
@@ -156,7 +159,13 @@ func runVerify(ctx context.Context, args []string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	res, err := app.Verify(ctx, cfg, rf, time.Now())
+	opt := app.VerifyOptions{Drift: *drift}
+	if *deployed != "" {
+		if opt.Deployed, err = os.ReadFile(*deployed); err != nil {
+			return 0, err
+		}
+	}
+	res, err := app.Verify(ctx, cfg, rf, time.Now(), opt)
 	if err != nil {
 		return 0, err
 	}
@@ -166,8 +175,20 @@ func runVerify(ctx context.Context, args []string) (int, error) {
 			return 0, err
 		}
 	}
+	if *jsonOut != "" {
+		b, _ := json.MarshalIndent(res, "", "  ")
+		if err := os.WriteFile(*jsonOut, b, 0o644); err != nil {
+			return 0, err
+		}
+	}
 	if err := writeStepSummary(res, len(rf.Rules)); err != nil {
 		return 0, err
+	}
+	for _, d := range res.Drift {
+		if d.Status == "drifting" {
+			fmt.Printf("verify: rule %s drifts: %.0f of %.0f stored lines of its template are outside the rule (re-analyse to cover them), e.g. %q\n",
+				d.RuleID, d.OutOfRule, d.TemplateLines, d.Examples[0])
+		}
 	}
 	if len(res.Violations) == 0 {
 		fmt.Printf("verify: all %d enforced rules are still safe\n", len(rf.Rules))

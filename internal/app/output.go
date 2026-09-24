@@ -20,10 +20,13 @@ import (
 
 // RulesFile is the set of rules an analysis decided to enforce.
 type RulesFile struct {
-	GeneratedAt  time.Time      `json:"generated_at"`
-	DrainVersion string         `json:"drain_version"`
-	LokiLabel    string         `json:"loki_label"`
-	Rules        []EnforcedRule `json:"rules"`
+	GeneratedAt  time.Time `json:"generated_at"`
+	DrainVersion string    `json:"drain_version"`
+	// DrainConfigHash covers the drain version, masking rules and seed templates the rules were made
+	// under; verify invalidates every rule when it changes.
+	DrainConfigHash string         `json:"drain_config_hash"`
+	LokiLabel       string         `json:"loki_label"`
+	Rules           []EnforcedRule `json:"rules"`
 }
 
 // EnforcedRule is one rule to enforce, with what it was decided on.
@@ -46,7 +49,7 @@ func WriteReport(dir string, c *Config, rep *Report) error {
 	if err := os.WriteFile(filepath.Join(dir, "report.json"), b, 0o644); err != nil {
 		return err
 	}
-	rf := RulesFile{GeneratedAt: rep.GeneratedAt, DrainVersion: rep.DrainVersion, LokiLabel: c.Scope.LokiLabel}
+	rf := RulesFile{GeneratedAt: rep.GeneratedAt, DrainVersion: rep.DrainVersion, DrainConfigHash: c.DrainConfigHash(), LokiLabel: c.Scope.LokiLabel}
 	for _, r := range rep.Recommendations {
 		if r.Action == "none" {
 			continue
@@ -194,11 +197,22 @@ type VerifyResult struct {
 	Violations []Violation `json:"violations"`
 	// Keep is the rules file with every violating rule removed: enforce it to revert.
 	Keep *RulesFile `json:"keep"`
+	// Drift is, per rule, the template traffic the rule no longer covers. It never fails verify.
+	Drift []RuleDrift `json:"drift,omitempty"`
+	// DeployedMode and DeployedDiffs compare the deployed pipeline config with the emitted one.
+	DeployedMode  string   `json:"deployed_mode,omitempty"`
+	DeployedDiffs []string `json:"deployed_diffs,omitempty"`
+}
+
+// VerifyOptions adds optional checks to Verify.
+type VerifyOptions struct {
+	Drift    bool   // measure per-rule template drift
+	Deployed []byte // the pipeline config actually deployed; nil skips the comparison
 }
 
 // Verify re-reads every evidence source, the topology and the drain version, and reports enforced
 // rules that are no longer safe.
-func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time) (*VerifyResult, error) {
+func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time, opt VerifyOptions) (*VerifyResult, error) {
 	rep := &Report{}
 	var services []string
 	seen := map[string]bool{}
@@ -230,6 +244,21 @@ func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time) (*Veri
 	if v, err := templating.DrainVersion(); err == nil && v != rf.DrainVersion {
 		global = append(global, fmt.Sprintf("rules were made with drain %s, this binary embeds %s", rf.DrainVersion, v))
 	}
+	if h := c.DrainConfigHash(); h != rf.DrainConfigHash {
+		global = append(global, "the drain version, masking rules or seed templates changed since the rules were made; re-analyse")
+	}
+	var deployedMode string
+	var deployedDiffs []string
+	if opt.Deployed != nil {
+		var err error
+		deployedMode, deployedDiffs, err = DeployedDiff(c, rf, opt.Deployed)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range deployedDiffs {
+			global = append(global, "the deployed pipeline config is not what emit produces for these rules ("+deployedMode+" mode): "+d)
+		}
+	}
 	type parsed struct {
 		q   analyze.UsageQuery
 		sel []logql.Selection
@@ -244,7 +273,15 @@ func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time) (*Veri
 		}
 		pqs = append(pqs, parsed{q: q, sel: p.Selections})
 	}
-	res := &VerifyResult{CheckedAt: now.UTC(), Keep: &RulesFile{GeneratedAt: rf.GeneratedAt, DrainVersion: rf.DrainVersion, LokiLabel: rf.LokiLabel}}
+	res := &VerifyResult{CheckedAt: now.UTC(), DeployedMode: deployedMode, DeployedDiffs: deployedDiffs,
+		Keep: &RulesFile{GeneratedAt: rf.GeneratedAt, DrainVersion: rf.DrainVersion, DrainConfigHash: rf.DrainConfigHash, LokiLabel: rf.LokiLabel}}
+	if opt.Drift {
+		d, err := c.Drift(ctx, rf, now)
+		if err != nil {
+			return nil, err
+		}
+		res.Drift = d
+	}
 	for _, r := range rf.Rules {
 		reasons := append([]string(nil), global...)
 		lang, err := automaton.Compile(r.Language)

@@ -50,7 +50,9 @@ prediction. Sampling keeps a line exactly when the SHA-256 of its text and times
 threshold, so the decision for any line can be recomputed.
 
 **New readers are caught.** `verify` re-reads every source and exits with code 3 when any enforced
-rule gains a reader or loses its evidence, and writes the rules that remain safe: the revert.
+rule gains a reader or loses its evidence, and writes the rules that remain safe: the revert. It also
+fails when the drain version, masking rules or seed templates differ from the ones the rules were made
+under, and, given `-deployed`, when the deployed pipeline config is not exactly what `emit` produces.
 
 ## Limits
 

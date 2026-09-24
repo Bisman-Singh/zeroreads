@@ -422,8 +422,8 @@ policy:
 		rule := func(id, svc string) app.EnforcedRule {
 			return app.EnforcedRule{Rule: emit.Rule{ID: id, ScopeAttr: "service.name", ScopeValue: svc, Language: `\Aline [0-9]\z`, Action: "aggregate"}, Service: svc}
 		}
-		rf := &app.RulesFile{DrainVersion: dv, LokiLabel: "service_name", Rules: []app.EnforcedRule{rule("r-checkout", "checkout"), rule("r-auth", "auth"), rule("r-orders", "orders")}}
-		vr, err := app.Verify(ctx, cfg, rf, time.Now())
+		rf := &app.RulesFile{DrainVersion: dv, DrainConfigHash: cfg.DrainConfigHash(), LokiLabel: "service_name", Rules: []app.EnforcedRule{rule("r-checkout", "checkout"), rule("r-auth", "auth"), rule("r-orders", "orders")}}
+		vr, err := app.Verify(ctx, cfg, rf, time.Now(), app.VerifyOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
