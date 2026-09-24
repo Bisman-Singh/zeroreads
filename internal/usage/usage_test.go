@@ -134,3 +134,24 @@ func TestReasonsMentionIgnored(t *testing.T) {
 		t.Fatalf("%+v", v)
 	}
 }
+
+// unpack replaces the line with the packed _entry value, like line_format: a filter after it sees a
+// different text, so it cannot exclude the rule's lines. Found by an external review against Loki.
+func TestUnpackRewritesTheLine(t *testing.T) {
+	packed := Rule{ID: "packed", Scope: map[string]string{"service_name": "checkout"},
+		Language: automaton.MustCompile(`\A\{"_entry":"hello","x":"1"\}\z`)}
+	for _, q := range []string{
+		`{service_name="checkout"} | unpack != "_entry"`,
+		`{service_name="checkout"} | unpack |= "hello"`,
+		`{service_name="checkout"} | unpack !~ "x"`,
+		`sum(count_over_time({service_name="checkout"} | unpack != "_entry" [5m]))`,
+	} {
+		if v := verdict(t, q, packed); !v.Used {
+			t.Fatalf("%s: %s", q, v.Reason)
+		}
+	}
+	// A filter before unpack still sees the original line.
+	if v := verdict(t, `{service_name="checkout"} != "_entry" | unpack`, packed); v.Used {
+		t.Fatalf("a filter before unpack excludes the packed line: %s", v.Reason)
+	}
+}

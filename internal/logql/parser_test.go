@@ -52,7 +52,9 @@ func TestParse(t *testing.T) {
 		{`{a="b"} | logfmt --strict --keep-empty | status >= 500 and duration > 1s or bytes < 10KB`, `a="b" |`},
 		{`{a="b"} | json first="a.b", second | line_format "{{.x}}" |= "after"`, `a="b" | #rewritten`},
 		{`{a="b"} |= "before" | decolorize |= "after"`, `a="b" | [contains:before] #rewritten`},
-		{`{a="b"} | regexp "(?P<x>\\w+)" | pattern "<ip> <_>" | unpack`, `a="b" |`},
+		{`{a="b"} | regexp "(?P<x>\\w+)" | pattern "<ip> <_>"`, `a="b" |`},
+		{`{a="b"} | unpack`, `a="b" | #rewritten`}, // unpack replaces the line with _entry
+		{`{a="b"} |= "x" | unpack != "y"`, `a="b" | [contains:x] #rewritten`},
 		{`{a="b"} | label_format x=y, z="{{.w}}" | drop a, b="c" | keep d`, `a="b" |`},
 		{`{a="b"} | level="error" status="500"`, `a="b" |`},
 		{`{a="b"} | (a="x" or b!="y"), c=~"z"`, `a="b" |`},

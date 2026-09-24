@@ -2,13 +2,18 @@
 package loki
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	crand "crypto/rand"
+	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"go.yaml.in/yaml/v3"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -372,4 +377,67 @@ func (c *Client) LabelNames(ctx context.Context, selector string, start, end tim
 // It is for bounded samples; use QueryRange to read everything.
 func (c *Client) Sample(ctx context.Context, query string, start, end time.Time, limit int) ([]Entry, error) {
 	return c.page(ctx, query, start, end, limit)
+}
+
+// OpenTail opens a live tail over a websocket, reads the handshake answer and closes it. Loki logs
+// the tail when it starts.
+func (c *Client) OpenTail(ctx context.Context, query string) error {
+	u, err := url.Parse(strings.TrimRight(c.Base, "/") + "/loki/api/v1/tail?query=" + url.QueryEscape(query))
+	if err != nil {
+		return err
+	}
+	host := u.Host
+	if u.Port() == "" {
+		port := "80"
+		if u.Scheme == "https" {
+			port = "443"
+		}
+		host = net.JoinHostPort(u.Hostname(), port)
+	}
+	d := &net.Dialer{Timeout: 10 * time.Second}
+	var conn net.Conn
+	if u.Scheme == "https" {
+		conn, err = tls.DialWithDialer(d, "tcp", host, &tls.Config{ServerName: u.Hostname(), MinVersion: tls.VersionTLS12})
+	} else {
+		conn, err = d.DialContext(ctx, "tcp", host)
+	}
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	key := make([]byte, 16)
+	if _, err := crand.Read(key); err != nil {
+		return err
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Sec-WebSocket-Version", "13")
+	req.Header.Set("Sec-WebSocket-Key", base64.StdEncoding.EncodeToString(key))
+	if c.OrgID != "" {
+		req.Header.Set("X-Scope-OrgID", c.OrgID)
+	}
+	switch {
+	case c.BearerToken != "":
+		req.Header.Set("Authorization", "Bearer "+c.BearerToken)
+	case c.Username != "":
+		req.SetBasicAuth(c.Username, c.Password)
+	}
+	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
+	if err := req.Write(conn); err != nil {
+		return err
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusSwitchingProtocols:
+		time.Sleep(time.Second) // let the querier register the tail before closing
+		return nil
+	case resp.StatusCode == 404 || resp.StatusCode == 501:
+		return ErrNotServed
+	}
+	return fmt.Errorf("loki: tail: HTTP %d", resp.StatusCode)
 }

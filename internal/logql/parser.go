@@ -682,7 +682,9 @@ func (p *parser) pipeStage(sel *Selection, inRange bool) error {
 		p.i++
 		return nil
 	case "unpack":
+		// unpack replaces the line with the packed _entry value, like line_format.
 		p.i++
+		sel.Rewritten = true
 		return nil
 	case "line_format":
 		p.i++

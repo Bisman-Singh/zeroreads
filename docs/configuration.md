@@ -109,6 +109,9 @@ pricing:
 |---|---|
 | `querylog-disabled` | the query log is not read |
 | `querylog-not-live` | the marker query never appeared in the query log |
+| `querylog-not-proven` | `prove_live` is off, so it is not proven that queries, tails and pattern requests are logged |
+| `querylog-tail-not-visible` | a marker live tail never appeared in Loki's logs (tails need info-level querier logs) |
+| `querylog-patterns-not-visible` | a marker pattern request never appeared (set `frontend.query_stats_enabled: true`) |
 | `querylog-window` | the query log starts after the evidence window starts |
 | `querylog-unreadable`, `querylog-unparsed` | the query log could not be read, or lines did not parse |
 | `ruler-not-checked`, `ruler-unreadable` | Loki ruler rules were not read |

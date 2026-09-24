@@ -206,17 +206,6 @@ func fbKeep(text string, ts int64, keep int) bool {
 
 func leftPad(s string, n int) string { return strings.Repeat("0", n-len(s)) + s }
 
-// fbRules is testRules without dedupe, which Fluent Bit cannot do.
-func fbRules() []Rule {
-	var out []Rule
-	for _, r := range testRules {
-		if r.Action != "dedupe" {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
 func TestFluentBitEnforcesExactly(t *testing.T) {
 	rules := fbRules()
 	out, err := FluentBit([][]byte{[]byte(fluentBitUserConfig)}, fluentBitTarget(), rules, Enforce)

@@ -124,3 +124,61 @@ func TestRulerRules(t *testing.T) {
 		}
 	}
 }
+
+// Live tails and pattern requests (Logs Drilldown) are not metrics.go lines; they must still be
+// read as usage, and their visibility proven.
+func TestQueryLogTailsAndPatterns(t *testing.T) {
+	base := env(t, "LOKI_URL")
+	client := &loki.Client{Base: base}
+	ql := &loki.QueryLog{Logs: client, Selector: `{service_name="loki"}`}
+	ctx := context.Background()
+	if err := ql.ProveTail(ctx, client, 90*time.Second); err != nil {
+		t.Fatalf("tail proof: %v", err)
+	}
+	if err := ql.ProvePatterns(ctx, client, 90*time.Second); err != nil {
+		t.Fatalf("pattern proof: %v", err)
+	}
+	bad := &loki.QueryLog{Logs: client, Selector: `{service_name="nothing-here"}`}
+	if err := bad.ProveTail(ctx, client, 8*time.Second); err == nil {
+		t.Fatal("tail proof passed with a selector that reads no query log")
+	}
+	if err := bad.ProvePatterns(ctx, client, 8*time.Second); err == nil {
+		t.Fatal("pattern proof passed with a selector that reads no query log")
+	}
+
+	start := time.Now()
+	n := strconv.FormatInt(time.Now().UnixNano(), 10)
+	tail := `{service_name="checkout"} |= "tail-user-` + n + `"`
+	user := &loki.Client{Base: base}
+	// A person tailing: sent without the analyzer's tag, like any client.
+	if err := user.OpenTail(ctx, tail); err != nil {
+		t.Fatal(err)
+	}
+	pattern := `{service_name="checkout", k8s_namespace_name="patterns-` + n + `"}`
+	v := url.Values{}
+	v.Set("query", pattern)
+	v.Set("start", strconv.FormatInt(time.Now().Add(-time.Hour).UnixNano(), 10))
+	v.Set("end", strconv.FormatInt(time.Now().UnixNano(), 10))
+	resp, err := http.Get(base + "/loki/api/v1/patterns?" + v.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	for deadline := time.Now().Add(90 * time.Second); ; time.Sleep(3 * time.Second) {
+		res, err := ql.Read(ctx, start.Add(-time.Minute), time.Now().Add(time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		types := map[string]string{}
+		for _, q := range res.Queries {
+			types[q.Query] = q.Type
+		}
+		if types[tail] == "tail" && types[pattern] == "patterns" {
+			t.Logf("a live tail and a pattern request were read as usage (%d tails, %d pattern requests)", res.Tails, res.Patterns)
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("tail %q or pattern request %q missing: %v", types[tail], types[pattern], types)
+		}
+	}
+}

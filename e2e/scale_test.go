@@ -144,7 +144,7 @@ collector:
     file/logs: {exempt: "e2e local copy"}
 policy:
   actions: [aggregate]
-  acknowledge: [grafana-not-configured, ruler-not-checked, querylog-window]
+  acknowledge: [grafana-not-configured, ruler-not-checked, querylog-window, querylog-not-proven]
 `, run, lokiURL, gen.IPMaskName, gen.IPMaskPattern, filepath.Join(work, "loop-user.yaml"))), 0o644)
 	outDir := filepath.Join(work, "scale-out")
 	start = time.Now()

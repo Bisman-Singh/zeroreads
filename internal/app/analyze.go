@@ -506,6 +506,27 @@ func (c *Config) evidence(ctx context.Context, now time.Time, services []string,
 			} else {
 				rep.Evidence.QueryLogLive = "proven with a marker query"
 			}
+			// Live tails and pattern requests (Logs Drilldown) are logged by other lines, under other
+			// settings: each is proven separately. An endpoint the target does not serve has no users.
+			target := c.lokiClient(c.Loki.URL)
+			for _, p := range []struct {
+				key   string
+				prove func(context.Context, *loki.Client, time.Duration) error
+				what  string
+			}{
+				{"querylog-tail-not-visible", ql.ProveTail, "live tails"},
+				{"querylog-patterns-not-visible", ql.ProvePatterns, "pattern requests"},
+			} {
+				switch err := p.prove(ctx, target, 2*time.Minute); {
+				case errors.Is(err, loki.ErrNotServed):
+					rep.Notes = append(rep.Notes, "Loki does not serve "+p.what+", so none can read the lines")
+				case err != nil:
+					gaps = append(gaps, analyze.Gap{Source: "loki", Origin: "query-log", Key: p.key, Reason: err.Error()})
+				}
+			}
+		} else {
+			gaps = append(gaps, analyze.Gap{Source: "loki", Origin: "query-log", Key: "querylog-not-proven",
+				Reason: "evidence.query_log.prove_live is off, so it is not proven that queries, live tails and pattern requests are logged"})
 		}
 		res, err := ql.Read(ctx, from, now)
 		if err != nil {

@@ -16,7 +16,8 @@ exactly is treated as reading more, never less:
 
 - a query that does not parse reads and counts every line
 - a template variable in a filter or matcher reads every line
-- label filters, parsers and `line_format` never narrow what a query reads
+- label filters and parsers never narrow what a query reads, and a filter after `line_format`,
+  `decolorize` or `unpack` (which replace the line) is not used to exclude anything
 - pattern (`|>`) and `ip()` filters, and case-insensitive negative regex filters, are ignored
 - a line filter on a structured (JSON) record reads every line of that service
 
@@ -29,6 +30,11 @@ confirms the field is a plain `keyword` everywhere in scope, with no normalizer,
 it and no document holding several values. SQL, PPL, Lucene query strings, KQL, `_msearch` and every
 unknown endpoint read everything. A request denied after authentication still counts as a read,
 because the REST audit entry is written before the denial.
+
+Besides range and instant queries, the query log is read for live tails and for pattern requests
+(Grafana Logs Drilldown), which Loki logs on other lines and under other settings; each is proven
+visible with its own marker or reported as a gap. Label, series and stats requests read only the index
+and are not readers; a rule that would empty a stream is blocked instead.
 
 When a query can read a rule's lines, the report shows a sample line it would read. That line is
 re-checked with the real regular expression engine before it is shown.

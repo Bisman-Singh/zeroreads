@@ -3,6 +3,7 @@ package loki
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net/http"
@@ -221,5 +222,31 @@ func TestQueryLogWithoutFrontend(t *testing.T) {
 	}
 	if res.Component != "querier" || len(res.Queries) != 1 || res.Queries[0].Count != 2 {
 		t.Fatalf("%+v", res)
+	}
+}
+
+func TestProofsOfTailAndPatterns(t *testing.T) {
+	// A Loki that serves neither endpoint: nobody can tail or ask for patterns.
+	none := httptest.NewServer(http.NotFoundHandler())
+	defer none.Close()
+	ql := &QueryLog{Logs: &Client{Base: none.URL}, Selector: `{s="loki"}`}
+	if err := ql.ProvePatterns(context.Background(), &Client{Base: none.URL}, time.Second); !errors.Is(err, ErrNotServed) {
+		t.Fatalf("patterns on a server without them: %v", err)
+	}
+	if err := ql.ProveTail(context.Background(), &Client{Base: none.URL}, time.Second); !errors.Is(err, ErrNotServed) {
+		t.Fatalf("tail on a server without it: %v", err)
+	}
+	// A Loki that serves patterns but never logs them: the proof must fail, not pass.
+	quiet := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/loki/api/v1/patterns" {
+			w.Write([]byte(`{"status":"success","data":[]}`))
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"status": "success", "data": map[string]any{"resultType": "streams", "result": []any{}}})
+	}))
+	defer quiet.Close()
+	ql = &QueryLog{Logs: &Client{Base: quiet.URL}, Selector: `{s="loki"}`}
+	if err := ql.ProvePatterns(context.Background(), &Client{Base: quiet.URL}, 100*time.Millisecond); err == nil || errors.Is(err, ErrNotServed) {
+		t.Fatalf("patterns served but never logged must fail the proof: %v", err)
 	}
 }

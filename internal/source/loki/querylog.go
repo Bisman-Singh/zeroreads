@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,13 +51,33 @@ type Result struct {
 	Unparsed int
 	// Metadata counts labels, series and stats requests: they read the index, not lines.
 	Metadata int
+	// Tails and Patterns count live tails and pattern requests (Logs Drilldown) read as usage.
+	Tails, Patterns int
 }
 
 // Read collects executed queries between start and end. Queries the analyzer itself sent (tagged
 // with Tag) are excluded.
 func (q *QueryLog) Read(ctx context.Context, start, end time.Time) (Result, error) {
-	logQuery := q.Selector + ` |= "metrics.go" |= "query="`
+	// metrics.go lines are range and instant queries; live tails and pattern requests are logged
+	// elsewhere: "starting to tail logs" by the querier, and the frontend's query stats line
+	// (frontend.query_stats_enabled) for /loki/api/v1/patterns.
+	logQuery := q.Selector + ` |~ "caller=metrics\\.go|starting to tail logs|path=/loki/api/v1/patterns "`
 	var res Result
+	other := map[string]*ExecutedQuery{} // tails and pattern requests: logged once each, by one component
+	record := func(byQuery map[string]*ExecutedQuery, query, typ, comp string, ts time.Time) {
+		eq := byQuery[query]
+		if eq == nil {
+			eq = &ExecutedQuery{Query: query, Type: typ, First: ts, Component: comp}
+			byQuery[query] = eq
+		}
+		eq.Count++
+		if ts.Before(eq.First) {
+			eq.First = ts
+		}
+		if ts.After(eq.Last) {
+			eq.Last = ts
+		}
+	}
 	// Executions are folded per component as they stream in: a query log can hold millions of lines.
 	byComponent := map[string]map[string]*ExecutedQuery{}
 	err := q.Logs.EachWindow(ctx, logQuery, start, end, 5000, func(e Entry) error {
@@ -62,6 +85,28 @@ func (q *QueryLog) Read(ctx context.Context, start, end time.Time) (Result, erro
 		m, err := logfmt.Parse(e.Line)
 		if err != nil {
 			res.Unparsed++
+			return nil
+		}
+		switch {
+		case m["msg"] == "starting to tail logs" && m["selectors"] != "":
+			if res.Oldest.IsZero() || e.TS.Before(res.Oldest) {
+				res.Oldest = e.TS
+			}
+			if strings.Contains(m["selectors"], probePrefix) {
+				return nil
+			}
+			res.Tails++
+			record(other, m["selectors"], "tail", "tail", e.TS) // a person watching lines arrive
+			return nil
+		case m["path"] == "/loki/api/v1/patterns" && m["param_query"] != "":
+			if res.Oldest.IsZero() || e.TS.Before(res.Oldest) {
+				res.Oldest = e.TS
+			}
+			if strings.Contains(m["param_query"], probePrefix) {
+				return nil
+			}
+			res.Patterns++
+			record(other, m["param_query"], "patterns", "patterns", e.TS) // pattern counts change with the lines
 			return nil
 		}
 		if !strings.HasPrefix(m["caller"], "metrics.go") || m["query"] == "" {
@@ -129,6 +174,16 @@ func (q *QueryLog) Read(ctx context.Context, start, end time.Time) (Result, erro
 			}
 		}
 	}
+	for k, eq := range other {
+		if prev, ok := byQuery[k]; ok {
+			prev.Count += eq.Count
+			if eq.Last.After(prev.Last) {
+				prev.Last = eq.Last
+			}
+			continue
+		}
+		byQuery[k] = eq
+	}
 	for _, eq := range byQuery {
 		res.Queries = append(res.Queries, *eq)
 	}
@@ -180,6 +235,83 @@ func (q *QueryLog) ProveLive(ctx context.Context, target *Client, timeout time.D
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("marker query %s never appeared in the query log within %s: the query log is not enabled (frontend.log_queries_longer_than must be negative) or its logs are not collected by %s", marker, timeout, q.Selector)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// ErrNotServed means the target does not serve the endpoint at all, so nobody can use it.
+var ErrNotServed = fmt.Errorf("loki: endpoint not served")
+
+// ProveTail opens a live tail with a unique marker and waits until the query log records it.
+// ErrNotServed means the target refuses tails.
+func (q *QueryLog) ProveTail(ctx context.Context, target *Client, timeout time.Duration) error {
+	marker, err := newMarker()
+	if err != nil {
+		return err
+	}
+	probe := *target
+	probe.untagged = true
+	if err := probe.OpenTail(ctx, `{sievelog_probe="`+marker+`"}`); err != nil {
+		return err
+	}
+	return q.waitFor(ctx, marker, timeout, func(m map[string]string) bool {
+		return m["msg"] == "starting to tail logs" && strings.Contains(m["selectors"], marker)
+	}, "live tails are not logged (they need info-level logs from the queriers)")
+}
+
+// ProvePatterns sends a unique marker pattern request, as Logs Drilldown does, and waits until the
+// query log records it. ErrNotServed means the target does not serve patterns.
+func (q *QueryLog) ProvePatterns(ctx context.Context, target *Client, timeout time.Duration) error {
+	marker, err := newMarker()
+	if err != nil {
+		return err
+	}
+	probe := *target
+	probe.untagged = true
+	v := url.Values{}
+	v.Set("query", `{sievelog_probe="`+marker+`"}`)
+	v.Set("start", strconv.FormatInt(time.Now().Add(-time.Hour).UnixNano(), 10))
+	v.Set("end", strconv.FormatInt(time.Now().UnixNano(), 10))
+	if _, err := probe.get(ctx, "/loki/api/v1/patterns", v); err != nil {
+		var he *HTTPError
+		if errors.As(err, &he) && (he.Status == 404 || he.Status == 501) {
+			return ErrNotServed
+		}
+		return fmt.Errorf("sending marker pattern request: %w", err)
+	}
+	return q.waitFor(ctx, marker, timeout, func(m map[string]string) bool {
+		return m["path"] == "/loki/api/v1/patterns" && strings.Contains(m["param_query"], marker)
+	}, "pattern requests are not logged (set frontend.query_stats_enabled: true)")
+}
+
+func newMarker() (string, error) {
+	nonce := make([]byte, 8)
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	return probePrefix + hex.EncodeToString(nonce), nil
+}
+
+func (q *QueryLog) waitFor(ctx context.Context, marker string, timeout time.Duration, match func(map[string]string) bool, why string) error {
+	sent := time.Now().Add(-time.Minute)
+	deadline := time.Now().Add(timeout)
+	for {
+		entries, err := q.Logs.QueryRange(ctx, q.Selector+` |= "`+marker+`"`, sent, time.Now().Add(time.Minute), 100)
+		if err != nil {
+			return fmt.Errorf("reading the query log: %w", err)
+		}
+		for _, e := range entries {
+			if m, err := logfmt.Parse(e.Line); err == nil && match(m) {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("marker %s never appeared in the query log within %s: %s", marker, timeout, why)
 		}
 		select {
 		case <-ctx.Done():
