@@ -54,31 +54,24 @@ type Result struct {
 // with Tag) are excluded.
 func (q *QueryLog) Read(ctx context.Context, start, end time.Time) (Result, error) {
 	logQuery := q.Selector + ` |= "metrics.go" |= "query="`
-	entries, err := q.Logs.QueryWindow(ctx, logQuery, start, end, 5000)
-	if err != nil {
-		return Result{}, err
-	}
-	res := Result{Lines: len(entries)}
-	type obs struct {
-		component, query, typ, source string
-		ts                            time.Time
-	}
-	var all []obs
-	frontend := false
-	for _, e := range entries {
+	var res Result
+	// Executions are folded per component as they stream in: a query log can hold millions of lines.
+	byComponent := map[string]map[string]*ExecutedQuery{}
+	err := q.Logs.EachWindow(ctx, logQuery, start, end, 5000, func(e Entry) error {
+		res.Lines++
 		m, err := logfmt.Parse(e.Line)
 		if err != nil {
 			res.Unparsed++
-			continue
+			return nil
 		}
 		if !strings.HasPrefix(m["caller"], "metrics.go") || m["query"] == "" {
-			continue
+			return nil
 		}
 		if res.Oldest.IsZero() || e.TS.Before(res.Oldest) {
 			res.Oldest = e.TS
 		}
 		if isOwnQuery(m["source"]) || strings.Contains(m["query"], probePrefix) {
-			continue // the analyzer's own reads and liveness markers are not usage
+			return nil // the analyzer's own reads and liveness markers are not usage
 		}
 		switch m["query_type"] {
 		case "labels", "series", "stats":
@@ -86,36 +79,54 @@ func (q *QueryLog) Read(ctx context.Context, start, end time.Time) (Result, erro
 			// estimates. Removal changes them only by emptying a stream, which analysis checks
 			// directly. They carry no query tags, so the analyzer's own cannot be told apart anyway.
 			res.Metadata++
-			continue
+			return nil
 		}
-		if m["component"] == "frontend" {
-			frontend = true
+		comp := m["component"]
+		byQuery := byComponent[comp]
+		if byQuery == nil {
+			byQuery = map[string]*ExecutedQuery{}
+			byComponent[comp] = byQuery
 		}
-		all = append(all, obs{component: m["component"], query: m["query"], typ: m["query_type"], source: m["source"], ts: e.TS})
-	}
-	res.Component = "querier"
-	if frontend {
-		res.Component = "frontend"
-	}
-	byQuery := map[string]*ExecutedQuery{}
-	for _, o := range all {
-		if o.component != res.Component {
-			continue
-		}
-		eq := byQuery[o.query]
+		eq := byQuery[m["query"]]
 		if eq == nil {
-			eq = &ExecutedQuery{Query: o.query, Type: o.typ, First: o.ts, Component: o.component}
-			byQuery[o.query] = eq
+			eq = &ExecutedQuery{Query: m["query"], Type: m["query_type"], First: e.TS, Component: comp}
+			byQuery[m["query"]] = eq
 		}
 		eq.Count++
-		if o.ts.Before(eq.First) {
-			eq.First = o.ts
+		if e.TS.Before(eq.First) {
+			eq.First = e.TS
 		}
-		if o.ts.After(eq.Last) {
-			eq.Last = o.ts
+		if e.TS.After(eq.Last) {
+			eq.Last = e.TS
 		}
-		if o.source != "" && !contains(eq.Sources, o.source) {
-			eq.Sources = append(eq.Sources, o.source)
+		if src := m["source"]; src != "" && !contains(eq.Sources, src) {
+			eq.Sources = append(eq.Sources, src)
+		}
+		return nil
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	// The frontend logs every query once; queriers log sub-queries. Prefer the frontend when present.
+	byQuery := byComponent["frontend"]
+	res.Component = "frontend"
+	if byQuery == nil {
+		// No query frontend: queriers log the queries themselves, without a component field.
+		res.Component, byQuery = "querier", map[string]*ExecutedQuery{}
+		for _, m := range byComponent {
+			for k, eq := range m {
+				if prev, ok := byQuery[k]; ok {
+					prev.Count += eq.Count
+					if eq.First.Before(prev.First) {
+						prev.First = eq.First
+					}
+					if eq.Last.After(prev.Last) {
+						prev.Last = eq.Last
+					}
+					continue
+				}
+				byQuery[k] = eq
+			}
 		}
 	}
 	for _, eq := range byQuery {

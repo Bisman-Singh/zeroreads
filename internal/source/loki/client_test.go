@@ -205,3 +205,21 @@ func TestQueryLogSkipsIndexOnlyRequests(t *testing.T) {
 		t.Fatalf("metadata %d, queries %+v", res.Metadata, res.Queries)
 	}
 }
+
+func TestQueryLogWithoutFrontend(t *testing.T) {
+	base := time.Now().Add(-time.Minute).UnixNano()
+	lines := []fakeLine{
+		{"loki", base, `level=info caller=metrics.go:227 org_id=fake query_type=filter query="{a=\"b\"} |= \"x\""`},
+		{"loki", base + 1, `level=info caller=metrics.go:227 org_id=fake query_type=filter query="{a=\"b\"} |= \"x\""`},
+	}
+	calls := 0
+	srv := fakeLoki(t, lines, &calls)
+	defer srv.Close()
+	res, err := (&QueryLog{Logs: &Client{Base: srv.URL}, Selector: `{s="loki"}`}).Read(context.Background(), time.Unix(0, base-1), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Component != "querier" || len(res.Queries) != 1 || res.Queries[0].Count != 2 {
+		t.Fatalf("%+v", res)
+	}
+}

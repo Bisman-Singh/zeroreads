@@ -92,7 +92,8 @@ type Use struct {
 	// Opaque is true when the query language is not the DSL (SQL, PPL, KQL, Lucene): nothing is
 	// interpreted and it reads everything in its indices.
 	Opaque bool
-	When   time.Time
+	When   time.Time // last seen
+	Count  int       // audited executions folded into this use; 0 for stored queries
 }
 
 // Gap is evidence that could not be read.
@@ -415,6 +416,7 @@ func (r *Reader) readAudit(ctx context.Context, start, end time.Time, res *Resul
 		map[string]any{"match": map[string]any{"audit_request_layer": "REST"}},
 		map[string]any{"range": map[string]any{"@timestamp": map[string]any{"gte": start.UTC().Format(time.RFC3339Nano), "lt": end.UTC().Format(time.RFC3339Nano)}}},
 	}}}
+	seen := map[string]int{}
 	return r.scan(ctx, r.AuditIndex, q, func(h hit) error {
 		res.Lines++
 		var e struct {
@@ -462,6 +464,17 @@ func (r *Reader) readAudit(ctx context.Context, start, end time.Time, res *Resul
 			q, ok := dslQuery([]byte(e.Body))
 			u.Query, u.Opaque = q, !ok
 		}
+		// Identical requests are one use: a busy cluster repeats the same searches millions of times.
+		k := u.Origin + "\x00" + strings.Join(u.Indices, ",") + "\x00" + string(u.Query) + "\x00" + strconv.FormatBool(u.Opaque)
+		if i, ok := seen[k]; ok {
+			res.Uses[i].Count++
+			if u.When.After(res.Uses[i].When) {
+				res.Uses[i].When = u.When
+			}
+			return nil
+		}
+		u.Count = 1
+		seen[k] = len(res.Uses)
 		res.Uses = append(res.Uses, u)
 		return nil
 	})

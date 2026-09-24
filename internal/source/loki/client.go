@@ -136,44 +136,69 @@ var Chunk = 24 * time.Hour
 // QueryWindow reads [start, end) in consecutive chunks of at most Chunk.
 func (c *Client) QueryWindow(ctx context.Context, query string, start, end time.Time, pageSize int) ([]Entry, error) {
 	var out []Entry
+	err := c.EachWindow(ctx, query, start, end, pageSize, func(e Entry) error { out = append(out, e); return nil })
+	return out, err
+}
+
+// EachWindow calls fn for every line of [start, end), oldest first, in chunks of at most Chunk,
+// without holding more than one page in memory.
+func (c *Client) EachWindow(ctx context.Context, query string, start, end time.Time, pageSize int, fn func(Entry) error) error {
 	for s := start; s.Before(end); s = s.Add(Chunk) {
 		e := s.Add(Chunk)
 		if e.After(end) {
 			e = end
 		}
-		part, err := c.QueryRange(ctx, query, s, e, pageSize)
-		if err != nil {
-			return nil, fmt.Errorf("window %s..%s: %w", s.Format(time.RFC3339), e.Format(time.RFC3339), err)
+		if err := c.Each(ctx, query, s, e, pageSize, fn); err != nil {
+			return fmt.Errorf("window %s..%s: %w", s.Format(time.RFC3339), e.Format(time.RFC3339), err)
 		}
-		out = append(out, part...)
+	}
+	return nil
+}
+
+// QueryRange returns every line of a log query in [start, end), oldest first.
+func (c *Client) QueryRange(ctx context.Context, query string, start, end time.Time, pageSize int) ([]Entry, error) {
+	var out []Entry
+	if err := c.Each(ctx, query, start, end, pageSize, func(e Entry) error { out = append(out, e); return nil }); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
 
-// QueryRange returns every line of a log query in [start, end), oldest first, paging forward by
+// Each calls fn for every line of a log query in [start, end), oldest first, paging forward by
 // time. A page never splits the lines of one timestamp: the last timestamp of a full page is re-read
 // by the next page, and a timestamp holding more lines than a page is read on its own with a larger
 // limit.
-func (c *Client) QueryRange(ctx context.Context, query string, start, end time.Time, pageSize int) ([]Entry, error) {
+func (c *Client) Each(ctx context.Context, query string, start, end time.Time, pageSize int, fn func(Entry) error) error {
 	if pageSize <= 0 {
 		pageSize = 5000
 	}
-	var out []Entry
+	emit := func(es []Entry) error {
+		for _, e := range es {
+			if err := fn(e); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	cursor := start
 	for cursor.Before(end) {
 		page, err := c.page(ctx, query, cursor, end, pageSize)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if len(page) < pageSize {
-			return append(out, page...), nil
+			return emit(page)
 		}
 		last := page[len(page)-1].TS
 		if !last.Equal(page[0].TS) {
+			var before []Entry
 			for _, e := range page {
 				if e.TS.Before(last) {
-					out = append(out, e)
+					before = append(before, e)
 				}
+			}
+			if err := emit(before); err != nil {
+				return err
 			}
 			cursor = last
 			continue
@@ -181,20 +206,22 @@ func (c *Client) QueryRange(ctx context.Context, query string, start, end time.T
 		// The whole page is one timestamp: read that nanosecond alone until it fits.
 		for limit := pageSize * 2; ; limit *= 2 {
 			if limit > MaxLimit {
-				return nil, ErrTruncated
+				return ErrTruncated
 			}
 			all, err := c.page(ctx, query, last, last.Add(time.Nanosecond), limit)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if len(all) < limit {
-				out = append(out, all...)
+				if err := emit(all); err != nil {
+					return err
+				}
 				break
 			}
 		}
 		cursor = last.Add(time.Nanosecond)
 	}
-	return out, nil
+	return nil
 }
 
 func (c *Client) page(ctx context.Context, query string, start, end time.Time, limit int) ([]Entry, error) {

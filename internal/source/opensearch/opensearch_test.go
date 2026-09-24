@@ -153,11 +153,19 @@ func TestReadAudit(t *testing.T) {
 	if _, ok := keys["opensearch-plugins"]; !ok {
 		t.Fatalf("missing plugins gap")
 	}
-	if res.Lines != len(f.audit) || len(res.Uses) != 9 {
+	if res.Lines != len(f.audit) || len(res.Uses) != 6 {
 		t.Fatalf("lines %d uses %d: %+v", res.Lines, len(res.Uses), res.Uses)
 	}
 	chk := Scope{Indices: []string{"logs-checkout"}, ServiceField: "service.name", Service: "checkout"}
-	want := []bool{true, false, false, true, false, false, true, false, false}
+	// Identical requests fold into one use: the bounded aggregation into the plain term search, the
+	// global aggregation and the search pipeline into the q-parameter search (all opaque on logs-*).
+	counts := []int{2, 3, 1, 1, 1, 1}
+	for i, u := range res.Uses {
+		if u.Count != counts[i] {
+			t.Fatalf("use %d (%s) count %d, want %d", i, u.Origin, u.Count, counts[i])
+		}
+	}
+	want := []bool{true, false, false, true, false, false}
 	for i, u := range res.Uses {
 		if got := u.CannotRead(chk); got != want[i] {
 			t.Fatalf("use %d (%s): CannotRead %v", i, u.Origin, got)
