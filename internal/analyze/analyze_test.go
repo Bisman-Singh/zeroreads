@@ -154,3 +154,57 @@ func TestScopedReadersBlockOnlyTheirService(t *testing.T) {
 		}
 	}
 }
+
+func TestRollupRewritesCountingReaders(t *testing.T) {
+	pol := DefaultPolicy()
+	pol.Actions = []string{"rollup"}
+	streams := map[string]bool{"service_name": true}
+	c1, c2 := cache, health
+	c1.StreamLabels, c2.StreamLabels = streams, streams
+	counting := `sum(count_over_time({service_name="checkout"} [5m])) > 100`
+	stored := UsageQuery{Source: "grafana", Origin: "g org 1 alertrule:a/0", Store: "grafana", StoreURL: "http://g", Org: 1, Path: "alertrule:a/0", Expr: counting}
+	executed := UsageQuery{Source: "loki-querylog", Origin: "query-log (ruler)", Expr: counting, Count: 9}
+	recs, err := Decide([]Candidate{c1, c2}, []UsageQuery{stored, executed}, nil, nil, pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var news []string
+	for _, r := range recs {
+		if r.Action != "rollup" || len(r.Rewrites) != 2 {
+			t.Fatalf("%s: %+v", r.Candidate.Template, r)
+		}
+		for _, rw := range r.Rewrites {
+			news = append(news, rw.New)
+		}
+	}
+	for _, n := range news {
+		if n != news[0] || !strings.Contains(n, "sievelog rollup "+recs[0].ID) || !strings.Contains(n, "sievelog rollup "+recs[1].ID) {
+			t.Fatalf("one combined rewrite for both rules expected:\n%s", strings.Join(news, "\n"))
+		}
+	}
+
+	// A reader that shows lines, an ad-hoc executed count, or a store that cannot be written keeps blocking.
+	for _, q := range []UsageQuery{
+		{Source: "grafana", Origin: "p", Store: "grafana", Path: "dashboard:d/panel:1/A", Expr: `{service_name="checkout"} |= "cache"`},
+		{Source: "loki-querylog", Origin: "query-log (frontend)", Expr: `sum(count_over_time({service_name="checkout"} [1m]))`},
+		{Source: "grafana", Origin: "p", Store: "grafana", Path: "shorturl:x/left/0", Expr: counting},
+		{Source: "grafana", Origin: "p", Store: "grafana", Path: "alertrule:b/0", Expr: `sum(bytes_over_time({service_name="checkout"} [5m]))`},
+	} {
+		recs, _ := Decide([]Candidate{c1}, []UsageQuery{q}, nil, nil, pol)
+		if recs[0].Action != "none" {
+			t.Fatalf("%+v must block: %+v", q, recs[0])
+		}
+	}
+	// Structured rules never roll up.
+	s := c1
+	s.Structured, s.Field = true, "msg"
+	recs, _ = Decide([]Candidate{s}, []UsageQuery{stored}, nil, nil, pol)
+	if recs[0].Action != "none" {
+		t.Fatalf("structured: %+v", recs[0])
+	}
+	// With no reader, rollup is just the least lossy allowed action.
+	recs, _ = Decide([]Candidate{c1}, nil, nil, nil, pol)
+	if recs[0].Action != "rollup" || len(recs[0].Rewrites) != 0 {
+		t.Fatalf("no reader: %+v", recs[0])
+	}
+}

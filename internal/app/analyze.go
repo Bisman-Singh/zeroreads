@@ -138,11 +138,18 @@ func Analyze(ctx context.Context, c *Config, now time.Time) (*Report, error) {
 	if pol.ErrorPattern == "" {
 		pol.ErrorPattern = analyze.DefaultErrorPattern
 	}
-	if c.Runtime == "fluentbit" {
+	if c.Runtime != "collector" {
 		var acts []string
 		for _, a := range pol.Actions {
-			if a == "dedupe" {
+			switch {
+			case a == "dedupe" && c.Runtime == "fluentbit":
 				rep.Notes = append(rep.Notes, "dedupe is not offered: Fluent Bit cannot collapse lines while keeping their count")
+				continue
+			case a == "rollup" && c.Runtime == "fluentbit":
+				rep.Notes = append(rep.Notes, "rollup is not offered: Fluent Bit cannot collapse lines while keeping their count")
+				continue
+			case a == "rollup":
+				rep.Notes = append(rep.Notes, "rollup is not offered for "+c.Runtime+"; it is emitted for the OpenTelemetry Collector")
 				continue
 			}
 			acts = append(acts, a)
@@ -151,6 +158,9 @@ func Analyze(ctx context.Context, c *Config, now time.Time) (*Report, error) {
 	}
 	recs, err := analyze.Decide(cands, queries, scoped, gaps, pol)
 	if err != nil {
+		return nil, err
+	}
+	if err := c.keepStreams(ctx, lc, recs, start, now); err != nil {
 		return nil, err
 	}
 	rep.Recommendations = recs
@@ -249,6 +259,14 @@ func (c *Config) discover(ctx context.Context, lc *loki.Client, svc string, star
 	entries, err := c.sample(ctx, lc, svc, start, end)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("sampling: %w", err)
+	}
+	names, err := lc.LabelNames(ctx, c.selector(svc), start, end)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("stream labels: %w", err)
+	}
+	streamLabels := map[string]bool{}
+	for _, n := range names {
+		streamLabels[n] = true
 	}
 	var notes []string
 	var inputs []templating.Input
@@ -363,7 +381,7 @@ func (c *Config) discover(ctx context.Context, lc *loki.Client, svc string, star
 		cands = append(cands, analyze.Candidate{
 			Service: svc, Scope: map[string]string{c.Scope.LokiLabel: svc}, Template: tpl, Language: lang.Regex,
 			Structured: field != "", Field: field, Constant: constant, Samples: lang.Samples,
-			Lines: lines, Bytes: bytes, Window: window, Severities: sev,
+			Lines: lines, Bytes: bytes, Window: window, Severities: sev, StreamLabels: streamLabels,
 		})
 	}
 	return cands, skipped, notes, nil
@@ -381,6 +399,93 @@ func (c *Config) scalar(ctx context.Context, lc *loki.Client, q string, at time.
 		return s[0].Value, nil
 	}
 	return 0, fmt.Errorf("expected one series from %s, got %d", q, len(s))
+}
+
+// removes reports whether an action leaves no record at all for some lines. Dedupe and rollup
+// always leave a record where lines were.
+func removes(action string) bool {
+	return action == "drop" || action == "aggregate" || action == "sample"
+}
+
+// keepStreams blocks rules whose removal would leave some stream with no line at all in the
+// window: the stream would disappear from label, series and volume results, which nothing else in
+// the analysis models. Counting is exact, per stream label set, from Loki itself.
+func (c *Config) keepStreams(ctx context.Context, lc *loki.Client, recs []analyze.Recommendation, start, now time.Time) error {
+	rng := "[" + strconv.FormatInt(int64(now.Sub(start)/time.Second), 10) + "s]"
+	bySvc := map[string][]int{}
+	var svcs []string
+	for i, r := range recs {
+		if removes(r.Action) {
+			if _, ok := bySvc[r.Candidate.Service]; !ok {
+				svcs = append(svcs, r.Candidate.Service)
+			}
+			bySvc[r.Candidate.Service] = append(bySvc[r.Candidate.Service], i)
+		}
+	}
+	for _, svc := range svcs {
+		idx := bySvc[svc]
+		var labels []string
+		for l := range recs[idx[0]].Candidate.StreamLabels {
+			labels = append(labels, l)
+		}
+		sort.Strings(labels)
+		streams := func(rules []int) (float64, error) {
+			var line, field []string
+			for _, i := range rules {
+				cd := recs[i].Candidate
+				if cd.Structured {
+					field = append(field, fmt.Sprintf("| json sievelog_f%d=%s | sievelog_f%d!~%s", i, strconv.Quote(cd.Field), i, logqlString(cd.Language)))
+				} else {
+					line = append(line, "!~ "+logqlString(cd.Language))
+				}
+			}
+			q := c.selector(svc)
+			if len(line) > 0 {
+				q += " " + strings.Join(line, " ")
+			}
+			if len(field) > 0 {
+				// A line that is not JSON is dropped here, so it can only count as removed: the check
+				// errs towards blocking.
+				q += " " + strings.Join(field, " ") + ` | __error__=""`
+			}
+			return c.scalar(ctx, lc, fmt.Sprintf("count(sum by (%s) (count_over_time(%s %s)))", strings.Join(labels, ", "), q, rng), now)
+		}
+		before, err := streams(nil)
+		if err != nil {
+			return fmt.Errorf("counting streams of %s: %w", svc, err)
+		}
+		block := func(i int, why string) {
+			recs[i].Action, recs[i].Keep, recs[i].RemovedBytesPerDay, recs[i].Rewrites = "none", 0, 0, nil
+			recs[i].Blockers = append(recs[i].Blockers, why)
+		}
+		for _, i := range idx {
+			after, err := streams([]int{i})
+			if err != nil {
+				return fmt.Errorf("counting streams of %s: %w", svc, err)
+			}
+			if after < before {
+				block(i, fmt.Sprintf("%.0f of %.0f streams hold only these lines; removing them would make those streams disappear", before-after, before))
+			}
+		}
+		var left []int
+		for _, i := range idx {
+			if removes(recs[i].Action) {
+				left = append(left, i)
+			}
+		}
+		if len(left) > 1 {
+			after, err := streams(left)
+			if err != nil {
+				return fmt.Errorf("counting streams of %s: %w", svc, err)
+			}
+			if after < before {
+				for _, i := range left {
+					block(i, fmt.Sprintf("together with the other rules of %s, removing these lines would empty %.0f streams", svc, before-after))
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // evidence reads every usage source. Anything that cannot be read becomes a gap with a stable key.
@@ -438,7 +543,8 @@ func (c *Config) evidence(ctx context.Context, now time.Time, services []string,
 		}
 		rep.Evidence.RulerRules = len(rules)
 		for _, r := range rules {
-			qs = append(qs, analyze.UsageQuery{Source: "loki-ruler", Origin: fmt.Sprintf("%s/%s/%s (%s)", r.Namespace, r.Group, r.Name, r.Kind), Expr: r.Expr})
+			qs = append(qs, analyze.UsageQuery{Source: "loki-ruler", Origin: fmt.Sprintf("%s/%s/%s (%s)", r.Namespace, r.Group, r.Name, r.Kind), Expr: r.Expr,
+				Store: "loki-ruler", StoreURL: c.Loki.URL, Path: r.Namespace + "/" + r.Group + "/" + r.Name})
 		}
 	}
 
@@ -473,7 +579,8 @@ func (c *Config) evidence(ctx context.Context, now time.Time, services []string,
 				continue // runs against a different Loki
 			}
 			rep.Evidence.GrafanaQueries++
-			qs = append(qs, analyze.UsageQuery{Source: "grafana", Origin: fmt.Sprintf("%s org %d %s", g.URL, q.Org, q.Origin), Expr: q.Expr})
+			qs = append(qs, analyze.UsageQuery{Source: "grafana", Origin: fmt.Sprintf("%s org %d %s", g.URL, q.Org, q.Origin), Expr: q.Expr,
+				Store: "grafana", StoreURL: g.URL, Org: q.Org, Path: q.Origin})
 		}
 		for _, gp := range res.Gaps {
 			if strings.Contains(gp.Reason, "library panel") && strings.Contains(gp.Reason, "does not exist") {

@@ -50,6 +50,7 @@ const (
 	nameMeasure  = "signal_to_metrics/sievelog"
 	nameFilter   = "filter/sievelog"
 	nameDedupe   = "logdedup/sievelog"
+	nameRollup   = "transform/sievelog_rollup"
 	pipeOut      = "logs/sievelog"
 	pipeMetrics  = "metrics/sievelog"
 	RuleAttr     = "sievelog.rule"
@@ -59,6 +60,10 @@ const (
 // MeasureLines and MeasureBytes name the per-rule measurement metrics.
 func MeasureLines(id string) string { return "sievelog.rule.lines." + id }
 func MeasureBytes(id string) string { return "sievelog.rule.bytes." + id }
+
+// RollupMarker is the body of a rolled-up rule's records: one per dedupe interval, carrying the
+// number of lines it replaces in DedupCounter and the rule in RuleAttr.
+func RollupMarker(id string) string { return "sievelog rollup " + id }
 
 // AggregateLines names the counter that replaces an aggregated rule's lines.
 func AggregateLines(id string) string { return "sievelog.aggregate.lines." + id }
@@ -166,7 +171,7 @@ func Collector(files [][]byte, t Target, rules []Rule, mode Mode) ([]byte, error
 			return nil, fmt.Errorf("emit: connector %s already exists", n)
 		}
 	}
-	for _, n := range []string{nameFilter, nameDedupe} {
+	for _, n := range []string{nameFilter, nameDedupe, nameRollup} {
 		if _, taken := processors[n]; taken {
 			return nil, fmt.Errorf("emit: processor %s already exists", n)
 		}
@@ -178,6 +183,10 @@ func Collector(files [][]byte, t Target, rules []Rule, mode Mode) ([]byte, error
 		}
 		switch r.Action {
 		case "aggregate", "dedupe", "sample", "drop":
+		case "rollup":
+			if r.Field != "" {
+				return nil, fmt.Errorf("emit: rule %s: rollup applies to plain lines only", r.ID)
+			}
 		default:
 			return nil, fmt.Errorf("emit: rule %s: unknown action %q", r.ID, r.Action)
 		}
@@ -243,6 +252,7 @@ func Collector(files [][]byte, t Target, rules []Rule, mode Mode) ([]byte, error
 	if mode == Enforce {
 		var drops []any
 		var dedupes []any
+		var rollups []any
 		for _, r := range rules {
 			switch r.Action {
 			case "aggregate", "drop":
@@ -251,7 +261,22 @@ func Collector(files [][]byte, t Target, rules []Rule, mode Mode) ([]byte, error
 				drops = append(drops, fmt.Sprintf("%s and %s >= %s", r.Condition(), r.SampleKey(), ottlString(SampleThreshold(r.Keep))))
 			case "dedupe":
 				dedupes = append(dedupes, r.Condition())
+			case "rollup":
+				// The record keeps its resource (so its stream) and loses everything that would split
+				// the count: attributes are replaced by the rule, the body by the marker. The body is
+				// set last because the condition reads it.
+				cond := r.Condition()
+				rollups = append(rollups,
+					"keep_keys(log.attributes, []) where "+cond,
+					fmt.Sprintf("set(log.attributes[%s], %s) where %s", ottlString(RuleAttr), ottlString(r.ID), cond),
+					fmt.Sprintf("set(log.body, %s) where %s", ottlString(RollupMarker(r.ID)), cond))
+				dedupes = append(dedupes, fmt.Sprintf("log.attributes[%s] == %s", ottlString(RuleAttr), ottlString(r.ID)))
 			}
+		}
+		if len(rollups) > 0 {
+			processors[nameRollup] = map[string]any{"error_mode": "ignore",
+				"log_statements": []any{map[string]any{"context": "log", "statements": rollups}}}
+			outProcs = append(outProcs, nameRollup)
 		}
 		if len(dedupes) > 0 {
 			interval := t.DedupeInterval

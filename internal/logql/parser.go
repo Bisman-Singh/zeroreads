@@ -9,6 +9,36 @@ import (
 // Query is what a LogQL expression reads.
 type Query struct {
 	Selections []Selection
+	// RangeAggs and VectorAggs are the aggregations in the order they end, with source spans, so a
+	// query can be rewritten in place.
+	RangeAggs  []RangeAgg
+	VectorAggs []VectorAgg
+}
+
+// RangeAgg is one range aggregation such as count_over_time({...} |= "x" [5m]).
+type RangeAgg struct {
+	Func       string
+	Start, End int // byte span of the whole call, grouping included
+	Selection  int // index into Selections
+	Selector   string
+	Filters    []string // source text of each line filter stage, in order
+	Range      string   // the text between the brackets
+	Offset     string   // the offset duration, "" when none
+	// Plain is true when the log expression is a selector followed only by line filters (no
+	// parser, label filter, formatting or unwrap), with no parameter and no grouping.
+	Plain bool
+}
+
+// VectorAgg is one vector aggregation such as sum by (x) (...).
+type VectorAgg struct {
+	Func       string
+	Start, End int
+	Grouping   string // "", "by" or "without"
+	Labels     []string
+	Param      bool
+	// Arg is the index into RangeAggs of the argument when the argument is exactly one range
+	// aggregation (parentheses allowed), otherwise -1.
+	Arg int
 }
 
 // Selection is one stream selector with the pipeline that follows it.
@@ -49,7 +79,7 @@ func Parse(src string) (*Query, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &parser{toks: toks}
+	p := &parser{toks: toks, src: src}
 	q := &Query{}
 	p.q = q
 	if err := p.expr(0); err != nil {
@@ -65,6 +95,8 @@ func Parse(src string) (*Query, error) {
 }
 
 type parser struct {
+	src      string
+	log      logSpan // the last log expression parsed inside a range aggregation
 	toks     []token
 	i        int
 	q        *Query
@@ -264,8 +296,11 @@ func (p *parser) grouping() error {
 }
 
 func (p *parser) vectorAgg() error {
+	start := p.peek()
+	v := VectorAgg{Func: strings.ToLower(start.text), Arg: -1}
 	p.i++ // op
-	if err := p.grouping(); err != nil {
+	g, labels, err := p.groupingSpec()
+	if err != nil {
 		return err
 	}
 	if err := p.expectOp("("); err != nil {
@@ -273,23 +308,88 @@ func (p *parser) vectorAgg() error {
 	}
 	if p.peek().kind == tNumber && p.peekAt(1).kind == tOp && p.peekAt(1).text == "," {
 		p.i += 2
+		v.Param = true
 	}
+	first, before := p.i, len(p.q.RangeAggs)
 	if err := p.expr(0); err != nil {
 		return err
+	}
+	last := p.i - 1
+	for first < last && p.isOp2(first, "(") && p.isOp2(last, ")") && p.matching(first) == last {
+		first++
+		last--
+	}
+	if len(p.q.RangeAggs) == before+1 {
+		if ra := p.q.RangeAggs[before]; ra.Start == p.toks[first].pos && ra.End == p.toks[last].end {
+			v.Arg = before
+		}
 	}
 	if err := p.expectOp(")"); err != nil {
 		return err
 	}
-	return p.grouping()
+	if g == "" {
+		if g, labels, err = p.groupingSpec(); err != nil {
+			return err
+		}
+	}
+	v.Grouping, v.Labels = g, labels
+	v.Start, v.End = start.pos, p.toks[p.i-1].end
+	p.q.VectorAggs = append(p.q.VectorAggs, v)
+	return nil
+}
+
+func (p *parser) isOp2(i int, s string) bool { return p.toks[i].kind == tOp && p.toks[i].text == s }
+
+// matching returns the index of the parenthesis closing the one at i.
+func (p *parser) matching(i int) int {
+	depth := 0
+	for j := i; j < len(p.toks); j++ {
+		switch {
+		case p.isOp2(j, "("):
+			depth++
+		case p.isOp2(j, ")"):
+			depth--
+			if depth == 0 {
+				return j
+			}
+		}
+	}
+	return -1
+}
+
+// groupingSpec parses an optional "by (...)" or "without (...)".
+func (p *parser) groupingSpec() (string, []string, error) {
+	if !p.isKw("by") && !p.isKw("without") {
+		return "", nil, nil
+	}
+	g := strings.ToLower(p.next().text)
+	if err := p.expectOp("("); err != nil {
+		return "", nil, err
+	}
+	var labels []string
+	for !p.isOp(")") {
+		if p.peek().kind != tIdent {
+			return "", nil, p.errf("expected label, got %s", p.peek())
+		}
+		labels = append(labels, p.next().text)
+		if p.isOp(",") {
+			p.i++
+		}
+	}
+	p.i++
+	return g, labels, nil
 }
 
 func (p *parser) rangeAgg() error {
+	start := p.peek()
 	p.i++ // op
 	if err := p.expectOp("("); err != nil {
 		return err
 	}
+	param := false
 	if p.peek().kind == tNumber && p.peekAt(1).kind == tOp && p.peekAt(1).text == "," {
 		p.i += 2
+		param = true
 	}
 	p.counting++
 	err := p.logExpr(true)
@@ -300,7 +400,23 @@ func (p *parser) rangeAgg() error {
 	if err := p.expectOp(")"); err != nil {
 		return err
 	}
-	return p.grouping()
+	g := p.isKw("by") || p.isKw("without")
+	if err := p.grouping(); err != nil {
+		return err
+	}
+	l := p.log
+	p.q.RangeAggs = append(p.q.RangeAggs, RangeAgg{Func: strings.ToLower(start.text), Start: start.pos, End: p.toks[p.i-1].end,
+		Selection: len(p.q.Selections) - 1, Selector: l.selector, Filters: l.filters, Range: l.rng, Offset: l.offset,
+		Plain: l.plain && !param && !g})
+	return nil
+}
+
+// logSpan is the source of a log expression inside a range aggregation.
+type logSpan struct {
+	selector    string
+	filters     []string
+	rng, offset string
+	plain       bool
 }
 
 func (p *parser) variants() error {
@@ -345,19 +461,22 @@ func (p *parser) logExpr(inRange bool) error {
 		p.i++
 		depth++
 	}
+	selStart := p.peek().pos
 	sel, err := p.selector()
 	if err != nil {
 		return err
 	}
 	sel.Counting = p.counting > 0
+	span := logSpan{selector: p.src[selStart:p.toks[p.i-1].end], plain: depth == 0}
 	seenRange := false
 	for {
 		switch {
 		case p.peek().kind == tRange && inRange && !seenRange:
-			p.i++
+			span.rng = p.next().text
 			seenRange = true
 			if p.isKw("offset") {
 				p.i++
+				from := p.peek().pos
 				if p.isOp("-") {
 					p.i++
 				}
@@ -365,6 +484,7 @@ func (p *parser) logExpr(inRange bool) error {
 					return p.errf("expected duration after offset")
 				}
 				p.i++
+				span.offset = p.src[from:p.toks[p.i-1].end]
 			}
 			continue
 		case p.isOp(")") && depth > 0:
@@ -372,17 +492,23 @@ func (p *parser) logExpr(inRange bool) error {
 			depth--
 			continue
 		case p.isLineFilterStart():
+			from := p.peek().pos
 			if err := p.lineFilterStage(&sel); err != nil {
 				return err
 			}
+			span.filters = append(span.filters, p.src[from:p.toks[p.i-1].end])
 			continue
 		case p.isOp("|"):
+			span.plain = false
 			if err := p.pipeStage(&sel, inRange); err != nil {
 				return err
 			}
 			continue
 		}
 		break
+	}
+	if inRange {
+		p.log = span
 	}
 	if depth != 0 {
 		return p.errf("unbalanced parentheses in log expression")

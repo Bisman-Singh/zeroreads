@@ -7,8 +7,10 @@ require (
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/drainprocessor v0.161.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.161.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/logdedupprocessor v0.161.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.161.0
 	github.com/usetero/policy-go/backend/teroscan v1.10.3
 	github.com/usetero/policy-go/policy v1.12.1
+	go.opentelemetry.io/collector/component v1.67.0
 	go.opentelemetry.io/collector/component/componenttest v0.161.0
 	go.opentelemetry.io/collector/confmap v1.67.0
 	go.opentelemetry.io/collector/connector/connectortest v0.161.0
@@ -20,6 +22,7 @@ require (
 )
 
 require (
+	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/alecthomas/participle/v2 v2.1.4 // indirect
 	github.com/antchfx/xmlquery v1.5.1 // indirect
 	github.com/antchfx/xpath v1.3.8 // indirect
@@ -52,6 +55,7 @@ require (
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal v0.161.0 // indirect
 	github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter v0.161.0 // indirect
+	github.com/open-telemetry/opentelemetry-collector-contrib/internal/pdatautil v0.161.0 // indirect
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl v0.161.0 // indirect
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatautil v0.161.0 // indirect
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/sampling v0.161.0 // indirect
@@ -62,7 +66,6 @@ require (
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/collector/client v1.67.0 // indirect
-	go.opentelemetry.io/collector/component v1.67.0 // indirect
 	go.opentelemetry.io/collector/component/componentstatus v0.161.0 // indirect
 	go.opentelemetry.io/collector/config/configoptional v1.67.0 // indirect
 	go.opentelemetry.io/collector/connector v0.161.0 // indirect

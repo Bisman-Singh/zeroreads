@@ -46,6 +46,8 @@ type Result struct {
 	// Unparsed counts query-log lines whose logfmt could not be parsed. They are reported, and any
 	// such line makes the evidence incomplete.
 	Unparsed int
+	// Metadata counts labels, series and stats requests: they read the index, not lines.
+	Metadata int
 }
 
 // Read collects executed queries between start and end. Queries the analyzer itself sent (tagged
@@ -77,6 +79,14 @@ func (q *QueryLog) Read(ctx context.Context, start, end time.Time) (Result, erro
 		}
 		if isOwnQuery(m["source"]) || strings.Contains(m["query"], probePrefix) {
 			continue // the analyzer's own reads and liveness markers are not usage
+		}
+		switch m["query_type"] {
+		case "labels", "series", "stats":
+			// These read the index, never a line: label names and values, series label sets and size
+			// estimates. Removal changes them only by emptying a stream, which analysis checks
+			// directly. They carry no query tags, so the analyzer's own cannot be told apart anyway.
+			res.Metadata++
+			continue
 		}
 		if m["component"] == "frontend" {
 			frontend = true

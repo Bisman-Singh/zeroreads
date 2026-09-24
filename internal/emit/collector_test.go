@@ -15,6 +15,8 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/connector/signaltometricsconnector"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logdedupprocessor"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor"
+	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/connector/connectortest"
@@ -404,4 +406,123 @@ func TestSampleThresholdFraction(t *testing.T) {
 			t.Fatalf("keep %d%%: measured %.2f%%", keep, frac)
 		}
 	}
+}
+
+// The real transform and logdedup processors, chained as emitted, turn exactly the rollup rule's
+// lines into marker records whose counts add up to the lines replaced, whatever attributes the
+// lines carried, and leave every other line untouched.
+func TestRollupCountsExactly(t *testing.T) {
+	rules := append([]Rule(nil), testRules...)
+	for i := range rules {
+		if rules[i].ID == "r-cache" {
+			rules[i].Action = "rollup"
+		}
+	}
+	out, err := Collector([][]byte{[]byte(userConfig)}, Target{Pipeline: "logs", After: "transform/prep",
+		MeasureExporters: []string{"file/metrics"}, DedupeInterval: "300ms"}, rules, Enforce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := yaml.Unmarshal(out, &m); err != nil {
+		t.Fatal(err)
+	}
+	procs := m["service"].(map[string]any)["pipelines"].(map[string]any)["logs/sievelog"].(map[string]any)["processors"].([]any)
+	if strings.Join(toStrings(procs), ",") != "batch,transform/sievelog_rollup,logdedup/sievelog,filter/sievelog" {
+		t.Fatalf("processor order %v", procs)
+	}
+	df := logdedupprocessor.NewFactory()
+	dcfg := df.CreateDefaultConfig()
+	componentConfig(t, m, "processors", "logdedup/sievelog", dcfg)
+	sink := new(consumertest.LogsSink)
+	dedup, err := df.CreateLogs(context.Background(), processortest.NewNopSettings(df.Type()), dcfg, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tf := transformprocessor.NewFactory()
+	tcfg := tf.CreateDefaultConfig()
+	componentConfig(t, m, "processors", "transform/sievelog_rollup", tcfg)
+	transform, err := tf.CreateLogs(context.Background(), processortest.NewNopSettings(tf.Type()), tcfg, dedup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []interface {
+		Start(context.Context, component.Host) error
+	}{dedup, transform} {
+		if err := c.Start(context.Background(), componenttest.NewNopHost()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recs := genRecords(3000)
+	ld := toLogs(recs)
+	for i := 0; i < ld.ResourceLogs().Len(); i++ {
+		lr := ld.ResourceLogs().At(i).ScopeLogs().At(0).LogRecords().At(0)
+		lr.Attributes().PutStr("trace_id", strconv.Itoa(i)) // would split every group if kept
+		lr.SetSeverityText("DEBUG")
+	}
+	if err := transform.ConsumeLogs(context.Background(), ld); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(900 * time.Millisecond)
+	transform.Shutdown(context.Background())
+	dedup.Shutdown(context.Background())
+	var rolled, rollRecords int64
+	others := map[string]int{}
+	for _, ld := range sink.AllLogs() {
+		for i := 0; i < ld.ResourceLogs().Len(); i++ {
+			rl := ld.ResourceLogs().At(i)
+			sls := rl.ScopeLogs()
+			for s := 0; s < sls.Len(); s++ {
+				lrs := sls.At(s).LogRecords()
+				for j := 0; j < lrs.Len(); j++ {
+					lr := lrs.At(j)
+					txt, _ := textOf(lr)
+					if txt == RollupMarker("r-cache") {
+						rollRecords++
+						c, _ := lr.Attributes().Get(DedupCounter)
+						rule, _ := lr.Attributes().Get(RuleAttr)
+						svc, _ := rl.Resource().Attributes().Get("service.name")
+						if rule.Str() != "r-cache" || svc.Str() != "checkout" {
+							t.Fatalf("rollup record attributes %v resource %v", lr.Attributes().AsRaw(), rl.Resource().Attributes().AsRaw())
+						}
+						if _, kept := lr.Attributes().Get("trace_id"); kept {
+							t.Fatal("rollup kept the line's attributes")
+						}
+						rolled += c.Int()
+						continue
+					}
+					if strings.HasPrefix(txt, "DEBUG cache") {
+						t.Fatalf("a cache line survived rollup: %q", txt)
+					}
+					others[txt]++
+				}
+			}
+		}
+	}
+	var want int64
+	wantOthers := map[string]int{}
+	for _, rec := range recs {
+		if r := matched(rec); r != nil && r.ID == "r-cache" {
+			want++
+		} else if r == nil || r.Action != "dedupe" {
+			wantOthers[rec.text]++
+		}
+	}
+	if rolled != want || rollRecords == 0 || rollRecords >= want {
+		t.Fatalf("rollup: %d records carrying %d lines, want %d lines in fewer records", rollRecords, rolled, want)
+	}
+	for txt, n := range wantOthers {
+		if others[txt] != n {
+			t.Fatalf("line %q: %d after rollup, want %d untouched", txt, others[txt], n)
+		}
+	}
+	t.Logf("rollup: %d cache lines became %d records with exact counts; every other line untouched", want, rollRecords)
+}
+
+func toStrings(v []any) []string {
+	var out []string
+	for _, x := range v {
+		out = append(out, x.(string))
+	}
+	return out
 }

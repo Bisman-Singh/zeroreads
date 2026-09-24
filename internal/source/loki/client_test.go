@@ -180,3 +180,28 @@ func TestQueryWindowChunks(t *testing.T) {
 		t.Fatalf("expected chunked requests, got %d calls", calls)
 	}
 }
+
+func TestQueryLogSkipsIndexOnlyRequests(t *testing.T) {
+	base := time.Now().Add(-time.Minute).UnixNano()
+	line := func(typ, query string) string {
+		return `level=info caller=metrics.go:340 component=frontend org_id=fake query_type=` + typ + ` query="` + query + `"`
+	}
+	lines := []fakeLine{
+		{"loki", base, line("labels", `{service_name=\"checkout\"}`)},
+		{"loki", base + 1, line("series", `{service_name=\"checkout\"}`)},
+		{"loki", base + 2, line("stats", `{service_name=\"checkout\"}`)},
+		{"loki", base + 3, line("filter", `{service_name=\"checkout\"} |= \"x\"`)},
+		{"loki", base + 4, line("metric", `sum(count_over_time({service_name=\"checkout\"}[5m]))`)},
+	}
+	calls := 0
+	srv := fakeLoki(t, lines, &calls)
+	defer srv.Close()
+	ql := &QueryLog{Logs: &Client{Base: srv.URL}, Selector: `{s="loki"}`}
+	res, err := ql.Read(context.Background(), time.Unix(0, base-1), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Metadata != 3 || len(res.Queries) != 2 {
+		t.Fatalf("metadata %d, queries %+v", res.Metadata, res.Queries)
+	}
+}

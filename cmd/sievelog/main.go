@@ -24,6 +24,7 @@ const usage = `usage:
   sievelog analyze -c sievelog.yaml -o DIR
   sievelog emit    -c sievelog.yaml -rules RULES.json [-format collector|vector|fluentbit|policy] [-mode shadow|enforce] -o FILE
   sievelog verify  -c sievelog.yaml -rules RULES.json [-o KEEP-RULES.json] [-deployed PIPELINE.yaml] [-drift=false] [-json OUT.json]
+  sievelog rewrite -c sievelog.yaml -rules RULES.json -o DIR [-apply]
   sievelog reconcile -c sievelog.yaml -rules RULES.json -before START,END -after START,END [-tolerance 0.05] [-o OUT.json]
 `
 
@@ -45,6 +46,8 @@ func main() {
 		code, err = runVerify(ctx, os.Args[2:])
 	case "reconcile":
 		code, err = runReconcile(ctx, os.Args[2:])
+	case "rewrite":
+		code, err = runRewrite(ctx, os.Args[2:])
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -142,6 +145,48 @@ func runEmit(args []string) error {
 }
 
 // runVerify exits 3 when any enforced rule is no longer safe.
+func runRewrite(ctx context.Context, args []string) (int, error) {
+	fs := flag.NewFlagSet("rewrite", flag.ExitOnError)
+	cfgPath := fs.String("c", "sievelog.yaml", "config file")
+	rulesPath := fs.String("rules", "", "rules.json from analyze")
+	out := fs.String("o", "sievelog-rewrites", "directory for the rewritten objects")
+	apply := fs.Bool("apply", false, "write the rewritten objects back to Grafana and the Loki ruler")
+	_ = fs.Parse(args)
+	cfg, err := app.LoadConfig(*cfgPath)
+	if err != nil {
+		return 0, err
+	}
+	rf, err := app.LoadRules(*rulesPath)
+	if err != nil {
+		return 0, err
+	}
+	res, err := app.Rewrites(ctx, cfg, rf, *out, *apply, time.Now())
+	if err != nil {
+		return 0, err
+	}
+	failed := 0
+	for _, r := range res {
+		state := "written for review"
+		switch {
+		case r.Err != "":
+			state, failed = "FAILED: "+r.Err, failed+1
+		case r.Applied:
+			state = "applied"
+		}
+		fmt.Printf("rewrite %s %s: %d quer%s replaced, %s (%s)\n", r.Store, r.Target, r.Replaced, map[bool]string{true: "y", false: "ies"}[r.Replaced == 1], state, r.File)
+	}
+	if *apply && failed == 0 {
+		if err := app.SaveRules(*rulesPath, rf); err != nil {
+			return 0, err
+		}
+		fmt.Printf("rewrite: %d objects applied; recorded in %s\n", len(res), *rulesPath)
+	}
+	if failed > 0 {
+		return 5, nil
+	}
+	return 0, nil
+}
+
 func runVerify(ctx context.Context, args []string) (int, error) {
 	fs := flag.NewFlagSet("verify", flag.ExitOnError)
 	cfgPath := fs.String("c", "sievelog.yaml", "config file")

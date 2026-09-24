@@ -2,10 +2,12 @@
 package loki
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go.yaml.in/yaml/v3"
 	"io"
 	"net/http"
 	"net/url"
@@ -46,9 +48,20 @@ func (c *Client) http() *http.Client {
 }
 
 func (c *Client) get(ctx context.Context, path string, q url.Values) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.Base, "/")+path+"?"+q.Encode(), nil)
+	return c.send(ctx, http.MethodGet, path+"?"+q.Encode(), "", nil)
+}
+
+func (c *Client) send(ctx context.Context, method, path, contentType string, body []byte) ([]byte, error) {
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.Base, "/")+path, rd)
 	if err != nil {
 		return nil, err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	if !c.untagged {
 		req.Header.Set("X-Query-Tags", Tag)
@@ -67,14 +80,39 @@ func (c *Client) get(ctx context.Context, path string, q url.Values) ([]byte, er
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	out, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, &HTTPError{Status: resp.StatusCode, Body: strings.TrimSpace(string(body))}
+	if resp.StatusCode/100 != 2 {
+		return nil, &HTTPError{Status: resp.StatusCode, Body: strings.TrimSpace(string(out))}
 	}
-	return body, nil
+	return out, nil
+}
+
+// RuleNamespace returns every group of one ruler namespace, as the namespace file the ruler reads
+// (groups: [...]). It is built from the rules listing, which every rule store supports.
+func (c *Client) RuleNamespace(ctx context.Context, namespace string) ([]byte, error) {
+	body, err := c.get(ctx, "/loki/api/v1/rules", url.Values{})
+	if err != nil {
+		return nil, err
+	}
+	var doc map[string][]any
+	if err := yaml.Unmarshal(body, &doc); err != nil {
+		return nil, fmt.Errorf("loki: decode rules: %w", err)
+	}
+	groups, ok := doc[namespace]
+	if !ok {
+		return nil, fmt.Errorf("loki: no rule namespace %q", namespace)
+	}
+	return yaml.Marshal(map[string]any{"groups": groups})
+}
+
+// SetRuleGroup creates or replaces a rule group in a namespace through the ruler API. Rulers whose
+// storage is read-only (local files) refuse it.
+func (c *Client) SetRuleGroup(ctx context.Context, namespace string, group []byte) error {
+	_, err := c.send(ctx, http.MethodPost, "/loki/api/v1/rules/"+url.PathEscape(namespace), "application/yaml", group)
+	return err
 }
 
 // HTTPError is a non-200 answer from Loki.
@@ -269,6 +307,27 @@ func (c *Client) LabelValues(ctx context.Context, label string, start, end time.
 	q.Set("start", strconv.FormatInt(start.UnixNano(), 10))
 	q.Set("end", strconv.FormatInt(end.UnixNano(), 10))
 	body, err := c.get(ctx, "/loki/api/v1/label/"+url.PathEscape(label)+"/values", q)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Data []string `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("loki: decode: %w", err)
+	}
+	sort.Strings(resp.Data)
+	return resp.Data, nil
+}
+
+// LabelNames lists the index label names of the streams a selector matches in [start, end).
+// Structured metadata are not index labels and are not listed.
+func (c *Client) LabelNames(ctx context.Context, selector string, start, end time.Time) ([]string, error) {
+	q := url.Values{}
+	q.Set("query", selector)
+	q.Set("start", strconv.FormatInt(start.UnixNano(), 10))
+	q.Set("end", strconv.FormatInt(end.UnixNano(), 10))
+	body, err := c.get(ctx, "/loki/api/v1/labels", q)
 	if err != nil {
 		return nil, err
 	}

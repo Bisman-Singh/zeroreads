@@ -14,6 +14,7 @@ import (
 	"github.com/Bisman-Singh/sievelog/internal/automaton"
 	"github.com/Bisman-Singh/sievelog/internal/emit"
 	"github.com/Bisman-Singh/sievelog/internal/logql"
+	"github.com/Bisman-Singh/sievelog/internal/rewrite"
 	"github.com/Bisman-Singh/sievelog/internal/templating"
 	"github.com/Bisman-Singh/sievelog/internal/usage"
 )
@@ -27,6 +28,9 @@ type RulesFile struct {
 	DrainConfigHash string         `json:"drain_config_hash"`
 	LokiLabel       string         `json:"loki_label"`
 	Rules           []EnforcedRule `json:"rules"`
+	// RewritesAppliedAt is when `sievelog rewrite -apply` rewrote the stored queries. Executions of
+	// an original query before it are history, not readers.
+	RewritesAppliedAt time.Time `json:"rewrites_applied_at,omitzero"`
 }
 
 // EnforcedRule is one rule to enforce, with what it was decided on.
@@ -35,6 +39,8 @@ type EnforcedRule struct {
 	Service            string  `json:"service"`
 	Template           string  `json:"template"`
 	RemovedBytesPerDay float64 `json:"removed_bytes_per_day"`
+	// Rewrites are the stored queries that must be rewritten for a rollup to keep their numbers.
+	Rewrites []analyze.Rewrite `json:"rewrites,omitempty"`
 }
 
 // WriteReport writes report.json, report.md and rules.json into dir.
@@ -57,7 +63,7 @@ func WriteReport(dir string, c *Config, rep *Report) error {
 		rf.Rules = append(rf.Rules, EnforcedRule{
 			Rule: emit.Rule{ID: r.ID, ScopeAttr: c.Scope.OTelAttribute, ScopeValue: r.Candidate.Service, Language: r.Candidate.Language,
 				Field: r.Candidate.Field, Action: r.Action, Keep: r.Keep},
-			Service: r.Candidate.Service, Template: r.Candidate.Template, RemovedBytesPerDay: r.RemovedBytesPerDay,
+			Service: r.Candidate.Service, Template: r.Candidate.Template, RemovedBytesPerDay: r.RemovedBytesPerDay, Rewrites: r.Rewrites,
 		})
 	}
 	b, err = json.MarshalIndent(rf, "", "  ")
@@ -68,6 +74,15 @@ func WriteReport(dir string, c *Config, rep *Report) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, "report.md"), []byte(Markdown(rep)), 0o644)
+}
+
+// SaveRules writes rules.json.
+func SaveRules(path string, rf *RulesFile) error {
+	b, err := json.MarshalIndent(rf, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0o644)
 }
 
 // LoadRules reads rules.json.
@@ -140,6 +155,12 @@ func Markdown(rep *Report) string {
 		}
 		for _, bl := range r.Blockers {
 			fmt.Fprintf(&b, "- Blocked: %s\n", bl)
+		}
+		if len(r.Rewrites) > 0 {
+			b.WriteString("- Rewrites (apply with `sievelog rewrite -apply` before or with enforcing; each returns the same numbers before, during and after the switch):\n")
+			for _, rw := range r.Rewrites {
+				fmt.Fprintf(&b, "  - %s %s\n    - from `%s`\n    - to `%s`\n", rw.Source, rw.Origin, rw.Old, rw.New)
+			}
 		}
 		for _, rd := range r.Readers {
 			kind := "reads"
@@ -260,9 +281,10 @@ func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time, opt Ve
 		}
 	}
 	type parsed struct {
-		q   analyze.UsageQuery
-		sel []logql.Selection
-		err error
+		q      analyze.UsageQuery
+		parsed *logql.Query
+		sel    []logql.Selection
+		err    error
 	}
 	var pqs []parsed
 	for _, q := range queries {
@@ -271,7 +293,7 @@ func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time, opt Ve
 			pqs = append(pqs, parsed{q: q, err: err})
 			continue
 		}
-		pqs = append(pqs, parsed{q: q, sel: p.Selections})
+		pqs = append(pqs, parsed{q: q, parsed: p, sel: p.Selections})
 	}
 	res := &VerifyResult{CheckedAt: now.UTC(), DeployedMode: deployedMode, DeployedDiffs: deployedDiffs,
 		Keep: &RulesFile{GeneratedAt: rf.GeneratedAt, DrainVersion: rf.DrainVersion, DrainConfigHash: rf.DrainConfigHash, LokiLabel: rf.LokiLabel}}
@@ -289,12 +311,23 @@ func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time, opt Ve
 			return nil, fmt.Errorf("rule %s: %w", r.ID, err)
 		}
 		ur := usage.Rule{ID: r.ID, Scope: map[string]string{rf.LokiLabel: r.Service}, Language: lang, Structured: r.Field != ""}
+		replaced := map[string]bool{} // original queries this rule's rewrites replaced
+		for _, rw := range r.Rewrites {
+			replaced[rw.Old] = true
+		}
 		for _, p := range pqs {
 			if p.err != nil {
 				reasons = append(reasons, fmt.Sprintf("%s %s does not parse; treated as reading every line", p.q.Source, p.q.Origin))
 				continue
 			}
+			// An original query executed only before its rewrite was applied is history.
+			if p.q.Source == "loki-querylog" && replaced[p.q.Expr] && !rf.RewritesAppliedAt.IsZero() && p.q.Last.Before(rf.RewritesAppliedAt) {
+				continue
+			}
 			for _, sel := range p.sel {
+				if r.Action == "rollup" && rewrite.Compensated(p.parsed, sel, r.ID, r.Language) {
+					continue
+				}
 				if v := usage.Evaluate(sel, ur); v.Used {
 					reasons = append(reasons, fmt.Sprintf("%s %s reads these lines: %s (e.g. %q)", p.q.Source, p.q.Origin, p.q.Expr, v.Witness))
 					break

@@ -140,7 +140,7 @@ func stageTerms(st logql.Stage) ([]automaton.Term, []string) {
 	var terms []automaton.Term
 	var why []string
 	for _, f := range st.Alternatives {
-		p, ok, reason := negativePattern(f)
+		p, ok, reason := exactPattern(f)
 		if !ok {
 			why = append(why, reason)
 			continue
@@ -175,9 +175,9 @@ func positiveExprs(f logql.Filter) ([]string, bool, string) {
 	return nil, false, fmt.Sprintf("%s filter %q not modelled", f.Kind, f.Value)
 }
 
-// negativePattern returns the pattern whose matches Loki's negative filter drops, only when that
-// set is known exactly.
-func negativePattern(f logql.Filter) (*automaton.Pattern, bool, string) {
+// exactPattern returns the exact set of lines a filter matches (what a negative filter drops and a
+// positive one keeps), only when that set is known exactly.
+func exactPattern(f logql.Filter) (*automaton.Pattern, bool, string) {
 	if hasVariable(f.Value) {
 		return nil, false, fmt.Sprintf("filter %q uses a template variable", f.Value)
 	}
@@ -278,4 +278,56 @@ func lowerClass(lower rune) []rune {
 		}
 	})
 	return append([]rune{lower}, lowerIndex[lower]...)
+}
+
+// Covers reports whether the selection keeps every line of the rule's language: its scope matchers
+// provably select the rule's streams and each line filter provably keeps (or provably never drops)
+// every line in the language. Only filters whose kept set is known exactly count; anything else
+// gives false. Matchers on other labels are not decided here: a rewrite reuses the same selector.
+func Covers(sel logql.Selection, r Rule) bool {
+	if sel.Rewritten {
+		return false
+	}
+	for _, m := range sel.Matchers {
+		val, scoped := r.Scope[m.Name]
+		if !scoped {
+			continue
+		}
+		if ok, known := matchLabel(m, val); !known || !ok {
+			return false
+		}
+	}
+	if r.Structured && len(sel.Stages) > 0 {
+		return false
+	}
+	for _, st := range sel.Stages {
+		if st.Negative {
+			for _, f := range st.Alternatives {
+				p, ok, _ := exactPattern(f)
+				if !ok {
+					return false
+				}
+				if _, found, err := automaton.Intersects(r.Language, p, Limit); err != nil || found {
+					return false
+				}
+			}
+			continue
+		}
+		var alts []string
+		for _, f := range st.Alternatives {
+			p, ok, _ := exactPattern(f) // the exact kept set, the same for either polarity
+			if !ok {
+				return false
+			}
+			alts = append(alts, p.String())
+		}
+		kept, err := automaton.Compile("(?:" + strings.Join(alts, ")|(?:") + ")")
+		if err != nil {
+			return false
+		}
+		if sub, _, err := automaton.Subset(r.Language, kept, Limit); err != nil || !sub {
+			return false
+		}
+	}
+	return true
 }

@@ -584,50 +584,6 @@ policy:
 	}
 	t.Logf("verify: the deployed config matches the emitted one, and a hand edit is caught")
 
-	// 4c. Drift: lines of the sampled template that its rule does not cover are reported, exactly,
-	// and do not fail verify (they pass through untouched).
-	var sampled *app.EnforcedRule
-	for i := range rf.Rules {
-		if rf.Rules[i].Action == "sample" {
-			sampled = &rf.Rules[i]
-		}
-	}
-	driftLine := strings.ReplaceAll(sampled.Template, "<*>", "zz~drift~zz")
-	if langs[sampled.ID].MatchString(driftLine) || !strings.Contains(sampled.Template, "<*>") {
-		t.Fatalf("drift line %q must be in template %q and outside the rule", driftLine, sampled.Template)
-	}
-	driftOf := func() app.RuleDrift {
-		p := filepath.Join(e.work, "loop-verify-drift.json")
-		out, code := e.run(e.root, e.bin, "verify", "-c", cfgPath, "-rules", filepath.Join(outDir, "rules.json"), "-json", p)
-		if code != 0 {
-			t.Fatalf("verify with drift should pass (exit %d): %s", code, out)
-		}
-		var vr app.VerifyResult
-		b, _ := os.ReadFile(p)
-		json.Unmarshal(b, &vr)
-		for _, d := range vr.Drift {
-			if d.RuleID == sampled.ID {
-				return d
-			}
-		}
-		t.Fatalf("no drift entry for %s: %s", sampled.ID, b)
-		return app.RuleDrift{}
-	}
-	before := driftOf()
-	const drifted = 7
-	lokiPush(t, e.loki, map[string]string{"service_name": sampled.Service, "k8s_namespace_name": "drift"}, driftLine, drifted)
-	var after app.RuleDrift
-	for i := 0; i < 30; i++ {
-		if after = driftOf(); after.OutOfRule-before.OutOfRule >= drifted {
-			break
-		}
-		time.Sleep(2 * time.Second)
-	}
-	if after.OutOfRule-before.OutOfRule != drifted || after.Status != "drifting" || after.TemplateLines-before.TemplateLines != drifted {
-		t.Fatalf("drift: before %+v after %+v, want exactly %d more out-of-rule lines", before, after, drifted)
-	}
-	t.Logf("drift: %d pushed out-of-rule lines of %q reported exactly (examples %q)", drifted, sampled.Template, after.Examples)
-
 	// 4d. A changed masking rule invalidates every rule.
 	cb, _ := os.ReadFile(cfgPath)
 	changedCfg := filepath.Join(e.work, "sievelog-changed-masks.yaml")

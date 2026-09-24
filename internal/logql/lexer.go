@@ -30,6 +30,7 @@ type token struct {
 	kind tokKind
 	text string // raw text; for strings the unquoted value
 	pos  int
+	end  int // byte offset just past the token in the source
 }
 
 func (t token) String() string { return fmt.Sprintf("%q@%d", t.text, t.pos) }
@@ -60,14 +61,14 @@ func lex(src string) ([]token, error) {
 			if err != nil {
 				return nil, fmt.Errorf("string at %d: %w", i, err)
 			}
-			out = append(out, token{kind: tString, text: s, pos: i})
+			out = append(out, token{kind: tString, text: s, pos: i, end: i + n})
 			i += n
 		case r == '[':
 			end := strings.IndexByte(src[i:], ']')
 			if end < 0 {
 				return nil, fmt.Errorf("missing ] at %d", i)
 			}
-			out = append(out, token{kind: tRange, text: strings.TrimSpace(src[i+1 : i+end]), pos: i})
+			out = append(out, token{kind: tRange, text: strings.TrimSpace(src[i+1 : i+end]), pos: i, end: i + end + 1})
 			i += end + 1
 		case r == '-' && strings.HasPrefix(src[i:], "--"):
 			j := i + 2
@@ -78,11 +79,11 @@ func lex(src string) ([]token, error) {
 			if flag != "--strict" && flag != "--keep-empty" {
 				return nil, fmt.Errorf("unknown flag %q at %d", flag, i)
 			}
-			out = append(out, token{kind: tFlag, text: flag, pos: i})
+			out = append(out, token{kind: tFlag, text: flag, pos: i, end: j})
 			i = j
 		case r >= '0' && r <= '9' || (r == '.' && i+1 < len(src) && src[i+1] >= '0' && src[i+1] <= '9'):
 			tok, n := lexNumber(src[i:])
-			tok.pos = i
+			tok.pos, tok.end = i, i+n
 			out = append(out, tok)
 			i += n
 		case isLetter(byte(r)) && r < utf8.RuneSelf || r == '_':
@@ -90,13 +91,13 @@ func lex(src string) ([]token, error) {
 			for j < len(src) && (isLetter(src[j]) || isDigit(src[j]) || src[j] == '_') {
 				j++
 			}
-			out = append(out, token{kind: tIdent, text: src[i:j], pos: i})
+			out = append(out, token{kind: tIdent, text: src[i:j], pos: i, end: j})
 			i = j
 		default:
 			matched := false
 			for _, op := range ops {
 				if strings.HasPrefix(src[i:], op) {
-					out = append(out, token{kind: tOp, text: op, pos: i})
+					out = append(out, token{kind: tOp, text: op, pos: i, end: i + len(op)})
 					i += len(op)
 					matched = true
 					break
@@ -107,7 +108,7 @@ func lex(src string) ([]token, error) {
 			}
 		}
 	}
-	return append(out, token{kind: tEOF, pos: len(src)}), nil
+	return append(out, token{kind: tEOF, pos: len(src), end: len(src)}), nil
 }
 
 func isLetter(b byte) bool { return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' }
