@@ -260,8 +260,9 @@ func TestOpenSearchEvidence(t *testing.T) {
 	}
 	wantCheckout := []string{
 		"audit POST /" + alias + "/_search",
-		"audit POST /" + logs + "/_search", // the global aggregation
-		"audit POST /" + logs + "/_search", // the q parameter
+		// The q-parameter search and the global aggregation are both opaque on the logs index: one
+		// use, executed twice.
+		"audit POST /" + logs + "/_search",
 		// The denied search: authentication succeeds at the REST layer, where it is logged as
 		// AUTHENTICATED; the denial happens later. Counting it as a read is the sound side.
 		"audit POST /" + logs + "/_search",
@@ -350,6 +351,12 @@ func TestOpenSearchEvidence(t *testing.T) {
 			t.Fatalf("no query was ever proven: the check has no teeth")
 		}
 	})
+
+	for _, u := range res.Uses {
+		if u.Source == "audit" && u.Origin == "POST /"+logs+"/_search" && u.Opaque && u.Count != 2 {
+			t.Fatalf("the two opaque searches fold into one use of 2 executions, got %d", u.Count)
+		}
+	}
 
 	t.Run("search pipelines are a gap", func(t *testing.T) {
 		if g := gapSet(reader(false, 0).Read(ctx, start, time.Now()).Gaps); g["opensearch-search-pipelines"] != "" {
