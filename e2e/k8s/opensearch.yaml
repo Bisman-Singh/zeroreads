@@ -5,6 +5,7 @@ metadata:
   namespace: sievelog-system
 spec:
   replicas: 1
+  strategy: {type: Recreate} # never two of these at once on the one e2e node
   selector:
     matchLabels: {app: opensearch}
   template:
@@ -72,6 +73,7 @@ metadata:
   namespace: sievelog-system
 spec:
   replicas: 1
+  strategy: {type: Recreate} # never two of these at once on the one e2e node
   selector:
     matchLabels: {app: opensearch-dashboards}
   template:
