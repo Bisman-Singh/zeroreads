@@ -38,6 +38,21 @@ cover the evidence window; if a source cannot be read; if a destination downstre
 point has no evidence; or if a connector turns these logs into metrics, every rule is blocked until
 the gap is fixed or explicitly acknowledged in `policy.acknowledge`.
 
+**A rollup keeps every counting reader's numbers.** A rule may roll up only when each of its readers
+is a stored `sum [by (stream labels)] (count_over_time|rate(...))` whose line filters provably keep
+every line of the rule, in a Grafana dashboard, library panel or alert rule, or a Loki ruler group.
+Each is rewritten as the original minus the rule's lines, plus the rollup records' counts, plus any
+of the rule's lines still stored, and the rewritten query is analysed again: it must not read the
+rule's lines except through that last compensating term. An executed query counts only when it is
+exactly one of those stored queries. Anything else that reads the lines keeps blocking. Rollup
+records carry the stream's labels but not the lines' structured metadata, so grouping by structured
+metadata is not rewritten. A rollup record's timestamp is when its interval flushes, so a count over
+a window can shift by up to one interval at the window's edges.
+
+**No stream disappears.** A rule that would remove every line of some stream in the window is
+blocked, because the stream would vanish from label, series and volume results. Dedupe and rollup
+always leave a record, so they are not affected.
+
 **Errors and warnings are never touched.** A rule whose pattern can contain an error-like word, or
 whose sampled lines carry a warning or error severity, gets no action.
 

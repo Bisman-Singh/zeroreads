@@ -32,6 +32,11 @@ infrastructure, and shows its evidence for every decision.
 6. **The least lossy action.** A rule nobody reads gets, in order of preference: aggregate (lines
    become a counter), dedupe (identical lines collapse into one with a count), or sample. Drop only
    when your policy allows it. Error and warning lines are never touched.
+7. **Rollup keeps counting queries working.** When the only readers of a rule's lines are alerts,
+   recording rules or panels that count them, the lines can roll up into one record per interval
+   carrying the count, and those queries are rewritten so they return the same numbers before,
+   during and after the switch. Every rewrite is re-checked before it is offered, and proven
+   against real Loki and Grafana in the end-to-end suite.
 
 ## Where it enforces
 
@@ -54,6 +59,7 @@ sievelog analyze -c sievelog.yaml -o out/          # report.md, report.json, rul
 sievelog emit -c sievelog.yaml -rules out/rules.json -mode shadow  -o collector.yaml
 # deploy the shadow config: it only measures, per rule, what would be removed
 sievelog emit -c sievelog.yaml -rules out/rules.json -mode enforce -o collector.yaml
+sievelog rewrite -c sievelog.yaml -rules out/rules.json -o rewrites/ -apply   # only for rollups
 sievelog verify -c sievelog.yaml -rules out/rules.json -deployed collector.yaml
 # exit code 3 when a rule is no longer safe or the deployed config is not the emitted one
 ```

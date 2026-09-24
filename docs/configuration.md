@@ -91,7 +91,8 @@ fluentbit:
   derived_exempt: {}
 
 policy:
-  actions: [aggregate, dedupe, sample]  # in order of preference; add drop to allow it
+  actions: [aggregate, dedupe, sample]  # in order of preference; add drop to allow it, and
+                                        # rollup to allow rewriting counting queries (Collector only)
   sample_percent: 10
   acknowledge: []                # evidence gap keys accepted deliberately, from the report
   exempt: []                     # rule IDs (r-...) or template regexes never acted on
