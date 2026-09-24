@@ -11,7 +11,7 @@ evidence:
   query_log: {enabled: true, selector: '{service_name="loki"}', prove_live: true}
   ruler: true
   grafana:
-    - {url: http://grafana.sievelog-system.svc:3000, username: admin, password_env: GRAFANA_PASSWORD, datasources: [loki]}
+    - {url: http://grafana.sievelog-system.svc:3000, username: admin, password_env: GRAFANA_PASSWORD, datasources: [loki, loki2]}
 collector:
   config_files: [.e2e/act/collector.yaml]
   pipeline: logs

@@ -16,6 +16,9 @@ scope:
   services: []                   # empty: every value of the label
   structured:                    # services whose records reach the pipeline as maps,
     orders: msg                  #   and the field their templates are built from
+  severity_keys: [level, severity, severity_text, detected_level, lvl, loglevel, log.level]
+                                 # where a sampled line's level is read (Loki labels and structured
+                                 # metadata, and record fields); warning or above blocks the rule
 
 discovery:
   window: 24h                    # sample and measure over this window
@@ -39,7 +42,9 @@ evidence:
   grafana:
     - url: http://grafana:3000
       token_env: GRAFANA_TOKEN   # or username + password_env
-      datasources: [loki]        # Grafana datasource UIDs that point at loki.url
+      datasources: [loki]        # required: Grafana datasource UIDs that point at loki.url
+      other_datasources: []      # Loki datasources that point at a different Loki; any Loki datasource
+                                 # in neither list counts as loki.url and is reported as a gap
   opensearch:                    # clusters the pipeline also ships to, referenced by sinks
     - name: search
       url: https://opensearch:9200
@@ -61,6 +66,10 @@ collector:
   measure_exporters: [prometheus] # receive the per-rule measurement metrics
   aggregate_exporters: [prometheus] # receive the counters that replace aggregated lines
   dedupe_interval: 10s
+  severity_keys: [level, severity, lvl, loglevel, log.level]
+                                 # log attributes (and structured body fields) holding a level; a record
+                                 # at warning or above there, or by severity_number/severity_text, is
+                                 # never measured as removable and never removed
   sinks:                         # every exporter downstream of the enforcement point
     otlp_http/loki: {loki: true}
     opensearch/logs: {opensearch: search}
@@ -76,6 +85,10 @@ vector:
   dedupe_group_by: [kubernetes.pod_name]
   dedupe_ms: 10000
   measure_sink: {type: prometheus_exporter, address: "0.0.0.0:9598"}
+  severity_paths: []             # VRL paths of level fields; empty: the defaults at the top level and
+                                 # beside every structured field, plus severity_number >= 13
+  severity_keys: []              # record paths of level fields, e.g. [[level], [body, level]]; empty:
+                                 # the defaults at the top level and beside every structured field
   sinks: {loki: {loki: true}}
   derived_exempt: {}
 
@@ -93,6 +106,7 @@ fluentbit:
 policy:
   actions: [aggregate, dedupe, sample]  # in order of preference; add drop to allow it, and
                                         # rollup to allow rewriting counting queries (Collector only)
+  experimental_rollup: false     # rollup is experimental: it is refused unless this is true
   sample_percent: 10
   acknowledge: []                # evidence gap keys accepted deliberately, from the report
   exempt: []                     # rule IDs (r-...) or template regexes never acted on
@@ -109,6 +123,7 @@ pricing:
 |---|---|
 | `querylog-disabled` | the query log is not read |
 | `querylog-not-live` | the marker query never appeared in the query log |
+| `grafana-datasource-unmapped` | a Grafana Loki datasource is in neither `datasources` nor `other_datasources`; its queries count as reading loki.url |
 | `querylog-not-proven` | `prove_live` is off, so it is not proven that queries, tails and pattern requests are logged |
 | `querylog-tail-not-visible` | a marker live tail never appeared in Loki's logs (tails need info-level querier logs) |
 | `querylog-patterns-not-visible` | a marker pattern request never appeared (set `frontend.query_stats_enabled: true`) |

@@ -1,0 +1,7 @@
+# The published image: the release binary goreleaser built for this platform, on distroless.
+FROM gcr.io/distroless/static-debian12:nonroot
+ARG TARGETPLATFORM
+COPY $TARGETPLATFORM/sievelog /usr/local/bin/sievelog
+COPY LICENSE NOTICE /usr/share/doc/sievelog/
+USER nonroot:nonroot
+ENTRYPOINT ["/usr/local/bin/sievelog"]

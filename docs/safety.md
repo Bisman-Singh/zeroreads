@@ -34,7 +34,11 @@ because the REST audit entry is written before the denial.
 Besides range and instant queries, the query log is read for live tails and for pattern requests
 (Grafana Logs Drilldown), which Loki logs on other lines and under other settings; each is proven
 visible with its own marker or reported as a gap. Label, series and stats requests read only the index
-and are not readers; a rule that would empty a stream is blocked instead.
+and are not readers; a rule that would empty a stream is blocked instead. Query-log lines from every
+Loki component count: the frontend, queriers (which log time-split copies, or queries that bypassed the
+frontend) and the ruler; a copy folds into the frontend query it came from, and so does a leg of it
+(each side of a binary operation is logged separately) logged within two minutes of its execution.
+Anything else is a reader of its own.
 
 When a query can read a rule's lines, the report shows a sample line it would read. That line is
 re-checked with the real regular expression engine before it is shown.
@@ -44,13 +48,19 @@ cover the evidence window; if a source cannot be read; if a destination downstre
 point has no evidence; or if a connector turns these logs into metrics, every rule is blocked until
 the gap is fixed or explicitly acknowledged in `policy.acknowledge`.
 
-**A rollup keeps every counting reader's numbers.** A rule may roll up only when each of its readers
+**A rollup keeps every counting reader's numbers (experimental).** Rollup is refused unless
+`policy.experimental_rollup` is set. A rule may roll up only when each of its readers
 is a stored `sum [by (stream labels)] (count_over_time|rate(...))` whose line filters provably keep
 every line of the rule, in a Grafana dashboard, library panel or alert rule, or a Loki ruler group.
 Each is rewritten as the original minus the rule's lines, plus the rollup records' counts, plus any
 of the rule's lines still stored, and the rewritten query is analysed again: it must not read the
-rule's lines except through that last compensating term. An executed query counts only when it is
-exactly one of those stored queries. Anything else that reads the lines keeps blocking. Rollup
+rule's lines except through that last compensating term. The first term also excludes every rollup
+record (`| sievelog_rule=""`), because a record's marker text can pass the original filters
+(`!= "/healthz"` does). An executed query counts only when it is the same query as one of those stored
+queries, compared in a canonical form that ignores formatting and time-split offsets. Anything else
+that reads the lines keeps blocking, and so does any other query that could select the rollup records
+themselves (`!~ "DEBUG"` would count them once they appear); `verify` checks both again after
+enforcing. Rollup
 records carry the stream's labels but not the lines' structured metadata, so grouping by structured
 metadata is not rewritten. A rollup record's timestamp is when its interval flushes, so a count over
 a window can shift by up to one interval at the window's edges.
@@ -60,15 +70,24 @@ blocked, because the stream would vanish from label, series and volume results. 
 always leave a record, so they are not affected.
 
 **Errors and warnings are never touched.** A rule whose pattern can contain an error-like word, or
-whose sampled lines carry a warning or error severity, gets no action.
+whose sampled lines carry a warning or error level (from Loki labels, structured metadata or record
+fields named in `scope.severity_keys`), gets no action. And every emitted rule carries a runtime guard,
+whatever the analysis saw: a record whose `severity_number` is WARN or above, whose `severity_text`
+says warning or worse, or whose configured level field does, never matches a rule, so it is neither
+measured as removable nor removed. The Collector checks `severity_number`, `severity_text`, log
+attributes and structured body fields; Vector checks the configured paths and `severity_number`;
+Fluent Bit checks the configured record keys. Each is tested against the real engine.
 
 **Measure before removing.** Shadow mode adds only measurement: per rule, the lines (and, where the
-runtime can count them, bytes) that enforcement would remove. Enforce mode keeps measuring.
+runtime can count them, bytes) that enforcement would remove. In the Collector, measurement runs after
+every processor that follows the enforcement point, on exactly the records enforcement acts on, so the
+shadow numbers are what enforce removes. Enforce mode keeps measuring.
 
 **Removal is exact and reproducible.** Every runtime's output is checked against that runtime's real
 engine: every event or record delivered, removed, sampled or collapsed is compared with the
 prediction. Sampling keeps a line exactly when the SHA-256 of its text and timestamp falls below a
-threshold, so the decision for any line can be recomputed.
+threshold, so the decision for any line can be recomputed. A Collector record without a timestamp is
+keyed by its observed time, which is the time Loki stores for it.
 
 **New readers are caught.** `verify` re-reads every source and exits with code 3 when any enforced
 rule gains a reader or loses its evidence, and writes the rules that remain safe: the revert. It also
@@ -90,7 +109,11 @@ under, and, given `-deployed`, when the deployed pipeline config is not exactly 
   narrow one.
 - **Fluent Bit cannot collapse lines while keeping a count**, so dedupe is not offered there.
 - **The Telemetry Policy format** can express only drop and sample on a plain body, and each policy is
-  verified against policy-go with the teroscan engine only.
+  verified against policy-go with the teroscan engine only. It cannot express the severity guard
+  (policy-go 1.12.1 treats a negated matcher on an absent field as no match, and the most restrictive
+  policy wins), so `emit -format policy` refuses unless `-allow-no-severity-guard` is passed.
+- **OpenSearch evidence is beta.** It is tested against OpenSearch and Dashboards 3.8.0 in kind, not yet
+  across real clusters of other versions and layouts.
 - **Measured bytes are not billed bytes.** Vendors bill on their own encoding. Compare the measured
   removal with the backend's own usage meters before and after enforcing.
 - **OpenSearch evidence depends on the audit log.** The security plugin does not log successful

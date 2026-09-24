@@ -9,5 +9,6 @@ inputs:
     default: rules.json
 runs:
   using: docker
-  image: Dockerfile
+  # The released image, not a build from source on every run. Kept equal to the chart's appVersion.
+  image: docker://ghcr.io/bisman-singh/sievelog:0.1.0
   args: ["verify", "-c", "${{ inputs.config }}", "-rules", "${{ inputs.rules }}"]

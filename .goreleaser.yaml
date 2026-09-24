@@ -30,6 +30,34 @@ checksum:
   name_template: checksums.txt
   algorithm: sha256
 
+sboms:
+  - artifacts: archive
+
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args: ["sign-blob", "--yes", "--output-signature=${signature}", "--output-certificate=${certificate}", "${artifact}"]
+
+# The image the Helm chart and the GitHub Action run, at the release version.
+dockers_v2:
+  - id: image
+    ids: [sievelog]
+    images: [ghcr.io/bisman-singh/sievelog]
+    tags: ["{{ .Version }}", "v{{ .Major }}"]
+    dockerfile: Dockerfile.release
+    platforms: [linux/amd64, linux/arm64]
+    extra_files: [LICENSE, NOTICE]
+    labels:
+      org.opencontainers.image.source: https://github.com/Bisman-Singh/sievelog
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.licenses: Apache-2.0
+
+docker_signs:
+  - artifacts: images
+    args: ["sign", "--yes", "${artifact}@${digest}"]
+
 snapshot:
   version_template: "{{ incpatch .Version }}-snapshot"
 

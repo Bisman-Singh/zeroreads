@@ -14,6 +14,9 @@ ${K} port-forward svc/loki 13100:3100 >/dev/null 2>&1 & P1=$!
 ${K} port-forward svc/grafana 13000:3000 >/dev/null 2>&1 & P2=$!
 trap 'kill ${P1} ${P2} 2>/dev/null || true; curl -s -X DELETE "http://admin:e2e-only-password@localhost:13000/api/dashboards/uid/act-cache" >/dev/null || true' EXIT
 sleep 3
+# The action runs the released image; build this checkout under that tag so act uses it locally.
+IMAGE=$(sed -n 's#.*image: docker://##p' action.yml)
+docker build -q -t "${IMAGE}" . >/dev/null
 run() { act push -W e2e/action/verify.yml --bind -P ubuntu-latest=node:20-bookworm-slim --pull=false 2>&1; }
 out=$(run) || true
 echo "${out}" | grep -q "Job succeeded" || { echo "${out}"; echo "FAIL: expected the action to pass"; exit 1; }
