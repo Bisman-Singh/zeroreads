@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluent-bit
+  namespace: sievelog-system
+spec:
+  selector:
+    matchLabels: {app: fluent-bit}
+  template:
+    metadata:
+      labels: {app: fluent-bit}
+    spec:
+      containers:
+        - name: fluent-bit
+          image: fluent/fluent-bit:5.1.2
+          imagePullPolicy: IfNotPresent
+          args: ["-c", "/conf/fluent-bit.yaml"]
+          securityContext:
+            runAsUser: 0 # reads kubelet pod logs and writes to the host mount
+          volumeMounts:
+            - {name: conf, mountPath: /conf}
+            - {name: pods, mountPath: /var/log/pods, readOnly: true}
+            - {name: out, mountPath: /e2e/out}
+      volumes:
+        - name: conf
+          configMap: {name: fluent-bit-config}
+        - name: pods
+          hostPath: {path: /var/log/pods}
+        - name: out
+          hostPath: {path: /e2e/out, type: DirectoryOrCreate}

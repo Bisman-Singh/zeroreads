@@ -1,0 +1,83 @@
+# The "user" Fluent Bit config the runtime loop analyses, emits from and deploys: pod logs of every
+# sievelog-fbloop-* namespace go to Loki; a second, independent tail keeps a raw copy of every record
+# with its exact timestamp so removal can be checked line by line. Measurement metrics go to stdout.
+service:
+  flush: 1
+  log_level: warn
+parsers:
+  - name: cri_e2e
+    format: regex
+    regex: '^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<message>.*)$'
+    time_key: time
+    time_format: '%Y-%m-%dT%H:%M:%S.%L%z'
+  - name: json_e2e
+    format: json
+pipeline:
+  inputs:
+    - name: tail
+      path: /var/log/pods/sievelog-fbloop-*_*/*/*.log
+      tag_regex: '^/var/log/pods/(?<ns>[^_]+)_[^/]+/(?<container>[^/]+)/'
+      tag: kube.<ns>.<container>
+      parser: cri_e2e
+      refresh_interval: 1
+    - name: tail
+      path: /var/log/pods/sievelog-fbloop-*_*/*/*.log
+      tag_regex: '^/var/log/pods/(?<ns>[^_]+)_[^/]+/(?<container>[^/]+)/'
+      tag: raw.<ns>.<container>
+      parser: cri_e2e
+      refresh_interval: 1
+  filters:
+    - name: lua
+      match: kube.*
+      alias: meta
+      call: meta
+      code: |
+        function meta(tag, ts, record)
+          local ns, c = tag:match("^kube%.([^%.]+)%.(.+)$")
+          record["service"] = c
+          record["ns"] = ns
+          return 2, ts, record
+        end
+    - name: parser
+      match: kube.*
+      alias: prep
+      key_name: message
+      parser: json_e2e
+      reserve_data: true
+      preserve_key: true
+    - name: lua
+      match: raw.*
+      call: raw
+      time_as_table: true
+      code: |
+        function raw(tag, ts, record)
+          local ns, c = tag:match("^raw%.([^%.]+)%.(.+)$")
+          record["service"] = c
+          record["ns"] = ns
+          record["tsn"] = string.format("%d%09d", ts.sec, ts.nsec)
+          return 2, ts, record
+        end
+  outputs:
+    - name: loki
+      alias: loki
+      match: kube.*
+      host: loki.sievelog-system.svc
+      port: 3100
+      labels: service_name=$service, k8s_namespace_name=$ns
+      remove_keys: service, ns, stream, logtag, level, msg, route, status
+      drop_single_key: raw
+    - name: file
+      alias: logs
+      match: kube.*
+      path: /e2e/out
+      file: fbloop-logs.json
+      format: plain
+    - name: file
+      alias: raw
+      match: raw.*
+      path: /e2e/out
+      file: fbloop-raw.json
+      format: plain
+    - name: stdout
+      alias: metrics
+      match: sievelog.metrics

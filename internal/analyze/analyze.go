@@ -109,6 +109,9 @@ type Reader struct {
 	Witness              string
 	Reason               string
 	Rewrite              *Rewrite // set when a rollup can keep this reader's numbers
+	// Compensated is true for a query sievelog already rewrote for a rollup of this rule: its
+	// raw-line term reads the lines, and only a rollup keeps its numbers.
+	Compensated bool
 }
 
 // Recommendation is the decision for one candidate.
@@ -204,7 +207,11 @@ func Decide(cands []Candidate, queries []UsageQuery, scoped []ScopedReader, gaps
 			}
 			for _, sel := range p.sel {
 				if rewrite.Compensated(p.parsed, sel, rec.ID, c.Language) {
-					continue // a sievelog rewrite's raw-line term, summed with the rollup counts
+					// A sievelog rewrite's raw-line term: summed with the rollup counts, it keeps the
+					// query's numbers only if this rule is rolled up.
+					rec.Readers = append(rec.Readers, Reader{Source: p.q.Source, Origin: p.q.Origin, Expr: p.q.Expr, Counting: true, Compensated: true,
+						Reason: "already rewritten for a rollup of these lines; any other removal changes its count"})
+					break
 				}
 				v := usage.Evaluate(sel, rule)
 				if v.Used {
@@ -219,7 +226,7 @@ func Decide(cands []Candidate, queries []UsageQuery, scoped []ScopedReader, gaps
 		}
 		rollupOK := rollup && !c.Structured && len(rec.Readers) > 0
 		for i, rd := range rec.Readers {
-			if rd.Rewrite != nil {
+			if rd.Rewrite != nil || rd.Compensated {
 				continue
 			}
 			// An executed query (query log) is covered when it is exactly a stored query being rewritten.
@@ -293,6 +300,9 @@ func Decide(cands []Candidate, queries []UsageQuery, scoped []ScopedReader, gaps
 			if rec.Action == "rollup" {
 				seen := map[string]bool{}
 				for _, rd := range rec.Readers {
+					if rd.Rewrite == nil {
+						continue // already rewritten
+					}
 					if k := rd.Rewrite.Source + "\x00" + rd.Rewrite.Origin; !seen[k] {
 						seen[k] = true
 						rec.Rewrites = append(rec.Rewrites, *rd.Rewrite)

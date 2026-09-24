@@ -1,0 +1,44 @@
+# The "user" Vector config the runtime loop analyses, emits from and deploys: pod logs of every
+# sievelog-vloop-* namespace go to Loki and a local file; a second, independent source keeps a raw
+# copy of every record so removal can be checked line by line.
+data_dir: /var/lib/vector
+sources:
+  pods:
+    type: file
+    include: [/var/log/pods/sievelog-vloop-*_*/*/*.log]
+    read_from: end
+  pods_raw:
+    type: file
+    include: [/var/log/pods/sievelog-vloop-*_*/*/*.log]
+    read_from: end
+transforms:
+  prep:
+    type: remap
+    inputs: [pods]
+    source: &parse |
+      cri = parse_regex!(.message, r'^(?P<ts>\S+) (?P<stream>\S+) (?P<tag>\S+) (?P<log>.*)$')
+      path = parse_regex!(.file, r'^/var/log/pods/(?P<ns>[^_]+)_[^/]+/(?P<container>[^/]+)/')
+      . = {"timestamp": parse_timestamp!(cri.ts, "%+"), "service": path.container, "ns": path.ns, "message": cri.log}
+      if .service == "orders" { .body = parse_json!(.message) }
+  raw_prep:
+    type: remap
+    inputs: [pods_raw]
+    source: *parse
+sinks:
+  loki:
+    type: loki
+    inputs: [prep]
+    endpoint: http://loki.sievelog-system.svc:3100
+    labels: {service_name: "{{ service }}", k8s_namespace_name: "{{ ns }}"}
+    encoding: {codec: text}
+    out_of_order_action: accept
+  logs:
+    type: file
+    inputs: [prep]
+    path: /e2e/out/vloop-logs.json
+    encoding: {codec: json}
+  raw:
+    type: file
+    inputs: [raw_prep]
+    path: /e2e/out/vloop-raw.json
+    encoding: {codec: json}

@@ -78,6 +78,14 @@ ${K} apply -f "${ROOT}/e2e/k8s/opensearch.yaml" >/dev/null
 ${K} rollout status deployment/opensearch -n sievelog-system --timeout=600s >/dev/null
 ${K} rollout status deployment/opensearch-dashboards -n sievelog-system --timeout=900s >/dev/null
 
+log "deploying vector and fluent bit"
+${K} -n sievelog-system create configmap vector-config --from-file=vector.yaml="${ROOT}/e2e/runtimes/vector.yaml" --dry-run=client -o yaml | ${K} apply -f - >/dev/null
+${K} -n sievelog-system create configmap fluent-bit-config --from-file=fluent-bit.yaml="${ROOT}/e2e/runtimes/fluent-bit.yaml" --dry-run=client -o yaml | ${K} apply -f - >/dev/null
+${K} apply -f "${ROOT}/e2e/k8s/vector.yaml" -f "${ROOT}/e2e/k8s/fluent-bit.yaml" >/dev/null
+${K} rollout restart daemonset/vector daemonset/fluent-bit -n sievelog-system >/dev/null
+${K} rollout status daemonset/vector -n sievelog-system --timeout=300s >/dev/null
+${K} rollout status daemonset/fluent-bit -n sievelog-system --timeout=300s >/dev/null
+
 log "deploying collector"
 # Only the current Loki pod's logs: kubelet keeps earlier pods' log files, and their query-log
 # lines would otherwise be re-shipped as usage evidence from a previous run.

@@ -32,12 +32,13 @@ import (
 )
 
 type loopEnv struct {
-	t    *testing.T
-	work string // .e2e on the host, mounted at /e2e in the node
-	root string
-	kube string
-	loki string
-	bin  string
+	t      *testing.T
+	prefix string // generator namespace prefix; the pipeline under test tails only these
+	work   string // .e2e on the host, mounted at /e2e in the node
+	root   string
+	kube   string
+	loki   string
+	bin    string
 }
 
 func (e *loopEnv) run(dir, name string, args ...string) (string, int) {
@@ -90,7 +91,11 @@ func (e *loopEnv) deployCollector(cfgPath string) {
 // batch runs the ground-truth generators in a fresh loop namespace and returns the namespace.
 func (e *loopEnv) batch(name string, seed uint64, count int) string {
 	e.t.Helper()
-	ns := fmt.Sprintf("sievelog-loop-%d-%s", time.Now().Unix(), name)
+	prefix := e.prefix
+	if prefix == "" {
+		prefix = "sievelog-loop"
+	}
+	ns := fmt.Sprintf("%s-%d-%s", prefix, time.Now().Unix(), name)
 	e.kubectl("create", "namespace", ns)
 	for _, s := range []string{"checkout", "auth", "orders"} {
 		job := fmt.Sprintf(`apiVersion: batch/v1

@@ -208,3 +208,23 @@ func TestRollupRewritesCountingReaders(t *testing.T) {
 		t.Fatalf("no reader: %+v", recs[0])
 	}
 }
+
+func TestCompensatedQueryOnlyAllowsRollup(t *testing.T) {
+	c := cache
+	c.StreamLabels = map[string]bool{"service_name": true}
+	id := c.ID()
+	rewritten := "(sum(count_over_time({service_name=\"checkout\"} |= \"DEBUG cache\" !~ `" + c.Language + "` [5m])) + sum(sum_over_time({service_name=\"checkout\"} |= `sievelog rollup " + id +
+		"` | sievelog_rule=\"" + id + "\" | unwrap sievelog_dedup_count [5m])) + sum(count_over_time({service_name=\"checkout\"} |~ `" + c.Language + "` [5m])))"
+	q := UsageQuery{Source: "loki-querylog", Origin: "query-log", Expr: rewritten}
+	pol := DefaultPolicy()
+	pol.Actions = []string{"sample"}
+	recs, _ := Decide([]Candidate{c}, []UsageQuery{q}, nil, nil, pol)
+	if recs[0].Action != "none" || len(recs[0].Readers) != 1 || !recs[0].Readers[0].Compensated {
+		t.Fatalf("sample must be blocked by an already rewritten query: %+v", recs[0])
+	}
+	pol.Actions = []string{"rollup"}
+	recs, _ = Decide([]Candidate{c}, []UsageQuery{q}, nil, nil, pol)
+	if recs[0].Action != "rollup" || len(recs[0].Rewrites) != 0 {
+		t.Fatalf("rollup keeps it, with nothing to rewrite: %+v", recs[0])
+	}
+}
