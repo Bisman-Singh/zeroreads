@@ -311,7 +311,7 @@ func (r *Reader) scan(ctx context.Context, index string, query any, fn func(hit)
 			Hits []hit `json:"hits"`
 		} `json:"hits"`
 	}
-	if err := r.C.do(ctx, http.MethodPost, "/"+index+"/_search?scroll=2m&size=1000&ignore_unavailable=true&allow_no_indices=true", map[string]any{"query": query, "sort": []any{"_doc"}}, &page); err != nil {
+	if err := r.C.do(ctx, http.MethodPost, "/"+index+"/_search?scroll=2m&size=1000&ignore_unavailable=true&allow_no_indices=true&expand_wildcards=all", map[string]any{"query": query, "sort": []any{"_doc"}}, &page); err != nil {
 		return err
 	}
 	defer func() {

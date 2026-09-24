@@ -440,3 +440,103 @@ policy:
 		}
 	})
 }
+
+// dashCall performs one OpenSearch Dashboards API call as the e2e admin in a tenant.
+func dashCall(t *testing.T, method, path, tenant string, body any) []byte {
+	t.Helper()
+	var r io.Reader
+	if body != nil {
+		j, _ := json.Marshal(body)
+		r = bytes.NewReader(j)
+	}
+	req, _ := http.NewRequest(method, os.Getenv("DASHBOARDS_URL")+path, r)
+	req.SetBasicAuth("admin", os.Getenv("OPENSEARCH_PASSWORD"))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("osd-xsrf", "true")
+	req.Header.Set("securitytenant", tenant)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode/100 != 2 {
+		t.Fatalf("dashboards %s %s (%s): %d %s", method, path, tenant, resp.StatusCode, out)
+	}
+	return out
+}
+
+// TestOpenSearchDashboardsSavedObjects creates saved objects through a real OpenSearch Dashboards in
+// the global, private and a custom tenant, and checks the reader finds every one, resolves each
+// index pattern within its own tenant, and decides reads exactly.
+func TestOpenSearchDashboardsSavedObjects(t *testing.T) {
+	if os.Getenv("DASHBOARDS_URL") == "" {
+		t.Fatal("DASHBOARDS_URL is not set")
+	}
+	n := fmt.Sprintf("d%d", time.Now().UnixNano())
+	osAdmin(t, "PUT", "/_plugins/_security/api/tenants/"+n, map[string]any{"description": "e2e"})
+	defer osAdmin(t, "DELETE", "/_plugins/_security/api/tenants/"+n, nil)
+	search := func(tenant, id, pattern string) {
+		dashCall(t, "POST", "/api/saved_objects/search/"+id, tenant, map[string]any{
+			"attributes": map[string]any{"title": id, "columns": []string{"_source"},
+				"kibanaSavedObjectMeta": map[string]any{"searchSourceJSON": `{"query":{"query":"service.name:auth","language":"kuery"},"indexRefName":"kibanaSavedObjectMeta.searchSourceJSON.index"}`}},
+			"references": []any{map[string]any{"name": "kibanaSavedObjectMeta.searchSourceJSON.index", "type": "index-pattern", "id": pattern}}})
+	}
+	vis := func(tenant, id, pattern string) {
+		dashCall(t, "POST", "/api/saved_objects/visualization/"+id, tenant, map[string]any{
+			"attributes": map[string]any{"title": id, "visState": `{"type":"table","aggs":[]}`, "uiStateJSON": "{}",
+				"kibanaSavedObjectMeta": map[string]any{"searchSourceJSON": `{"indexRefName":"kibanaSavedObjectMeta.searchSourceJSON.index"}`}},
+			"references": []any{map[string]any{"name": "kibanaSavedObjectMeta.searchSourceJSON.index", "type": "index-pattern", "id": pattern}}})
+	}
+	pattern := func(tenant, id, title string) {
+		dashCall(t, "POST", "/api/saved_objects/index-pattern/"+id, tenant, map[string]any{"attributes": map[string]any{"title": title}})
+	}
+	// The same pattern id means different titles in different tenants.
+	pattern("global", n+"-p", n+"-logs*")
+	pattern(n, n+"-p", n+"-metrics*")
+	pattern("__user__", n+"-p", n+"-audit*,"+n+"-logs-checkout")
+	search("global", n+"-s-global", n+"-p")      // reads the logs
+	vis(n, n+"-v-custom", n+"-p")                // reads metrics only
+	vis("__user__", n+"-v-private", n+"-p")      // reads checkout's own index
+	vis("global", n+"-v-dangling", n+"-missing") // an unknown pattern: every index
+	dashCall(t, "POST", "/api/saved_objects/query/"+n+"-q", n, map[string]any{"attributes": map[string]any{"title": n, "query": map[string]any{"query": "x", "language": "kuery"}}})
+	defer func() {
+		for _, o := range [][3]string{{"search", n + "-s-global", "global"}, {"visualization", n + "-v-custom", n}, {"visualization", n + "-v-private", "__user__"},
+			{"visualization", n + "-v-dangling", "global"}, {"query", n + "-q", n}, {"index-pattern", n + "-p", "global"}, {"index-pattern", n + "-p", n}, {"index-pattern", n + "-p", "__user__"}} {
+			dashCall(t, "DELETE", "/api/saved_objects/"+o[0]+"/"+o[1], o[2], nil)
+		}
+	}()
+
+	cl := &opensearch.Client{Base: os.Getenv("OPENSEARCH_URL"), Username: "admin", Password: os.Getenv("OPENSEARCH_PASSWORD"), InsecureSkipVerify: true}
+	r := &opensearch.Reader{C: cl, AuditIndex: "security-auditlog-*", DashboardsIndex: ".kibana*"}
+	res := r.Read(context.Background(), time.Now().Add(-time.Minute), time.Now())
+	if g := gapSet(res.Gaps); !strings.Contains(g["opensearch-saved-queries"], n+"-q") || g["opensearch-dashboards-unreadable"] != "" {
+		t.Fatalf("gaps: %v", g)
+	}
+	checkout := opensearch.Scope{Indices: []string{n + "-logs-checkout"}}
+	auth := opensearch.Scope{Indices: []string{n + "-logs-auth"}}
+	want := map[string][2]bool{ // object -> CannotRead for checkout, auth
+		n + "-s-global":   {false, false},
+		n + "-v-custom":   {true, true},
+		n + "-v-private":  {false, true},
+		n + "-v-dangling": {false, false},
+	}
+	seen := map[string]bool{}
+	for _, u := range res.Uses {
+		if u.Source != "savedobject" || !strings.Contains(u.Origin, n) {
+			continue
+		}
+		for id, w := range want {
+			if strings.Contains(u.Origin, ":"+id+" in ") {
+				seen[id] = true
+				if u.CannotRead(checkout) != w[0] || u.CannotRead(auth) != w[1] {
+					t.Fatalf("%s: indices %v, CannotRead checkout %v auth %v, want %v", u.Origin, u.Indices, u.CannotRead(checkout), u.CannotRead(auth), w)
+				}
+			}
+		}
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("found %v of %v in %+v", seen, want, res.Uses)
+	}
+	t.Logf("dashboards: saved objects in the global, private and a custom tenant read and decided exactly")
+}

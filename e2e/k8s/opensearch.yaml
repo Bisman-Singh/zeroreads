@@ -46,3 +46,66 @@ spec:
   ports:
     - port: 9200
       targetPort: 9200
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opensearch-dashboards-config
+  namespace: sievelog-system
+data:
+  opensearch_dashboards.yml: |
+    server.host: "0.0.0.0"
+    opensearch.hosts: ["https://opensearch:9200"]
+    opensearch.ssl.verificationMode: none
+    opensearch.username: kibanaserver
+    opensearch.password: kibanaserver
+    opensearch.requestHeadersAllowlist: [authorization, securitytenant]
+    opensearch_security.multitenancy.enabled: true
+    opensearch_security.multitenancy.tenants.preferred: [Private, Global]
+    opensearch_security.readonly_mode.roles: [kibana_read_only]
+    opensearch_security.cookie.secure: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensearch-dashboards
+  namespace: sievelog-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: opensearch-dashboards}
+  template:
+    metadata:
+      labels: {app: opensearch-dashboards}
+    spec:
+      containers:
+        - name: dashboards
+          image: opensearchproject/opensearch-dashboards:3.8.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5601
+          volumeMounts:
+            - {name: config, mountPath: /usr/share/opensearch-dashboards/config/opensearch_dashboards.yml, subPath: opensearch_dashboards.yml}
+          readinessProbe:
+            httpGet:
+              path: /api/status
+              port: 5601
+              httpHeaders: [{name: Authorization, value: "Basic YWRtaW46RTJlLW9ubHktUGFzc3cwcmQh"}]  # the e2e admin
+            periodSeconds: 5
+            failureThreshold: 120
+          resources:
+            requests: {memory: 512Mi}
+      volumes:
+        - name: config
+          configMap: {name: opensearch-dashboards-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch-dashboards
+  namespace: sievelog-system
+spec:
+  selector: {app: opensearch-dashboards}
+  ports:
+    - port: 5601
+      targetPort: 5601
