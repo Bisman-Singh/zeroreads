@@ -22,7 +22,7 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             - {name: discovery.type, value: single-node}
-            - {name: OPENSEARCH_JAVA_OPTS, value: "-Xms768m -Xmx768m"}
+            - {name: OPENSEARCH_JAVA_OPTS, value: "-Xms1536m -Xmx1536m"}
             - {name: OPENSEARCH_INITIAL_ADMIN_PASSWORD, value: "E2e-only-Passw0rd!"}
             - {name: plugins.security.audit.type, value: internal_opensearch}
             - {name: DISABLE_INSTALL_DEMO_CONFIG, value: "false"}
@@ -34,7 +34,7 @@ spec:
             periodSeconds: 5
             failureThreshold: 60
           resources:
-            requests: {memory: 1200Mi}
+            requests: {memory: 2Gi}
 ---
 apiVersion: v1
 kind: Service

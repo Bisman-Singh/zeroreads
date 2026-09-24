@@ -42,9 +42,9 @@ infrastructure, and shows its evidence for every decision.
 
 | Runtime | Output | Verified against |
 |---|---|---|
-| OpenTelemetry Collector | `filter`, `logdedup`, `signal_to_metrics`, `forward` config | contrib 0.161.0, end to end on Kubernetes |
-| Vector | VRL `remap`, `route`, `reduce`, `log_to_metric` config | Vector 0.58.0, every event compared |
-| Fluent Bit | `modify`, `grep`, `lua`, `log_to_metrics` config | Fluent Bit 5.1.2, every record compared |
+| OpenTelemetry Collector | `filter`, `logdedup`, `transform`, `signal_to_metrics`, `forward` config | contrib 0.161.0, full loop on Kubernetes |
+| Vector | VRL `remap`, `route`, `reduce`, `log_to_metric` config | Vector 0.58.0, full loop on Kubernetes, every event compared |
+| Fluent Bit | `modify`, `grep`, `lua`, `log_to_metrics` config | Fluent Bit 5.1.2, full loop on Kubernetes, every record compared |
 | Telemetry Policy | policy file for policy-go based runtimes | policy-go 1.12.1 with teroscan |
 
 Every regular expression is rewritten for the target engine's dialect and checked against that engine
@@ -79,7 +79,9 @@ See [docs/configuration.md](docs/configuration.md) for every setting and
 go build ./cmd/sievelog
 ./scripts/check.sh            # formatting, vet, unit tests
 ./scripts/check-runtimes.sh   # dialect and runtime tests against real Vector and Fluent Bit (docker)
-./e2e/run.sh                  # full loop on kind: Loki, Grafana, OpenSearch, the Collector, the Helm chart
+./e2e/run.sh                  # on kind: Loki, Grafana, OpenSearch and Dashboards; the full loop through
+                              # the Collector, Vector and Fluent Bit; rollups with rewrites; the Helm
+                              # chart; a million-line scale run
 ```
 
 ## License

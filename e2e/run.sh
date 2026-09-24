@@ -75,6 +75,8 @@ ${K} rollout status deployment/grafana -n sievelog-system --timeout=240s >/dev/n
 
 log "deploying opensearch"
 ${K} apply -f "${ROOT}/e2e/k8s/opensearch.yaml" >/dev/null
+# A fresh cluster every run: audit indices and scale data from earlier runs would otherwise pile up.
+${K} rollout restart deployment/opensearch deployment/opensearch-dashboards -n sievelog-system >/dev/null
 ${K} rollout status deployment/opensearch -n sievelog-system --timeout=600s >/dev/null
 ${K} rollout status deployment/opensearch-dashboards -n sievelog-system --timeout=900s >/dev/null
 
