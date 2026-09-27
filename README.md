@@ -94,6 +94,14 @@ sievelog verify -c sievelog.yaml -rules out/rules.json -deployed collector.yaml
 # exit code 3 when a rule is no longer safe or the deployed config is not the emitted one
 ```
 
+Exit codes: 0 success, 1 error, 2 usage, 3 `verify` found a rule that is no longer safe or a
+deployed configuration that differs from the emitted one, 4 `reconcile` found stored volume that does
+not match the rules, 5 `rewrite` could not rewrite every object. `sievelog version` prints the release
+and the embedded drain version.
+
+sievelog sends nothing anywhere except to the Loki, Grafana and OpenSearch you configure: no
+telemetry, no update checks.
+
 Run `verify` on a schedule with the Helm chart in `charts/sievelog`, or in CI with the GitHub Action in
 this repository. When someone adds a dashboard or alert that reads removed lines, `verify` fails, says
 why, and prints the rules that remain safe: emit and deploy those to revert. It also reports drift:
