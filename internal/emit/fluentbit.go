@@ -102,7 +102,7 @@ func FluentBit(files [][]byte, t FluentBitTarget, rules []Rule, mode Mode) ([]by
 	if t.After != "" {
 		pos = -1
 		for i, f := range filters {
-			if fm, _ := f.(map[string]any); fm["alias"] == t.After {
+			if fm, _ := f.(map[string]any); property(fm, "alias") == t.After {
 				pos = i + 1
 			}
 		}
@@ -111,7 +111,7 @@ func FluentBit(files [][]byte, t FluentBitTarget, rules []Rule, mode Mode) ([]by
 		}
 	}
 	for _, f := range filters {
-		if fm, _ := f.(map[string]any); strings.HasPrefix(fmt.Sprint(fm["alias"]), "sievelog_") {
+		if fm, _ := f.(map[string]any); strings.HasPrefix(fmt.Sprint(property(fm, "alias")), "sievelog_") {
 			return nil, fmt.Errorf("emit: the configuration already has sievelog filters")
 		}
 	}
@@ -202,6 +202,16 @@ func FluentBit(files [][]byte, t FluentBitTarget, rules []Rule, mode Mode) ([]by
 	out := append(append(append([]any(nil), filters[:pos]...), added...), filters[pos:]...)
 	pipeline["filters"] = out
 	return yaml.Marshal(cfg)
+}
+
+// property reads a plugin property: Fluent Bit matches property names case-insensitively.
+func property(m map[string]any, name string) any {
+	for k, v := range m {
+		if strings.EqualFold(k, name) {
+			return v
+		}
+	}
+	return nil
 }
 
 func regexpQuote(s string) string {

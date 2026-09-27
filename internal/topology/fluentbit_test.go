@@ -43,3 +43,29 @@ func TestFluentBitDownstream(t *testing.T) {
 		t.Fatal("unknown alias accepted")
 	}
 }
+
+// Fluent Bit reads property names case-insensitively (5.1.2 routes an output written
+// "Match: app"). Found by the v1 audit: such an output was classed as receiving nothing, so it
+// needed no evidence and was never a gap.
+func TestFluentBitPropertyNamesIgnoreCase(t *testing.T) {
+	c, err := LoadFluentBit([]byte(`
+pipeline:
+  filters:
+    - {Name: kubernetes, Match: "kube.*", Alias: k8s}
+    - {Name: Log_To_Metrics, Match: "kube.*", Alias: counts}
+  outputs:
+    - {Name: file, Match: "*", Alias: archive}
+    - {NAME: es, MATCH_REGEX: "^kube\\..*$", ALIAS: search}
+    - {name: stdout, alias: nothing}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outs, derived, err := c.FluentBitDownstream("kube.app.*", "k8s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outs) != 2 || outs["archive"] != "file" || outs["search"] != "es" || !reflect.DeepEqual(derived, []string{"counts"}) {
+		t.Fatalf("outputs %v, derived %v", outs, derived)
+	}
+}

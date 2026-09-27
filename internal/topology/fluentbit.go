@@ -30,12 +30,22 @@ func LoadFluentBit(files ...[]byte) (*FluentBitConfig, error) {
 	p := asMap(merged["pipeline"])
 	c := &FluentBitConfig{}
 	for _, x := range asList(p["filters"]) {
-		c.Filters = append(c.Filters, asMap(x))
+		c.Filters = append(c.Filters, lowerKeys(asMap(x)))
 	}
 	for _, x := range asList(p["outputs"]) {
-		c.Outputs = append(c.Outputs, asMap(x))
+		c.Outputs = append(c.Outputs, lowerKeys(asMap(x)))
 	}
 	return c, nil
+}
+
+// lowerKeys lower-cases a plugin's property names: Fluent Bit reads them case-insensitively, so
+// Match and match are the same property.
+func lowerKeys(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[strings.ToLower(k)] = v
+	}
+	return out
 }
 
 func asList(v any) []any { l, _ := v.([]any); return l }
@@ -110,7 +120,7 @@ func (c *FluentBitConfig) FluentBitDownstream(match, after string) (outputs map[
 	tags := globRegex(match)
 	for i, f := range c.Filters[start:] {
 		name, _ := f["name"].(string)
-		if name != "rewrite_tag" && name != "log_to_metrics" {
+		if !strings.EqualFold(name, "rewrite_tag") && !strings.EqualFold(name, "log_to_metrics") {
 			continue
 		}
 		re, ok := tagMatcher(f)

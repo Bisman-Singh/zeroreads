@@ -232,3 +232,14 @@ func TestFluentBitRefusesCounts(t *testing.T) {
 		}
 	}
 }
+
+func TestFluentBitFindsCapitalisedAlias(t *testing.T) {
+	cfg := strings.ReplaceAll(fluentBitUnit, "{name: modify, match: app, alias: prep, add: x 1}", "{Name: modify, Match: app, Alias: prep, Add: x 1}")
+	out, err := FluentBit([][]byte{[]byte(cfg)}, fbTarget(), fbRules(), Shadow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i, j := strings.Index(string(out), "Alias: prep"), strings.Index(string(out), "sievelog_tag_"); i < 0 || j < i {
+		t.Fatalf("rules are not wired after the capitalised alias:\n%s", out)
+	}
+}
