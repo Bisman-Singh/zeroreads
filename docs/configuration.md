@@ -145,6 +145,7 @@ pricing:
 | `opensearch-dashboards-unreadable`, `opensearch-dashboards-unparsed` | Dashboards saved objects could not be read |
 | `opensearch-saved-queries` | Dashboards saved queries exist; they can be applied to any index pattern |
 | `opensearch-plugins` | queries stored by notebooks, reporting, anomaly detection and observability are not read |
+| `opensearch-transport-reads` | searches from other clusters arrive over the transport layer, which the REST audit log does not record |
 | `opensearch-scope-empty` | no document of the service is in its configured indices |
 | `opensearch-scope-outside` | some of the service's documents are outside its configured indices |
 | `opensearch-scope-unverified` | it could not be checked that the service's documents stay in its indices |

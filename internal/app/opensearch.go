@@ -101,6 +101,11 @@ func (c *Config) openSearchEvidence(ctx context.Context, from, now time.Time, se
 					target = strings.Join(u.Indices, ",")
 				}
 				why := "targets " + target + ", which can hold this service's documents"
+				for _, i := range u.Indices {
+					if u.Source == "audit" && !strings.HasPrefix(i, "-") && !strings.Contains(i, ":") && scope.Gone(i) {
+						why += "; " + i + " no longer exists here and may have been an alias over them"
+					}
+				}
 				if u.Opaque {
 					why += "; its query is not interpreted"
 				} else if len(u.Query) > 0 {

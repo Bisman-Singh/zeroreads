@@ -29,7 +29,9 @@ other services through an exact `term` or `terms` filter on the service field (i
 confirms the field is a plain `keyword` everywhere in scope, with no normalizer, no document missing
 it and no document holding several values. SQL, PPL, Lucene query strings, KQL, `_msearch` and every
 unknown endpoint read everything. A request denied after authentication still counts as a read,
-because the REST audit entry is written before the denial.
+because the REST audit entry is written before the denial. A request naming an index or alias the
+cluster no longer has reads every line too: it may have been an alias over the service's indices when
+it ran.
 
 Besides range and instant queries, the query log is read for live tails and for pattern requests
 (Grafana Logs Drilldown), which Loki logs on other lines and under other settings; each is proven
@@ -37,7 +39,8 @@ visible with its own marker or reported as a gap. Label, series and stats reques
 and are not readers; a rule that would empty a stream is blocked instead. Query-log lines from every
 Loki component count: the frontend, queriers (which log time-split copies, or queries that bypassed the
 frontend) and the ruler; a copy folds into the frontend query it came from, and so does a leg of it
-(each side of a binary operation is logged separately) logged within two minutes of its execution.
+(each side of a binary operation is logged separately) logged within two minutes of its execution,
+but only when the frontend query reads everything the leg reads.
 Anything else is a reader of its own.
 
 When a query can read a rule's lines, the report shows a sample line it would read. That line is
@@ -120,6 +123,9 @@ under, and, given `-deployed`, when the deployed pipeline config is not exactly 
   requests by default, ignores `kibanaserver` by default, and keeps audit indices only as long as its
   retention allows. Each of these is reported as a gap. Queries stored by notebooks, reporting,
   anomaly detection and observability are not read, and saved queries can apply to any index pattern;
-  both are gaps too.
+  both are gaps too. Searches from other clusters (cross-cluster search and replication) arrive over
+  the transport layer and are not in the REST audit log, which is a gap as well. OpenSearch keeps no
+  alias history, so a wildcard request that matched an alias removed since is judged against today's
+  names.
 - **Not yet connected as evidence sources:** other log services. A pipeline that also sends logs
   there reports those destinations as gaps until they are exempted.

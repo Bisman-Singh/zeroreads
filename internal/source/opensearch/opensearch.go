@@ -145,6 +145,10 @@ func (r *Reader) Read(ctx context.Context, start, end time.Time) Result {
 	r.checkSearchPipelines(ctx, &res)
 	res.Gaps = append(res.Gaps, Gap{Key: "opensearch-plugins", Origin: "notebooks, reporting, anomaly detection, observability, query workbench",
 		Reason: "queries stored by these OpenSearch plugins are not read; the ones they run are in the audit log only while they run"})
+	// Another cluster reaches this one over the transport layer, which the REST audit log does not
+	// record, and nothing on this side lists who does.
+	res.Gaps = append(res.Gaps, Gap{Key: "opensearch-transport-reads", Origin: "transport layer",
+		Reason: "searches from other clusters (cross-cluster search, cross-cluster replication) are not in the REST audit log; acknowledge if no other cluster reads this one"})
 	return res
 }
 

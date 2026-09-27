@@ -156,7 +156,7 @@ func TestReadAudit(t *testing.T) {
 	if res.Lines != len(f.audit) || len(res.Uses) != 6 {
 		t.Fatalf("lines %d uses %d: %+v", res.Lines, len(res.Uses), res.Uses)
 	}
-	chk := Scope{Indices: []string{"logs-checkout"}, ServiceField: "service.name", Service: "checkout"}
+	chk := Scope{Indices: []string{"logs-checkout"}, ServiceField: "service.name", Service: "checkout"}.Expand(Catalog{Indices: []string{"logs-checkout", "logs-a"}})
 	// Identical requests fold into one use: the bounded aggregation into the plain term search, the
 	// global aggregation and the search pipeline into the q-parameter search (all opaque on logs-*).
 	counts := []int{2, 3, 1, 1, 1, 1}
@@ -248,7 +248,7 @@ func TestMonitors(t *testing.T) {
 	if err := r.readMonitors(context.Background(), &res); err != nil {
 		t.Fatal(err)
 	}
-	chk := Scope{Indices: []string{"logs-checkout"}, ServiceField: "service.name", Service: "checkout"}
+	chk := Scope{Indices: []string{"logs-checkout"}, ServiceField: "service.name", Service: "checkout"}.Expand(Catalog{Indices: []string{"logs-checkout", "logs-a"}})
 	if len(res.Uses) != 5 {
 		t.Fatalf("uses: %+v", res.Uses)
 	}
@@ -290,7 +290,7 @@ func TestSavedObjects(t *testing.T) {
 	if err := r.readSavedObjects(context.Background(), &res); err != nil {
 		t.Fatal(err)
 	}
-	chk := Scope{Indices: []string{"logs-checkout"}, ServiceField: "service.name", Service: "checkout"}
+	chk := Scope{Indices: []string{"logs-checkout"}, ServiceField: "service.name", Service: "checkout"}.Expand(Catalog{Indices: []string{"logs-checkout", "logs-a"}})
 	want := map[string]bool{"search:s1 in .kibana_1": true, "search:s2 in .kibana_tenant": false, "visualization:v1 in .kibana_1": false, "visualization:vega in .kibana_1": false}
 	if len(res.Uses) != len(want) {
 		t.Fatalf("uses: %+v", res.Uses)

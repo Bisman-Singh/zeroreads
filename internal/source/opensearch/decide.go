@@ -103,6 +103,15 @@ func (s Scope) Expand(cat Catalog) Scope {
 		out.Indices = append(out.Indices, n)
 	}
 	sort.Strings(out.Indices)
+	out.current = map[string]bool{}
+	for _, i := range cat.Indices {
+		out.current[i] = true
+	}
+	for _, m := range []map[string][]string{cat.Aliases, cat.DataStreams} {
+		for name := range m {
+			out.current[name] = true
+		}
+	}
 	return out
 }
 
@@ -136,10 +145,19 @@ type Scope struct {
 	Indices      []string // index expressions holding the service's documents, e.g. logs-checkout*
 	ServiceField string   // keyword field holding the service name
 	Service      string
+	current      map[string]bool // every index, alias and data stream name in the catalog, set by Expand
+}
+
+// Gone reports whether name is an exact index expression that the cluster no longer has. Audited
+// requests span the evidence window, and an alias that pointed at the scope's indices then may
+// have been removed since, so a request through it cannot be shown to have read nothing.
+func (s Scope) Gone(name string) bool {
+	return !strings.Contains(name, "*") && !s.current[name]
 }
 
 // CannotRead reports whether u provably reads nothing of the scope's documents. s must be expanded
-// with the cluster's catalog so aliases and data streams are covered.
+// with the cluster's catalog so aliases and data streams are covered. An audited request that named
+// an index expression the cluster no longer has may have read the scope through a removed alias.
 func (u Use) CannotRead(s Scope) bool {
 	if len(u.Indices) == 0 {
 		return u.excludes(s)
@@ -149,8 +167,11 @@ func (u Use) CannotRead(s Scope) bool {
 		if strings.HasPrefix(t, "-") {
 			continue // an exclusion never adds indices; ignoring it only widens the target
 		}
-		if _, remote, ok := strings.Cut(t, ":"); ok {
-			t = remote // cross-cluster: the remote may be this cluster
+		_, remote, cross := strings.Cut(t, ":")
+		if cross {
+			t = remote // cross-cluster: the remote may be this cluster, whose names are judged by pattern
+		} else if u.Source == "audit" && s.Gone(t) {
+			return u.excludes(s) // it ran during the window; stored queries run against today's names
 		}
 		for _, si := range s.Indices {
 			if overlaps(t, si) {

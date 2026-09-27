@@ -270,6 +270,9 @@ func TestOpenSearchEvidence(t *testing.T) {
 		"audit POST /_plugins/_ppl",
 		"monitor monitor " + n + "-doc (" + dm + ")",
 		"savedobject visualization:v1 in " + so,
+		// A search on a name the cluster does not have: the audit entry cannot tell a name that never
+		// existed from an alias removed since, so it counts as a read until it leaves the window.
+		"audit POST /" + n + "-nothing/_search",
 	}
 	wantAuth := append([]string{"audit POST /" + logs + "/_search", "audit POST /" + n + "-*/_search", "monitor monitor " + n + "-query (" + qm + ")"}, wantCheckout...)
 	sort.Strings(wantCheckout)
@@ -419,7 +422,7 @@ collector:
   pipeline: logs
   sinks: {opensearch/logs: {opensearch: e2e}}
 policy:
-  acknowledge: [querylog-disabled, ruler-not-checked, grafana-not-configured, opensearch-plugins, opensearch-audit-window]
+  acknowledge: [querylog-disabled, ruler-not-checked, grafana-not-configured, opensearch-plugins, opensearch-transport-reads, opensearch-audit-window]
 `, os.Getenv("LOKI_URL"), os.Getenv("OPENSEARCH_URL"), so, logs, extra, col)), 0o644)
 		cfg, err := app.LoadConfig(cfgPath)
 		if err != nil {

@@ -7,7 +7,7 @@ import (
 
 func TestCannotRead(t *testing.T) {
 	cat := Catalog{
-		Indices:     []string{"logs-checkout-000001", "logs-auth-000001", ".ds-applogs-000001", ".ds-applogs-000002"},
+		Indices:     []string{"logs-checkout-000001", "logs-auth-000001", ".ds-applogs-000001", ".ds-applogs-000002", "metrics-1", "logs-auth"},
 		Aliases:     map[string][]string{"all-logs": {"logs-checkout-000001", "logs-auth-000001"}, "auth-only": {"logs-auth-000001"}, "chk": {".ds-applogs-000002"}},
 		DataStreams: map[string][]string{"applogs": {".ds-applogs-000001", ".ds-applogs-000002"}},
 	}
@@ -18,6 +18,7 @@ func TestCannotRead(t *testing.T) {
 		want bool
 	}{
 		{"other index", Use{Indices: []string{"metrics-*"}}, true},
+		{"other exact index", Use{Indices: []string{"metrics-1"}}, true},
 		{"wildcard overlap, no query", Use{Indices: []string{"logs-*"}}, false},
 		{"exact other service index", Use{Indices: []string{"logs-auth"}}, true},
 		{"alias to checkout", Use{Indices: []string{"all-logs"}}, false},
@@ -48,6 +49,12 @@ func TestCannotRead(t *testing.T) {
 		{"constant score", Use{Indices: []string{"logs-*"}, Query: json.RawMessage(`{"constant_score":{"filter":{"term":{"service.name":"auth"}}}}`)}, true},
 		{"match on service field is not exact", Use{Indices: []string{"logs-*"}, Query: json.RawMessage(`{"match":{"service.name":"auth"}}`)}, false},
 		{"other field term", Use{Indices: []string{"logs-*"}, Query: json.RawMessage(`{"term":{"level":"error"}}`)}, false},
+		// A name the cluster no longer has may have been an alias over the scope during the window.
+		// Found by the v1 audit: it was judged by its name alone.
+		{"removed alias", Use{Source: "audit", Indices: []string{"everything"}}, false},
+		{"removed alias, other service term", Use{Source: "audit", Indices: []string{"everything"}, Query: json.RawMessage(`{"term":{"service.name":"auth"}}`)}, true},
+		{"removed alias beside a known index", Use{Source: "audit", Indices: []string{"metrics-1", "everything"}}, false},
+		{"stored query on a missing name runs against today's names", Use{Source: "monitor", Indices: []string{"everything"}}, true},
 	}
 	for _, c := range cases {
 		if got := c.use.CannotRead(checkout); got != c.want {
