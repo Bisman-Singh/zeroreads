@@ -488,7 +488,7 @@ func (r *Reader) readAudit(ctx context.Context, start, end time.Time, res *Resul
 		}
 		if !u.Opaque && e.Body != "" {
 			q, ok := dslQuery([]byte(e.Body))
-			u.Query, u.Opaque = q, !ok
+			u.Query, u.Opaque = withoutRanges(q), !ok
 		}
 		// Identical requests are one use: a busy cluster repeats the same searches millions of times.
 		k := u.Origin + "\x00" + strings.Join(u.Indices, ",") + "\x00" + string(u.Query) + "\x00" + strconv.FormatBool(u.Opaque)

@@ -2,6 +2,7 @@ package opensearch
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -115,5 +116,34 @@ func TestDSLQuery(t *testing.T) {
 		if _, ok := dslQuery([]byte(c.body)); ok != c.ok {
 			t.Fatalf("%s: ok %v", c.body, ok)
 		}
+	}
+}
+
+// Each dashboard refresh sends a new time range. Found by the v1 audit: every refresh was a use of
+// its own. Ranges are emptied where decisions look, and nothing else changes.
+func TestWithoutRanges(t *testing.T) {
+	a := withoutRanges(json.RawMessage(`{"bool":{"filter":[{"range":{"@timestamp":{"gte":"2026-09-01"}}},{"term":{"service.name":"auth"}}]}}`))
+	b := withoutRanges(json.RawMessage(`{"bool":{"filter":[{"range":{"@timestamp":{"gte":"2026-09-02"}}},{"term":{"service.name":"auth"}}]}}`))
+	if string(a) != string(b) {
+		t.Fatalf("%s != %s", a, b)
+	}
+	s := Scope{ServiceField: "service.name", Service: "checkout"}
+	if !(Use{Indices: []string{"x"}, Query: a}).excludes(s) {
+		t.Fatalf("the term still excludes checkout: %s", a)
+	}
+	for _, q := range []string{
+		`{"constant_score":{"filter":{"range":{"t":{"gte":1}}}}}`,
+		`{"bool":{"must":{"range":{"t":{"gte":1}}},"must_not":[{"term":{"service.name":"checkout"}}]}}`,
+		`{"term":{"range":"kept"}}`,
+		`not json`,
+	} {
+		got := withoutRanges(json.RawMessage(q))
+		if strings.Contains(string(got), `"gte"`) || (q == `{"term":{"range":"kept"}}` && !strings.Contains(string(got), "kept")) || (q == `not json` && string(got) != q) {
+			t.Fatalf("%s -> %s", q, got)
+		}
+	}
+	notCheckout := withoutRanges(json.RawMessage(`{"bool":{"must":{"range":{"t":{"gte":1}}},"must_not":[{"term":{"service.name":"checkout"}}]}}`))
+	if !(Use{Indices: []string{"x"}, Query: notCheckout}).excludes(s) {
+		t.Fatalf("must_not checkout no longer excludes it: %s", notCheckout)
 	}
 }

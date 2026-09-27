@@ -490,3 +490,51 @@ func dslQuery(body []byte) (query json.RawMessage, ok bool) {
 	}
 	return m["query"], true
 }
+
+// withoutRanges returns q with the body of every range clause the decision looks at emptied. Only
+// term, terms, constant_score and bool clauses decide whether a query excludes a service, and a
+// dashboard sends a new time range with every refresh, so without this each refresh of the same
+// panel would be a use of its own. A query that does not decode is returned as it is.
+func withoutRanges(q json.RawMessage) json.RawMessage {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(q, &m) != nil {
+		return q
+	}
+	for kind, body := range m {
+		switch kind {
+		case "range":
+			m[kind] = json.RawMessage(`{}`)
+		case "constant_score":
+			var cs map[string]json.RawMessage
+			if json.Unmarshal(body, &cs) == nil && cs["filter"] != nil {
+				cs["filter"] = withoutRanges(cs["filter"])
+				m[kind], _ = json.Marshal(cs)
+			}
+		case "bool":
+			var b map[string]json.RawMessage
+			if json.Unmarshal(body, &b) != nil {
+				continue
+			}
+			for _, occ := range []string{"filter", "must", "must_not", "should"} {
+				if b[occ] == nil {
+					continue
+				}
+				var list []json.RawMessage
+				if json.Unmarshal(b[occ], &list) == nil {
+					for i := range list {
+						list[i] = withoutRanges(list[i])
+					}
+					b[occ], _ = json.Marshal(list)
+				} else {
+					b[occ] = withoutRanges(b[occ])
+				}
+			}
+			m[kind], _ = json.Marshal(b)
+		}
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return q
+	}
+	return out
+}
