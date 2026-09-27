@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTemplateLanguage(t *testing.T) {
@@ -47,5 +48,19 @@ func TestDrainConfigHash(t *testing.T) {
 	b.Drain.SeedTemplates = []string{"x <*>"}
 	if a.DrainConfigHash() == b.DrainConfigHash() {
 		t.Fatal("seed change not reflected")
+	}
+}
+
+func TestSplitAndFirstMask(t *testing.T) {
+	start, end := time.Unix(0, 0), time.Unix(0, 1000)
+	ws := split(start, end, 3)
+	if len(ws) != 3 || !ws[0].Start.Equal(start) || !ws[2].End.Equal(end) || !ws[0].End.Equal(ws[1].Start) || !ws[1].End.Equal(ws[2].Start) {
+		t.Fatalf("%+v", ws)
+	}
+	masks := map[string]bool{"<ip>": true, "<ipv6>": true, "<num>": true}
+	for tok, want := range map[string][2]any{"a=<ipv6>": {2, "<ipv6>"}, "<num>/<ip>": {0, "<num>"}, "plain": {-1, ""}} {
+		if at, name := firstMask(tok, masks); at != want[0] || name != want[1] {
+			t.Fatalf("%s: %d %s", tok, at, name)
+		}
 	}
 }

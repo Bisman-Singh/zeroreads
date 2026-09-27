@@ -148,9 +148,9 @@ type Reach struct {
 	Pipelines []string
 }
 
-// Downstream returns what lines reach once they have passed processor index after in pipeline
-// (after = -1 means straight after the receivers). Connectors are followed into every pipeline
-// that uses them as a receiver.
+// Downstream returns what lines reach from processor index after in pipeline (-1: straight after the
+// receivers). Processors do not route, so every point of a pipeline reaches the same exporters: the
+// index only has to exist. Connectors are followed into every pipeline that uses them as a receiver.
 func (c *Config) Downstream(pipeline string, after int) (Reach, error) {
 	p, ok := c.Pipelines[pipeline]
 	if !ok {

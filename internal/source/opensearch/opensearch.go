@@ -375,7 +375,8 @@ func has(p string, subs ...string) bool {
 }
 
 // readingEndpoint reports whether a REST path can return or count document content, and whether its
-// body is a query the DSL model understands.
+// body is a query the DSL model understands. The cases are ordered: a specific path (/_search/scroll,
+// /_msearch, /_search/template) must be decided before the general /_search it contains.
 func readingEndpoint(method, path string) (reads, dsl bool) {
 	p := strings.ToLower(path)
 	switch {

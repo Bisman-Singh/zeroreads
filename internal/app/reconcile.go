@@ -3,10 +3,12 @@ package app
 import (
 	"context"
 	"fmt"
-	"github.com/Bisman-Singh/sievelog/internal/rewrite"
 	"slices"
 	"strconv"
 	"time"
+
+	"github.com/Bisman-Singh/sievelog/internal/logql"
+	"github.com/Bisman-Singh/sievelog/internal/rewrite"
 )
 
 // Window is a closed time range.
@@ -58,18 +60,7 @@ func Reconcile(ctx context.Context, c *Config, rf *RulesFile, before, after Wind
 	}
 	res := &Reconciliation{Before: before, After: after, OK: true}
 	measure := func(fn, svc, field, lang string, w Window) (float64, error) {
-		sel := c.selector(svc)
-		rng := "[" + strconv.FormatInt(w.seconds(), 10) + "s]"
-		var q string
-		switch {
-		case lang == "":
-			q = fmt.Sprintf("sum(%s(%s %s))", fn, sel, rng)
-		case field == "":
-			q = fmt.Sprintf("sum(%s(%s |~ %s %s))", fn, sel, logqlString(lang), rng)
-		default:
-			q = fmt.Sprintf("sum(%s(%s | json sievelog_field=%s | sievelog_field=~%s %s))", fn, sel, strconv.Quote(field), logqlString(lang), rng)
-		}
-		return c.scalar(ctx, lc, q, w.End)
+		return c.scalar(ctx, lc, c.volumeQuery(fn, svc, field, lang, w.End.Sub(w.Start)), w.End)
 	}
 	services := map[string]bool{}
 	for _, r := range rf.Rules {
@@ -103,8 +94,8 @@ func Reconcile(ctx context.Context, c *Config, rf *RulesFile, before, after Wind
 				rr.Status, rr.Detail = "mismatch", fmt.Sprintf("%.0f lines of this rule were still stored after enforcement", rr.AfterLines)
 			}
 		case r.Action == "rollup":
-			q := fmt.Sprintf("sum(sum_over_time(%s |= %s | %s=%s | unwrap %s [%ds]))", c.selector(r.Service),
-				logqlString(rewrite.Marker(r.ID)), rewrite.RuleLabel, strconv.Quote(r.ID), rewrite.CountLabel, after.seconds())
+			q := fmt.Sprintf("sum(sum_over_time(%s |= %s | %s=%s | unwrap %s %s))", c.selector(r.Service),
+				logql.Quote(rewrite.Marker(r.ID)), rewrite.RuleLabel, strconv.Quote(r.ID), rewrite.CountLabel, rangeOf(after.End.Sub(after.Start)))
 			rolled, err := c.scalar(ctx, lc, q, after.End)
 			if err != nil {
 				return nil, err

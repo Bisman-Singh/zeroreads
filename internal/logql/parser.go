@@ -87,6 +87,15 @@ type Filter struct {
 	Value string
 }
 
+// Quote writes s as a LogQL string literal: a raw string when s holds no backquote, so a regular
+// expression keeps its backslashes exactly as written.
+func Quote(s string) string {
+	if !strings.Contains(s, "`") {
+		return "`" + s + "`"
+	}
+	return strconv.Quote(s)
+}
+
 // MaxQueryBytes bounds the query text Parse and Canonical accept. Query text comes from anyone who
 // can run a query or save a dashboard; the bound keeps parsing time and stack depth small. A longer
 // query does not parse, so it counts as reading everything.

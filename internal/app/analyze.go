@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"sort"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Bisman-Singh/sievelog/internal/analyze"
+	"github.com/Bisman-Singh/sievelog/internal/logql"
 	"github.com/Bisman-Singh/sievelog/internal/pricing"
 	"github.com/Bisman-Singh/sievelog/internal/rule"
 	"github.com/Bisman-Singh/sievelog/internal/source/grafana"
@@ -92,25 +94,29 @@ func lokiClient(url, org, user, setting, passwordEnv, tokenEnv string) (*loki.Cl
 	return &loki.Client{Base: url, OrgID: org, Username: user, Password: password, BearerToken: token}, nil
 }
 
-func logqlString(s string) string {
-	if !strings.Contains(s, "`") {
-		return "`" + s + "`"
-	}
-	return strconv.Quote(s)
-}
-
 func (c *Config) selector(service string) string {
 	return "{" + c.Scope.LokiLabel + "=" + strconv.Quote(service) + "}"
 }
 
-// volumeQuery counts (or sums bytes of) the stored lines in a rule's language.
-func (c *Config) volumeQuery(fn, service, field, language string, window time.Duration) string {
+// linesIn is the log query selecting a service's stored lines in language, which for a structured
+// service applies to its templated field; an empty language selects every line.
+func (c *Config) linesIn(service, field, language string) string {
 	sel := c.selector(service)
-	rng := "[" + strconv.FormatInt(int64(window/time.Second), 10) + "s]"
-	if field == "" {
-		return fmt.Sprintf("sum(%s(%s |~ %s %s))", fn, sel, logqlString(language), rng)
+	switch {
+	case language == "":
+		return sel
+	case field == "":
+		return sel + " |~ " + logql.Quote(language)
 	}
-	return fmt.Sprintf("sum(%s(%s | json sievelog_field=%s | sievelog_field=~%s %s))", fn, sel, strconv.Quote(field), logqlString(language), rng)
+	return fmt.Sprintf("%s | json sievelog_field=%s | sievelog_field=~%s", sel, strconv.Quote(field), logql.Quote(language))
+}
+
+// rangeOf is a LogQL range covering d, in whole seconds.
+func rangeOf(d time.Duration) string { return "[" + strconv.FormatInt(int64(d/time.Second), 10) + "s]" }
+
+// volumeQuery counts (or sums bytes of) a service's stored lines in language over window.
+func (c *Config) volumeQuery(fn, service, field, language string, window time.Duration) string {
+	return fmt.Sprintf("sum(%s(%s %s))", fn, c.linesIn(service, field, language), rangeOf(window))
 }
 
 // Analyze gathers every piece of evidence and decides.
@@ -210,66 +216,46 @@ func Analyze(ctx context.Context, c *Config, now time.Time) (*Report, error) {
 	return rep, nil
 }
 
+// readPage is the page size for reading lines: Loki refuses larger pages by default
+// (limits_config.max_entries_limit_per_query).
+const readPage = 5000
+
+// subWindows is how many pieces a slice's share is read from, so a burst at the start of a slice
+// cannot take its whole share.
+const subWindows = 20
+
 // sample reads up to SampleLinesPerService lines of a service spread over the window: it counts
 // the lines in each slice first, gives each slice a share of the budget proportional to its count,
 // and reads each slice's share spread over sub-windows, so bursts neither waste nor exhaust it.
 func (c *Config) sample(ctx context.Context, lc *loki.Client, svc string, start, end time.Time) ([]loki.Entry, error) {
-	n := c.Discovery.Slices
-	slice := end.Sub(start) / time.Duration(n)
-	counts := make([]int, n)
+	slices := split(start, end, c.Discovery.Slices)
+	counts := make([]int, len(slices))
 	total := 0
-	for i := 0; i < n; i++ {
-		s := start.Add(time.Duration(i) * slice)
-		e := s.Add(slice)
-		if i == n-1 {
-			e = end
-		}
-		q := fmt.Sprintf("sum(count_over_time(%s [%ds]))", c.selector(svc), int64(e.Sub(s)/time.Second))
-		v, err := c.scalar(ctx, lc, q, e)
+	for i, w := range slices {
+		v, err := c.scalar(ctx, lc, c.volumeQuery("count_over_time", svc, "", "", w.End.Sub(w.Start)), w.End)
 		if err != nil {
 			return nil, err
 		}
 		counts[i] = int(v)
 		total += int(v)
 	}
-	if total == 0 {
-		return nil, nil
-	}
-	budget := c.Discovery.SampleLinesPerService
 	var out []loki.Entry
-	for i := 0; i < n; i++ {
+	for i, w := range slices {
 		if counts[i] == 0 {
 			continue
 		}
-		s := start.Add(time.Duration(i) * slice)
-		e := s.Add(slice)
-		if i == n-1 {
-			e = end
-		}
-		share := int(float64(budget) * float64(counts[i]) / float64(total))
-		if share < 1 {
-			share = 1
-		}
+		share := max(int(float64(c.Discovery.SampleLinesPerService)*float64(counts[i])/float64(total)), 1)
 		if share >= counts[i] {
-			all, err := lc.QueryRange(ctx, c.selector(svc), s, e, 5000)
+			all, err := lc.QueryRange(ctx, c.selector(svc), w.Start, w.End, readPage)
 			if err != nil {
 				return nil, err
 			}
 			out = append(out, all...)
 			continue
 		}
-		parts := 20
-		if share < parts {
-			parts = share
-		}
-		sub := e.Sub(s) / time.Duration(parts)
-		for j := 0; j < parts; j++ {
-			ss := s.Add(time.Duration(j) * sub)
-			se := ss.Add(sub)
-			if j == parts-1 {
-				se = e
-			}
-			part, err := lc.Sample(ctx, c.selector(svc), ss, se, (share+parts-1)/parts)
+		parts := min(subWindows, share)
+		for _, sw := range split(w.Start, w.End, parts) {
+			part, err := lc.Sample(ctx, c.selector(svc), sw.Start, sw.End, (share+parts-1)/parts)
 			if err != nil {
 				return nil, err
 			}
@@ -277,6 +263,17 @@ func (c *Config) sample(ctx context.Context, lc *loki.Client, svc string, start,
 		}
 	}
 	return out, nil
+}
+
+// split divides [start, end) into n consecutive windows; the last one ends exactly at end.
+func split(start, end time.Time, n int) []Window {
+	step := end.Sub(start) / time.Duration(n)
+	out := make([]Window, n)
+	for i := range out {
+		out[i] = Window{Start: start.Add(time.Duration(i) * step), End: start.Add(time.Duration(i+1) * step)}
+	}
+	out[n-1].End = end
+	return out
 }
 
 // discover samples one service, templates it, infers languages and measures each exactly.
@@ -453,7 +450,7 @@ func removes(action string) bool {
 // window: the stream would disappear from label, series and volume results, which nothing else in
 // the analysis models. Counting is exact, per stream label set, from Loki itself.
 func (c *Config) keepStreams(ctx context.Context, lc *loki.Client, recs []analyze.Recommendation, start, now time.Time) error {
-	rng := "[" + strconv.FormatInt(int64(now.Sub(start)/time.Second), 10) + "s]"
+	rng := rangeOf(now.Sub(start))
 	bySvc := map[string][]int{}
 	var svcs []string
 	for i, r := range recs {
@@ -476,9 +473,9 @@ func (c *Config) keepStreams(ctx context.Context, lc *loki.Client, recs []analyz
 			for _, i := range rules {
 				cd := recs[i].Candidate
 				if cd.Structured {
-					field = append(field, fmt.Sprintf("| json sievelog_f%d=%s | sievelog_f%d!~%s", i, strconv.Quote(cd.Field), i, logqlString(cd.Language)))
+					field = append(field, fmt.Sprintf("| json sievelog_f%d=%s | sievelog_f%d!~%s", i, strconv.Quote(cd.Field), i, logql.Quote(cd.Language)))
 				} else {
-					line = append(line, "!~ "+logqlString(cd.Language))
+					line = append(line, "!~ "+logql.Quote(cd.Language))
 				}
 			}
 			q := c.selector(svc)
@@ -744,167 +741,142 @@ func (c *Config) analysedDatasources(g GrafanaConfig, byOrg map[int64]map[string
 
 // topologyGaps checks every destination downstream of the enforcement point.
 func (c *Config) topologyGaps(rep *Report) ([]analyze.Gap, error) {
+	var d destinations
+	var err error
 	switch c.Runtime {
 	case "vector":
-		return c.vectorGaps(rep)
+		d, err = c.vectorDestinations()
 	case "fluentbit":
-		return c.fluentBitGaps(rep)
+		d, err = c.fluentBitDestinations()
+	default:
+		d, err = c.collectorDestinations()
 	}
+	if err != nil {
+		return nil, err
+	}
+	return d.gaps(rep), nil
+}
+
+// destinations are what lines reach after the enforcement point, in one runtime.
+type destinations struct {
+	runtime    string            // the gap source
+	sinks      map[string]string // sink ID -> how the lines get there
+	configured map[string]Sink   // what the config says each sink is
+	derived    []string          // components that turn the lines into another signal
+	exempt     map[string]string // derived components the config accepts, with the reason
+	derivedWhy string            // what a derived component does to the lines
+}
+
+// gaps records every destination the evidence covers (the analysed Loki, a connected OpenSearch,
+// an exemption) and returns a gap for every other one: removing lines there is unobserved.
+func (d destinations) gaps(rep *Report) []analyze.Gap {
+	var gaps []analyze.Gap
+	for _, id := range slices.Sorted(maps.Keys(d.sinks)) {
+		s, ok := d.configured[id]
+		switch {
+		case ok && s.Loki:
+			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": analysed Loki")
+		case ok && s.OpenSearch != "":
+			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": opensearch "+s.OpenSearch)
+		case ok:
+			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": exempt ("+s.Exempt+")")
+		default:
+			gaps = append(gaps, analyze.Gap{Source: d.runtime, Origin: d.sinks[id], Key: "sink:" + id,
+				Reason: "removed lines would also vanish from " + id + ", which has no usage evidence"})
+		}
+	}
+	for _, x := range d.derived {
+		if why, ok := d.exempt[x]; ok {
+			rep.Evidence.Sinks = append(rep.Evidence.Sinks, x+": derived signal exempt ("+why+")")
+			continue
+		}
+		gaps = append(gaps, analyze.Gap{Source: d.runtime, Origin: x, Key: "derived:" + x, Reason: x + " " + d.derivedWhy})
+	}
+	return gaps
+}
+
+// readFiles reads the operator's pipeline configuration files, in order.
+func readFiles(paths []string) ([][]byte, error) {
 	var files [][]byte
-	for _, f := range c.Collector.ConfigFiles {
-		b, err := os.ReadFile(f)
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
 		if err != nil {
 			return nil, err
 		}
 		files = append(files, b)
 	}
+	return files, nil
+}
+
+func (c *Config) collectorDestinations() (destinations, error) {
+	files, err := readFiles(c.Collector.ConfigFiles)
+	if err != nil {
+		return destinations{}, err
+	}
 	tc, err := topology.Load(files...)
 	if err != nil {
-		return nil, err
+		return destinations{}, err
 	}
 	p, ok := tc.Pipelines[c.Collector.Pipeline]
 	if !ok {
-		return nil, fmt.Errorf("collector pipeline %s not found", c.Collector.Pipeline)
+		return destinations{}, fmt.Errorf("collector pipeline %s not found", c.Collector.Pipeline)
 	}
 	after := -1
 	if c.Collector.After != "" {
-		after = -2
-		for i, x := range p.Processors {
-			if x == c.Collector.After {
-				after = i
-			}
-		}
-		if after == -2 {
-			return nil, fmt.Errorf("processor %s not in pipeline %s", c.Collector.After, c.Collector.Pipeline)
+		if after = slices.Index(p.Processors, c.Collector.After); after < 0 {
+			return destinations{}, fmt.Errorf("processor %s not in pipeline %s", c.Collector.After, c.Collector.Pipeline)
 		}
 	}
 	reach, err := tc.Downstream(c.Collector.Pipeline, after)
 	if err != nil {
-		return nil, err
+		return destinations{}, err
 	}
-	var gaps []analyze.Gap
-	var ids []string
-	for id := range reach.Exporters {
-		ids = append(ids, id)
+	sinks := map[string]string{}
+	for id, path := range reach.Exporters {
+		sinks[id] = strings.Join(path, " > ")
 	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		s, ok := c.Collector.Sinks[id]
-		switch {
-		case ok && s.Loki:
-			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": analysed Loki")
-		case ok && s.OpenSearch != "":
-			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": opensearch "+s.OpenSearch)
-		case ok:
-			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": exempt ("+s.Exempt+")")
-		default:
-			gaps = append(gaps, analyze.Gap{Source: "collector", Origin: strings.Join(reach.Exporters[id], " > "), Key: "sink:" + id,
-				Reason: "removed lines would also vanish from " + id + ", which has no usage evidence"})
-		}
-	}
-	for _, d := range reach.Derived {
-		if why, ok := c.Collector.Derived[d]; ok {
-			rep.Evidence.Sinks = append(rep.Evidence.Sinks, d+": derived signal exempt ("+why+")")
-			continue
-		}
-		gaps = append(gaps, analyze.Gap{Source: "collector", Origin: d, Key: "derived:" + d,
-			Reason: d + " turns these logs into another signal; removing lines changes its output"})
-	}
-	return gaps, nil
+	return destinations{runtime: "collector", sinks: sinks, configured: c.Collector.Sinks, derived: reach.Derived, exempt: c.Collector.Derived,
+		derivedWhy: "turns these logs into another signal; removing lines changes its output"}, nil
 }
 
-func (c *Config) vectorGaps(rep *Report) ([]analyze.Gap, error) {
-	var files [][]byte
-	for _, f := range c.Vector.ConfigFiles {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			return nil, err
-		}
-		files = append(files, b)
+func (c *Config) vectorDestinations() (destinations, error) {
+	files, err := readFiles(c.Vector.ConfigFiles)
+	if err != nil {
+		return destinations{}, err
 	}
 	vc, err := topology.LoadVector(files...)
 	if err != nil {
-		return nil, err
+		return destinations{}, err
 	}
-	sinks, derived, err := vc.VectorDownstream(c.Vector.After)
+	reach, derived, err := vc.VectorDownstream(c.Vector.After)
 	if err != nil {
-		return nil, err
+		return destinations{}, err
 	}
-	var gaps []analyze.Gap
-	var ids []string
-	for id := range sinks {
-		ids = append(ids, id)
+	sinks := map[string]string{}
+	for id, path := range reach {
+		sinks[id] = strings.Join(path, " > ")
 	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		s, ok := c.Vector.Sinks[id]
-		switch {
-		case ok && s.Loki:
-			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": analysed Loki")
-		case ok && s.OpenSearch != "":
-			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": opensearch "+s.OpenSearch)
-		case ok:
-			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": exempt ("+s.Exempt+")")
-		default:
-			gaps = append(gaps, analyze.Gap{Source: "vector", Origin: strings.Join(sinks[id], " > "), Key: "sink:" + id,
-				Reason: "removed lines would also vanish from " + id + ", which has no usage evidence"})
-		}
-	}
-	for _, d := range derived {
-		if why, ok := c.Vector.Derived[d]; ok {
-			rep.Evidence.Sinks = append(rep.Evidence.Sinks, d+": derived signal exempt ("+why+")")
-			continue
-		}
-		gaps = append(gaps, analyze.Gap{Source: "vector", Origin: d, Key: "derived:" + d,
-			Reason: d + " turns these logs into metrics; removing lines changes them"})
-	}
-	return gaps, nil
+	return destinations{runtime: "vector", sinks: sinks, configured: c.Vector.Sinks, derived: derived, exempt: c.Vector.Derived,
+		derivedWhy: "turns these logs into metrics; removing lines changes them"}, nil
 }
 
-func (c *Config) fluentBitGaps(rep *Report) ([]analyze.Gap, error) {
-	var files [][]byte
-	for _, f := range c.FluentBit.ConfigFiles {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			return nil, err
-		}
-		files = append(files, b)
+func (c *Config) fluentBitDestinations() (destinations, error) {
+	files, err := readFiles(c.FluentBit.ConfigFiles)
+	if err != nil {
+		return destinations{}, err
 	}
 	fc, err := topology.LoadFluentBit(files...)
 	if err != nil {
-		return nil, err
+		return destinations{}, err
 	}
 	outs, derived, err := fc.FluentBitDownstream(c.FluentBit.Match, c.FluentBit.After)
 	if err != nil {
-		return nil, err
+		return destinations{}, err
 	}
-	var gaps []analyze.Gap
-	var ids []string
-	for id := range outs {
-		ids = append(ids, id)
+	sinks := map[string]string{}
+	for id, plugin := range outs {
+		sinks[id] = id + " (" + plugin + ")"
 	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		s, ok := c.FluentBit.Sinks[id]
-		switch {
-		case ok && s.Loki:
-			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": analysed Loki")
-		case ok && s.OpenSearch != "":
-			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": opensearch "+s.OpenSearch)
-		case ok:
-			rep.Evidence.Sinks = append(rep.Evidence.Sinks, id+": exempt ("+s.Exempt+")")
-		default:
-			gaps = append(gaps, analyze.Gap{Source: "fluentbit", Origin: id + " (" + outs[id] + ")", Key: "sink:" + id,
-				Reason: "removed lines would also vanish from output " + id + ", which has no usage evidence"})
-		}
-	}
-	for _, d := range derived {
-		if why, ok := c.FluentBit.Derived[d]; ok {
-			rep.Evidence.Sinks = append(rep.Evidence.Sinks, d+": exempt ("+why+")")
-			continue
-		}
-		gaps = append(gaps, analyze.Gap{Source: "fluentbit", Origin: d, Key: "derived:" + d,
-			Reason: d + " re-emits or counts these records after the enforcement point"})
-	}
-	return gaps, nil
+	return destinations{runtime: "fluentbit", sinks: sinks, configured: c.FluentBit.Sinks, derived: derived, exempt: c.FluentBit.Derived,
+		derivedWhy: "re-emits or counts these records after the enforcement point"}, nil
 }

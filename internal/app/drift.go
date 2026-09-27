@@ -9,13 +9,13 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
 
 	"github.com/Bisman-Singh/sievelog/internal/emit"
+	"github.com/Bisman-Singh/sievelog/internal/logql"
 	"github.com/Bisman-Singh/sievelog/internal/templating"
 )
 
@@ -56,22 +56,30 @@ func (c *Config) templateLanguage(tpl string) string {
 		// Masks replace text inside a token too (ip=<ip>), so every mask token is expanded where it
 		// occurs; the rest of the token is literal.
 		for tok != "" {
-			i, name := -1, ""
-			for m := range masks {
-				if j := strings.Index(tok, m); j >= 0 && (i < 0 || j < i || (j == i && len(m) > len(name))) {
-					i, name = j, m
-				}
-			}
-			if i < 0 {
+			at, name := firstMask(tok, masks)
+			if at < 0 {
 				b.WriteString(regexp.QuoteMeta(tok))
 				break
 			}
-			b.WriteString(regexp.QuoteMeta(tok[:i]) + `.+`)
-			tok = tok[i+len(name):]
+			b.WriteString(regexp.QuoteMeta(tok[:at]) + `.+`)
+			tok = tok[at+len(name):]
 		}
 	}
 	b.WriteString(`\z`)
 	return b.String()
+}
+
+// firstMask finds the mask token that starts first in tok, and the longest of those starting at the
+// same place, so <ip> never cuts <ipv6> short. at is -1 when tok holds none.
+func firstMask(tok string, masks map[string]bool) (at int, name string) {
+	at = -1
+	for m := range masks {
+		j := strings.Index(tok, m)
+		if j >= 0 && (at < 0 || j < at || (j == at && len(m) > len(name))) {
+			at, name = j, m
+		}
+	}
+	return at, name
 }
 
 // RuleDrift is how much of a rule's template traffic now falls outside the rule.
@@ -95,20 +103,15 @@ func (c *Config) Drift(ctx context.Context, rf *RulesFile, now time.Time) ([]Rul
 	}
 	w := c.Discovery.Window.Duration
 	start := now.Add(-w)
-	rng := "[" + strconv.FormatInt(int64(w/time.Second), 10) + "s]"
+	rng := rangeOf(w)
 	var out []RuleDrift
 	for _, r := range rf.Rules {
 		d := RuleDrift{RuleID: r.ID, Service: r.Service, Template: r.Template}
 		tl := c.templateLanguage(r.Template)
-		sel := c.selector(r.Service)
-		var inTpl, outRule string
-		if r.Field == "" {
-			inTpl = fmt.Sprintf("%s |~ %s", sel, logqlString(tl))
-			outRule = fmt.Sprintf("%s |~ %s !~ %s", sel, logqlString(tl), logqlString(r.Language))
-		} else {
-			base := fmt.Sprintf("%s | json sievelog_field=%s | sievelog_field=~%s", sel, strconv.Quote(r.Field), logqlString(tl))
-			inTpl = base
-			outRule = base + " | sievelog_field!~" + logqlString(r.Language)
+		inTpl := c.linesIn(r.Service, r.Field, tl)
+		outRule := inTpl + " !~ " + logql.Quote(r.Language)
+		if r.Field != "" {
+			outRule = inTpl + " | sievelog_field!~" + logql.Quote(r.Language)
 		}
 		var err error
 		if d.TemplateLines, err = c.scalar(ctx, lc, "sum(count_over_time("+inTpl+" "+rng+"))", now); err != nil {

@@ -167,7 +167,7 @@ func termsFor(v logql.VectorAgg, ra logql.RangeAgg, covered []Rule) (terms, bool
 	for i, r := range covered {
 		ids[i], languages[i] = r.ID, r.Language
 	}
-	removed := quote(Alternation(languages))
+	removed := logql.Quote(Alternation(languages))
 	// X keeps the original filters minus the rules' lines and minus every rollup record: a record's
 	// marker text could pass the filters (!= "/healthz" does) and would be counted twice.
 	x := fmt.Sprintf("sum%s(%s(%s%s !~ %s | %s=\"\" %s))", group, ra.Func, ra.Selector, filters, removed, RuleLabel, window)
@@ -201,7 +201,7 @@ func Alternation(languages []string) string {
 func markerFilter(ids []string) string {
 	parts := make([]string, len(ids))
 	for i, id := range ids {
-		parts[i] = quote(Marker(id))
+		parts[i] = logql.Quote(Marker(id))
 	}
 	return strings.Join(parts, " or ")
 }
@@ -223,14 +223,6 @@ func applyEdits(expr string, edits []edit) string {
 		expr = expr[:e.start] + e.text + expr[e.end:]
 	}
 	return expr
-}
-
-// quote writes s as a LogQL string: a raw string when possible.
-func quote(s string) string {
-	if !strings.Contains(s, "`") {
-		return "`" + s + "`"
-	}
-	return strconv.Quote(s)
 }
 
 var durRe = regexp.MustCompile(`^(?:[0-9]+(?:ms|s|m|h|d|w|y))+$`)

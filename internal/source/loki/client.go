@@ -1,4 +1,5 @@
-// Package loki reads usage evidence from Loki over its HTTP API. It only ever reads.
+// Package loki reads usage evidence from Loki over its HTTP API. Its one write, SetRuleGroup, is
+// only used when an operator applies rewrites with rewrite -apply.
 package loki
 
 import (
@@ -121,7 +122,7 @@ func (c *Client) SetRuleGroup(ctx context.Context, namespace string, group []byt
 	return err
 }
 
-// HTTPError is a non-200 answer from Loki.
+// HTTPError is a non-2xx answer from Loki.
 type HTTPError struct {
 	Status int
 	Body   string

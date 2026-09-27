@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"github.com/Bisman-Singh/sievelog/internal/source/grafana"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Bisman-Singh/sievelog/internal/source/grafana"
 
 	"github.com/Bisman-Singh/sievelog/internal/analyze"
 	"github.com/Bisman-Singh/sievelog/internal/emit"

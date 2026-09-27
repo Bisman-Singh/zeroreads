@@ -230,18 +230,11 @@ func Markdown(rep *Report) string {
 
 // EmitCollector writes the collector configuration for the rules in the given mode.
 func EmitCollector(c *Config, rf *RulesFile, mode emit.Mode) ([]byte, error) {
-	var files [][]byte
-	for _, f := range c.Collector.ConfigFiles {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			return nil, err
-		}
-		files = append(files, b)
+	files, err := readFiles(c.Collector.ConfigFiles)
+	if err != nil {
+		return nil, err
 	}
-	var rules []emit.Rule
-	for _, r := range rf.Rules {
-		rules = append(rules, r.Rule)
-	}
+	rules := rf.emitRules()
 	return emit.Collector(files, emit.Target{Pipeline: c.Collector.Pipeline, After: c.Collector.After,
 		MeasureExporters: c.Collector.MeasureExporters, AggregateExporters: c.Collector.AggregateExporters,
 		DedupeInterval: c.Collector.DedupeInterval, SeverityKeys: c.Collector.SeverityKeys}, rules, mode)
@@ -402,27 +395,17 @@ func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time, opt Ve
 // EmitPolicies writes the rules as Telemetry Policies, each verified against policy-go; rules the
 // format cannot express, or that the engine would apply differently, are returned with reasons.
 func EmitPolicies(rf *RulesFile, scratch string) ([]byte, []emit.PolicySkip, error) {
-	var rules []emit.Rule
-	for _, r := range rf.Rules {
-		rules = append(rules, r.Rule)
-	}
+	rules := rf.emitRules()
 	return emit.Policies(rules, scratch)
 }
 
 // EmitVector writes the Vector configuration for the rules in the given mode.
 func EmitVector(c *Config, rf *RulesFile, mode emit.Mode) ([]byte, error) {
-	var files [][]byte
-	for _, f := range c.Vector.ConfigFiles {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			return nil, err
-		}
-		files = append(files, b)
+	files, err := readFiles(c.Vector.ConfigFiles)
+	if err != nil {
+		return nil, err
 	}
-	var rules []emit.Rule
-	for _, r := range rf.Rules {
-		rules = append(rules, r.Rule)
-	}
+	rules := rf.emitRules()
 	v := c.Vector
 	return emit.Vector(files, emit.VectorTarget{After: v.After, ScopePath: v.ScopePath, TextPath: v.TextPath, FieldPaths: v.FieldPaths,
 		GroupBy: v.GroupBy, MeasureSink: v.MeasureSink, DedupeMS: v.DedupeMS, SeverityPaths: v.SeverityPaths}, rules, mode)
@@ -430,18 +413,11 @@ func EmitVector(c *Config, rf *RulesFile, mode emit.Mode) ([]byte, error) {
 
 // EmitFluentBit writes the Fluent Bit YAML configuration for the rules in the given mode.
 func EmitFluentBit(c *Config, rf *RulesFile, mode emit.Mode) ([]byte, error) {
-	var files [][]byte
-	for _, f := range c.FluentBit.ConfigFiles {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			return nil, err
-		}
-		files = append(files, b)
+	files, err := readFiles(c.FluentBit.ConfigFiles)
+	if err != nil {
+		return nil, err
 	}
-	var rules []emit.Rule
-	for _, r := range rf.Rules {
-		rules = append(rules, r.Rule)
-	}
+	rules := rf.emitRules()
 	f := c.FluentBit
 	return emit.FluentBit(files, emit.FluentBitTarget{Match: f.Match, After: f.After, ScopeKey: f.ScopeKey, TextKey: f.TextKey,
 		FieldKeys: f.FieldKeys, MetricsTag: f.MetricsTag, SeverityKeys: f.SeverityKeys}, rules, mode)

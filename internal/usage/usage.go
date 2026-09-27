@@ -115,9 +115,10 @@ func matchLabel(m logql.Matcher, val string) (ok, known bool) {
 	return false, false
 }
 
-// hasVariable reports Grafana template syntax: $name, ${name...}, [[name]].
+// variableRe matches Grafana template syntax: $name, ${name...}, [[name]].
 var variableRe = regexp.MustCompile(`\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|\[\[[^\]]*\]\]`)
 
+// hasVariable reports whether s holds a Grafana template variable, whose value is unknown here.
 func hasVariable(s string) bool { return variableRe.MatchString(s) }
 
 // stageTerms turns one line filter stage into automaton terms, and says what it had to ignore.
