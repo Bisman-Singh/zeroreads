@@ -128,6 +128,11 @@ pricing:
 
 ## Evidence gap keys
 
+Acknowledging a key in `policy.acknowledge` accepts every gap with exactly that key. A gap about one
+object names the object in its key, so acknowledging it never accepts another object's gap. A gap
+about a whole source (a query log that is not proven, query history, OpenSearch plugins) is accepted
+for every instance of that source.
+
 | Key | Meaning |
 |---|---|
 | `querylog-disabled` | the query log is not read |
@@ -142,7 +147,8 @@ pricing:
 | `grafana-not-configured`, `grafana-unreadable` | no Grafana, or it could not be read |
 | `grafana-queryhistory` | only the credentials' own Explore history is readable |
 | `grafana-orgs` | the credentials cannot list organisations (a service account token never can), so only their own org was read |
-| `grafana-<kind>` | a Grafana object of that kind could not be read |
+| `grafana-<kind>` | a kind of Grafana object (alert rules, library panels, ...) could not be listed |
+| `grafana-<kind>:<grafana>/org<n>/<object>` | one Grafana object could not be read; the key names it, so acknowledging it accepts only that object |
 | `opensearch-unreadable` | the cluster, or its index catalog, could not be read |
 | `opensearch-audit-config-unreadable` | the audit configuration could not be read |
 | `opensearch-audit-disabled` | audit logging, REST auditing or the AUTHENTICATED category is off |

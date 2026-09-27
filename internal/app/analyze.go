@@ -691,17 +691,23 @@ func (c *Config) readGrafana(ctx context.Context, g GrafanaConfig, rep *Report) 
 		rep.Notes = append(rep.Notes, fmt.Sprintf("grafana %s org %d %s: %s", g.URL, n.Org, n.Origin, n.Reason))
 	}
 	for _, gp := range res.Gaps {
-		gaps = append(gaps, analyze.Gap{Source: "grafana", Origin: fmt.Sprintf("org %d %s", gp.Org, gp.Origin), Key: grafanaGapKey(gp.Origin), Reason: gp.Reason})
+		gaps = append(gaps, analyze.Gap{Source: "grafana", Origin: fmt.Sprintf("org %d %s", gp.Org, gp.Origin), Key: grafanaGapKey(g.URL, gp), Reason: gp.Reason})
 	}
 	return qs, gaps
 }
 
-// grafanaGapKey is the kind of object a Grafana gap is about: the origin up to its first ":" or "/",
-// such as dashboard for dashboard:uid/panel:3.
-func grafanaGapKey(origin string) string {
-	kind, _, _ := strings.Cut(origin, ":")
+// grafanaGapKey names what a Grafana gap is about. A gap about one object (dashboard:uid/panel:3,
+// shorturl:id) names that object, with its Grafana and org, so acknowledging it accepts that object
+// only and not the next one that fails. A gap about a whole kind (every alert rule, query history)
+// is named by the kind.
+func grafanaGapKey(grafanaURL string, g grafana.Gap) string {
+	kind, _, object := strings.Cut(g.Origin, ":")
 	kind, _, _ = strings.Cut(kind, "/")
-	return "grafana-" + kind
+	if !object {
+		return "grafana-" + kind
+	}
+	host := strings.TrimRight(strings.TrimPrefix(strings.TrimPrefix(grafanaURL, "https://"), "http://"), "/")
+	return fmt.Sprintf("grafana-%s:%s/org%d/%s", kind, host, g.Org, g.Origin)
 }
 
 // analysedDatasources returns the Loki datasources whose queries read the analysed Loki: listed in

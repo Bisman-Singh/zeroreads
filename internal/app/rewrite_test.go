@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"github.com/Bisman-Singh/sievelog/internal/source/grafana"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -319,5 +320,25 @@ func TestLoadRulesRefusesWhatAnalyzeWouldNotWrite(t *testing.T) {
 	os.WriteFile(dir+"/rules.json", append(b, []byte(`{}`)...), 0o644)
 	if _, err := LoadRules(dir + "/rules.json"); err == nil {
 		t.Fatal("trailing data accepted")
+	}
+}
+
+// A gap about one Grafana object names it, so acknowledging it never accepts another object's gap.
+// Found by the v1 audit: grafana-dashboard, once acknowledged, hid every later broken dashboard.
+func TestGrafanaGapKeys(t *testing.T) {
+	for _, c := range []struct {
+		url  string
+		gap  grafana.Gap
+		want string
+	}{
+		{"https://grafana.example:3000/", grafana.Gap{Org: 2, Origin: "dashboard:abc/panel:3"}, "grafana-dashboard:grafana.example:3000/org2/dashboard:abc/panel:3"},
+		{"http://g", grafana.Gap{Org: 1, Origin: "shorturl:s4"}, "grafana-shorturl:g/org1/shorturl:s4"},
+		{"http://g", grafana.Gap{Org: 1, Origin: "alertrules"}, "grafana-alertrules"},
+		{"http://g", grafana.Gap{Org: 1, Origin: "dashboards/v1"}, "grafana-dashboards"},
+		{"http://g", grafana.Gap{Org: 1, Origin: "queryhistory"}, "grafana-queryhistory"},
+	} {
+		if got := grafanaGapKey(c.url, c.gap); got != c.want {
+			t.Fatalf("%+v: %s, want %s", c.gap, got, c.want)
+		}
 	}
 }
