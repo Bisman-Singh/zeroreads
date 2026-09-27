@@ -8,13 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Bisman-Singh/sievelog/internal/fetch"
 )
 
 // Client reads one Grafana.
@@ -52,7 +53,7 @@ type Result struct {
 	Gaps    []Gap
 	// Notes are findings that hide no reader, such as a panel whose library panel does not exist.
 	Notes []Gap
-	Orgs    []int64
+	Orgs  []int64
 	// LokiDatasources maps Loki datasource UID to its URL, per org.
 	LokiDatasources map[int64]map[string]string
 }
@@ -75,18 +76,14 @@ func (c *Client) do(ctx context.Context, org int64, path string, out any) error 
 	if hc == nil {
 		hc = &http.Client{Timeout: 60 * time.Second}
 	}
-	resp, err := hc.Do(req)
+	res, err := fetch.Do(ctx, hc, req)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
+	if res.Status != http.StatusOK {
+		return &HTTPError{Path: path, Status: res.Status, Body: fetch.Excerpt(res.Body)}
 	}
-	if resp.StatusCode != http.StatusOK {
-		return &HTTPError{Path: path, Status: resp.StatusCode, Body: strings.TrimSpace(string(body))}
-	}
+	body := res.Body
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("grafana: %s: decode: %w", path, err)
 	}

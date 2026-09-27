@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go.yaml.in/yaml/v3"
 	"io"
 	"net"
 	"net/http"
@@ -21,6 +20,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Bisman-Singh/sievelog/internal/fetch"
+	"go.yaml.in/yaml/v3"
 )
 
 // Client talks to one Loki (or a gateway in front of it).
@@ -91,18 +93,14 @@ func (c *Client) send(ctx context.Context, method, path, contentType string, bod
 	case c.Username != "":
 		req.SetBasicAuth(c.Username, c.Password)
 	}
-	resp, err := c.http().Do(req)
+	res, err := fetch.Do(ctx, c.http(), req)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	out, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+	if !res.OK() {
+		return nil, &HTTPError{Status: res.Status, Body: fetch.Excerpt(res.Body)}
 	}
-	if resp.StatusCode/100 != 2 {
-		return nil, &HTTPError{Status: resp.StatusCode, Body: strings.TrimSpace(string(out))}
-	}
+	out := res.Body
 	return out, nil
 }
 

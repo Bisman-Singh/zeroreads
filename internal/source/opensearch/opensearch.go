@@ -15,6 +15,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Bisman-Singh/sievelog/internal/fetch"
 )
 
 // Header marks the analyzer's own requests; audit entries carrying it are not usage.
@@ -57,30 +60,49 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	if c.Username != "" {
 		req.SetBasicAuth(c.Username, c.Password)
 	}
-	hc := c.HTTP
-	if hc == nil {
-		tr := http.DefaultTransport.(*http.Transport).Clone()
-		if c.InsecureSkipVerify {
-			tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // explicit operator choice
-		}
-		hc = &http.Client{Timeout: 60 * time.Second, Transport: tr}
-	}
-	resp, err := hc.Do(req)
+	res, err := fetch.Do(ctx, c.http(), req)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("opensearch: %s %s: HTTP %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(b)))
+	if !res.OK() {
+		return &HTTPError{Method: method, Path: path, Status: res.Status, Body: fetch.Excerpt(res.Body)}
 	}
 	if out == nil {
 		return nil
 	}
-	return json.Unmarshal(b, out)
+	if err := json.Unmarshal(res.Body, out); err != nil {
+		return fmt.Errorf("opensearch: %s %s: decode: %w", method, path, err)
+	}
+	return nil
+}
+
+// http is the client's HTTP client, built once so connections are reused across a long scroll.
+func (c *Client) http() *http.Client {
+	if c.HTTP == nil {
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		if c.InsecureSkipVerify {
+			tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // an explicit operator choice for self-signed clusters
+		}
+		c.HTTP = &http.Client{Timeout: 60 * time.Second, Transport: tr}
+	}
+	return c.HTTP
+}
+
+// HTTPError is a non-2xx answer from OpenSearch.
+type HTTPError struct {
+	Method, Path string
+	Status       int
+	Body         string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("opensearch: %s %s: HTTP %d: %s", e.Method, e.Path, e.Status, e.Body)
+}
+
+// notFound reports a 404 whose body contains want.
+func notFound(err error, want string) bool {
+	var he *HTTPError
+	return errors.As(err, &he) && he.Status == http.StatusNotFound && strings.Contains(he.Body, want)
 }
 
 // Use is one reading request or stored query.
@@ -158,7 +180,7 @@ func (r *Reader) checkSearchPipelines(ctx context.Context, res *Result) {
 	var out map[string]json.RawMessage
 	err := r.C.do(ctx, http.MethodGet, "/_search/pipeline", nil, &out)
 	switch {
-	case err != nil && strings.Contains(err.Error(), "HTTP 404"):
+	case notFound(err, ""):
 		return // none defined
 	case err != nil:
 		res.Gaps = append(res.Gaps, Gap{Key: "opensearch-search-pipelines", Origin: "search pipelines", Reason: "search pipelines could not be listed: " + err.Error()})
@@ -497,7 +519,7 @@ func (r *Reader) readMonitors(ctx context.Context, res *Result) error {
 	err := r.C.do(ctx, http.MethodPost, "/_plugins/_alerting/monitors/_search", map[string]any{"size": size, "track_total_hits": true,
 		"query": map[string]any{"match_all": map[string]any{}}}, &out)
 	if err != nil {
-		if strings.Contains(err.Error(), "HTTP 404") && strings.Contains(err.Error(), "no such index") {
+		if notFound(err, "no such index") {
 			return nil // no monitor was ever created
 		}
 		return err

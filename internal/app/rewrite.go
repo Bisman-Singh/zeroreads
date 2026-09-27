@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Bisman-Singh/sievelog/internal/fetch"
+
 	"go.yaml.in/yaml/v3"
 
 	"github.com/Bisman-Singh/sievelog/internal/analyze"
@@ -203,17 +205,15 @@ func (c *Config) grafanaDo(ctx context.Context, base string, org int64, method, 
 	case gc.Username != "":
 		req.SetBasicAuth(gc.Username, gc.Password)
 	}
-	resp, err := (&http.Client{Timeout: 60 * time.Second}).Do(req)
+	res, err := fetch.Do(ctx, &http.Client{Timeout: 60 * time.Second}, req)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("grafana %s %s: HTTP %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(b)))
+	if !res.OK() {
+		return fmt.Errorf("grafana %s %s: HTTP %d: %s", method, path, res.Status, fetch.Excerpt(res.Body))
 	}
 	if out != nil {
-		return json.Unmarshal(b, out)
+		return json.Unmarshal(res.Body, out)
 	}
 	return nil
 }

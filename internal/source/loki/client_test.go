@@ -394,3 +394,33 @@ func TestEachRefusesLinesOutsideTheRange(t *testing.T) {
 		t.Fatal("paging did not stop")
 	}
 }
+
+// One transient failure must not turn a multi-day query-log read into a gap. Found by the v1 audit:
+// a single 503 failed the whole read.
+func TestTransientFailuresAreRetried(t *testing.T) {
+	calls := 0
+	lines := []fakeLine{{"a", 10, "x"}, {"a", 20, "y"}}
+	inner := fakeLoki(t, lines, new(int))
+	defer inner.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls++; calls <= 2 {
+			w.Header().Set("Retry-After", "0")
+			http.Error(w, "upstream restarting", http.StatusServiceUnavailable)
+			return
+		}
+		req, _ := http.NewRequest(http.MethodGet, inner.URL+r.URL.RequestURI(), nil)
+		req.Header = r.Header
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer resp.Body.Close()
+		io.Copy(w, resp.Body)
+	}))
+	defer srv.Close()
+	got, err := (&Client{Base: srv.URL}).QueryRange(context.Background(), `{s="a"}`, time.Unix(0, 0), time.Unix(0, 100), 10)
+	if err != nil || len(got) != 2 || calls != 3 {
+		t.Fatalf("%v, %d lines after %d calls", err, len(got), calls)
+	}
+}
