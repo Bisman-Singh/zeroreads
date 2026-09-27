@@ -6,6 +6,7 @@
 //	sievelog rewrite   -c sievelog.yaml -rules out/rules.json -o DIR [-apply]
 //	sievelog verify    -c sievelog.yaml -rules out/rules.json [-o KEEP.json] [-deployed FILE]
 //	sievelog reconcile -c sievelog.yaml -rules out/rules.json -before START,END -after START,END
+//	sievelog version
 package main
 
 import (
@@ -15,11 +16,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/Bisman-Singh/sievelog/internal/app"
 	"github.com/Bisman-Singh/sievelog/internal/emit"
+	"github.com/Bisman-Singh/sievelog/internal/templating"
 )
 
 const usage = `usage:
@@ -28,7 +31,24 @@ const usage = `usage:
   sievelog verify  -c sievelog.yaml -rules RULES.json [-o KEEP-RULES.json] [-deployed PIPELINE.yaml] [-drift=false] [-json OUT.json]
   sievelog rewrite -c sievelog.yaml -rules RULES.json -o DIR [-apply]
   sievelog reconcile -c sievelog.yaml -rules RULES.json -before START,END -after START,END [-tolerance 0.05] [-o OUT.json]
+  sievelog version
+
+exit codes: 0 success, 1 error, 2 usage, 3 verify found a rule no longer safe or the deployed
+configuration differs, 4 reconcile found a mismatch, 5 rewrite could not rewrite every object
 `
+
+// version is the release version, set when the release is built (-X main.version=...).
+var version = "dev"
+
+// versionString names the release and what its rules depend on: rules made by one drain version are
+// re-analysed under another.
+func versionString() string {
+	drain, err := templating.DrainVersion()
+	if err != nil {
+		drain = "unknown"
+	}
+	return fmt.Sprintf("sievelog %s (drain processor %s, %s)", version, drain, runtime.Version())
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -50,6 +70,10 @@ func main() {
 		code, err = runReconcile(ctx, os.Args[2:])
 	case "rewrite":
 		code, err = runRewrite(ctx, os.Args[2:])
+	case "version", "-version", "--version":
+		fmt.Println(versionString())
+	case "help", "-h", "-help", "--help":
+		fmt.Print(usage)
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -299,7 +323,7 @@ func writeStepSummary(res *app.VerifyResult, total int) error {
 		return err
 	}
 	if _, err := f.WriteString(b.String()); err != nil {
-		f.Close()
+		_ = f.Close() // the write error is the one to report
 		return err
 	}
 	return f.Close()

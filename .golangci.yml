@@ -1,0 +1,27 @@
+version: "2"
+
+linters:
+  default: none
+  enable: [errcheck, gosec, staticcheck, unused, ineffassign, bodyclose, noctx, misspell, govet]
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [gosec, errcheck, noctx]
+      # Files the operator names: on the command line, in sievelog.yaml, or through GitHub Actions.
+      - path: (cmd/sievelog/main\.go|internal/app/)
+        text: (G304|G703)
+        linters: [gosec]
+      # Test-data generators: seeded and reproducible on purpose, never used for anything secret.
+      - path: (internal/automaton/generate\.go|internal/gen/)
+        text: G404
+        linters: [gosec]
+      # regexp/syntax packs instruction arguments and empty-width flags into small integer fields,
+      # bounded by the syntax package; runes are bounded by utf8.MaxRune, and the lexer converts a
+      # rune to a byte only below utf8.RuneSelf.
+      - path: (internal/automaton/|internal/logql/lexer\.go)
+        text: G115
+        linters: [gosec]
+      # Requests go only to the URLs the operator configured.
+      - path: internal/fetch/fetch\.go
+        text: G704
+        linters: [gosec]

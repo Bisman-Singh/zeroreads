@@ -120,7 +120,7 @@ type fzGen struct {
 	rules []fzRule
 }
 
-var fzTraps = []string{"K", "İ", "ſ", "ı", "ß", "ẞ", "Σ", "ς", "​", "�", "\n", "\t", " ", "é", "É"}
+var fzTraps = []string{"K", "İ", "ſ", "ı", "ß", "ẞ", "Σ", "ς", "\u200b", "�", "\n", "\t", " ", "é", "É"}
 
 func (g *fzGen) token(fr fzRule) string {
 	switch g.r.IntN(10) {

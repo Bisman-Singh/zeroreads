@@ -688,7 +688,7 @@ func (p *parser) filterValue(kind string) (Filter, error) {
 func (p *parser) pipeStage(sel *Selection, inRange bool) error {
 	p.i++ // |
 	t := p.peek()
-	if t.kind != tIdent && !(t.kind == tOp && t.text == "(") {
+	if t.kind != tIdent && (t.kind != tOp || t.text != "(") {
 		return p.errf("unexpected %s after |", t)
 	}
 	switch strings.ToLower(t.text) {

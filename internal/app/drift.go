@@ -22,7 +22,10 @@ import (
 // DrainConfigHash identifies everything template identity depends on: the embedded drain version,
 // the masking rules and the seed templates. Rules made under one hash are re-analysed under another.
 func (c *Config) DrainConfigHash() string {
-	v, _ := templating.DrainVersion()
+	v, err := templating.DrainVersion()
+	if err != nil {
+		v = "unknown (" + err.Error() + ")" // matches no real hash, so verify fails closed
+	}
 	b, _ := json.Marshal(struct {
 		Version string
 		Masks   any

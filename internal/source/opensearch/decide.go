@@ -396,8 +396,8 @@ func (c *Client) VerifyScope(ctx context.Context, s Scope) (Scope, []Gap, []stri
 			noTerms(fmt.Sprintf("%d documents carry more than one value", multi))
 		}
 	}
-	switch {
-	case field == "":
+	switch field {
+	case "":
 		gaps = append(gaps, Gap{Key: "opensearch-scope-unverified", Origin: origin,
 			Reason: "no service field is configured, so it cannot be checked that this service's documents are only in the scope's indices"})
 	default:

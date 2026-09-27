@@ -116,9 +116,11 @@ func (c *Config) volumeQuery(fn, service, field, language string, window time.Du
 // Analyze gathers every piece of evidence and decides.
 func Analyze(ctx context.Context, c *Config, now time.Time) (*Report, error) {
 	rep := &Report{GeneratedAt: now.UTC(), Window: c.Discovery.Window.String(), EvidenceWindow: c.Evidence.Window.String()}
-	if v, err := templating.DrainVersion(); err == nil {
-		rep.DrainVersion = v
+	v, err := templating.DrainVersion()
+	if err != nil {
+		return nil, fmt.Errorf("reading the embedded drain version, which rules are tied to: %w", err)
 	}
+	rep.DrainVersion = v
 	lc, err := c.lokiClient()
 	if err != nil {
 		return nil, err
@@ -350,7 +352,7 @@ func (c *Config) discover(ctx context.Context, lc *loki.Client, svc string, star
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	defer eng.Close(ctx)
+	defer func() { _ = eng.Close(ctx) }() // templating is done; a failed shutdown loses nothing
 	// Two passes: the first converges the parse tree, the second assigns every line its final
 	// template, so early lines are not left under cold-start literal templates.
 	if _, err := eng.Template(ctx, inputs); err != nil {

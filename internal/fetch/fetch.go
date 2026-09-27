@@ -67,7 +67,7 @@ func once(c *http.Client, req *http.Request) (res Response, retryAfter time.Dura
 	if err != nil {
 		return Response{}, -1, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() // read to the end or to the bound; nothing is left to report
 	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxBody+1))
 	if err != nil {
 		return Response{Status: resp.StatusCode}, -1, err
@@ -84,8 +84,8 @@ func transient(method string, status int, err error) bool {
 	}
 	if err != nil {
 		var ne net.Error
-		return !errors.Is(err, ErrTooLarge) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) &&
-			!(errors.As(err, &ne) && ne.Timeout())
+		timedOut := errors.As(err, &ne) && ne.Timeout()
+		return !timedOut && !errors.Is(err, ErrTooLarge) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 	}
 	switch status {
 	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:

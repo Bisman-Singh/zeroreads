@@ -300,7 +300,10 @@ func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time, opt Ve
 			global = append(global, fmt.Sprintf("evidence gap %q: %s", g.Key, g.Reason))
 		}
 	}
-	if v, err := templating.DrainVersion(); err == nil && v != rf.DrainVersion {
+	switch v, err := templating.DrainVersion(); {
+	case err != nil:
+		global = append(global, "this binary cannot tell which drain it embeds ("+err.Error()+"), so the rules' templates cannot be trusted")
+	case v != rf.DrainVersion:
 		global = append(global, fmt.Sprintf("rules were made with drain %s, this binary embeds %s", rf.DrainVersion, v))
 	}
 	if h := c.DrainConfigHash(); h != rf.DrainConfigHash {

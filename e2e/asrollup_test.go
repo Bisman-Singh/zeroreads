@@ -345,7 +345,9 @@ policy:
 
 	// Reconcile from Loki's own data: no rolled-up line is stored after enforcement, and the rollup
 	// records carry the removed lines' count.
-	window := func(a, b time.Time) string { return a.UTC().Format(time.RFC3339Nano) + "," + b.UTC().Format(time.RFC3339Nano) }
+	window := func(a, b time.Time) string {
+		return a.UTC().Format(time.RFC3339Nano) + "," + b.UTC().Format(time.RFC3339Nano)
+	}
 	recPath := filepath.Join(e.work, "rollup-reconcile.json")
 	out, code = e.run(e.root, e.bin, "reconcile", "-c", cfgPath, "-rules", rulesPath, "-before", window(preStart, preEnd), "-after", window(batchStart, time.Now()), "-o", recPath)
 	if code != 0 {

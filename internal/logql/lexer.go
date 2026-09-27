@@ -86,7 +86,7 @@ func lex(src string) ([]token, error) {
 			tok.pos, tok.end = i, i+n
 			out = append(out, tok)
 			i += n
-		case isLetter(byte(r)) && r < utf8.RuneSelf || r == '_':
+		case r < utf8.RuneSelf && isLetter(byte(r)) || r == '_':
 			j := i
 			for j < len(src) && (isLetter(src[j]) || isDigit(src[j]) || src[j] == '_') {
 				j++

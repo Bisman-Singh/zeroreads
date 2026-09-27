@@ -22,3 +22,10 @@ func TestActionAndChartShareTheReleasedVersion(t *testing.T) {
 		t.Fatalf("action image %q, chart appVersion %q", a, c)
 	}
 }
+
+// A bug report needs the release and the drain version the rules depend on.
+func TestVersionString(t *testing.T) {
+	if got := versionString(); !regexp.MustCompile(`\Asievelog dev \(drain processor v[0-9.]+, go[0-9.]+\)\z`).MatchString(got) {
+		t.Fatalf("version %q", got)
+	}
+}

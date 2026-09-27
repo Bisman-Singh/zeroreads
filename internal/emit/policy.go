@@ -112,7 +112,7 @@ func checkPolicies(doc []byte, rules []Rule, dir string) (map[string]string, err
 	if err := os.WriteFile(path, doc, 0o600); err != nil {
 		return nil, err
 	}
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }() // inside the caller's scratch directory, which it removes
 	reg := policy.NewPolicyRegistry(policy.WithRegexBackend(teroscan.New()))
 	prov := policy.NewFileProvider(path)
 	defer prov.Stop()
@@ -136,7 +136,10 @@ func checkPolicies(doc []byte, rules []Rule, dir string) (map[string]string, err
 	}
 	bad := map[string]string{}
 	for i, r := range rules {
-		re := regexp.MustCompile(r.Language)
+		re, err := regexp.Compile(r.Language)
+		if err != nil {
+			return nil, fmt.Errorf("rule %s: %w", r.ID, err)
+		}
 		members, err := automaton.Members(r.Language, 60, uint64(i)+1)
 		if err != nil {
 			return nil, err

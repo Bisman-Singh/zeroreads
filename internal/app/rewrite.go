@@ -241,14 +241,20 @@ func (c *Config) rewriteGrafana(ctx context.Context, base string, org int64, pat
 	var body any
 	switch kind {
 	case "dashboard":
-		dash, _ := obj["dashboard"].(map[string]any)
+		dash, ok := obj["dashboard"].(map[string]any)
+		if !ok {
+			return res, fmt.Errorf("%s: Grafana's answer holds no dashboard", path)
+		}
 		meta, _ := obj["meta"].(map[string]any)
 		_, res.Replaced = replaceExprs(dash, edits)
 		body = map[string]any{"dashboard": dash, "folderUid": meta["folderUid"], "overwrite": false,
 			"message": "sievelog: rewrite counting queries for rolled-up lines"}
 		put, method = "/api/dashboards/db", http.MethodPost
 	case "librarypanel":
-		r, _ := obj["result"].(map[string]any)
+		r, ok := obj["result"].(map[string]any)
+		if !ok {
+			return res, fmt.Errorf("%s: Grafana's answer holds no library panel", path)
+		}
 		model := r["model"]
 		_, res.Replaced = replaceExprs(model, edits)
 		body = map[string]any{"name": r["name"], "model": model, "kind": r["kind"], "version": r["version"], "folderUid": r["folderUid"]}

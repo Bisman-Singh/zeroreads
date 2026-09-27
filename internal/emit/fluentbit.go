@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"math/big"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -127,7 +128,7 @@ func FluentBit(files [][]byte, t FluentBitTarget, rules []Rule, mode Mode) ([]by
 		if err != nil {
 			return nil, err
 		}
-		scope, err := dialect.Onigmo(`\A` + regexpQuote(r.ScopeValue) + `\z`)
+		scope, err := dialect.Onigmo(`\A` + regexp.QuoteMeta(r.ScopeValue) + `\z`)
 		if err != nil {
 			return nil, err
 		}
@@ -151,7 +152,10 @@ func FluentBit(files [][]byte, t FluentBitTarget, rules []Rule, mode Mode) ([]by
 		})
 	}
 	for _, r := range rules {
-		idPat, _ := dialect.Onigmo(`\A` + regexpQuote(r.ID) + `\z`)
+		idPat, err := dialect.Onigmo(`\A` + regexp.QuoteMeta(r.ID) + `\z`)
+		if err != nil {
+			return nil, err
+		}
 		added = append(added, map[string]any{
 			"name": "log_to_metrics", "alias": "sievelog_measure_" + strings.ReplaceAll(r.ID, "-", "_"), "match": t.Match,
 			"tag": t.MetricsTag, "metric_mode": "counter", "metric_name": metricName("sievelog_rule_lines", r.ID),
@@ -172,14 +176,17 @@ func FluentBit(files [][]byte, t FluentBitTarget, rules []Rule, mode Mode) ([]by
 		for _, r := range rules {
 			switch r.Action {
 			case "drop", "aggregate":
-				dropIDs = append(dropIDs, regexpQuote(r.ID))
+				dropIDs = append(dropIDs, regexp.QuoteMeta(r.ID))
 			case "sample":
 				thresholds[r.ID] = FluentBitSampleThreshold(r.Keep)
 				paths[r.ID], _ = pathOf(r)
 			}
 		}
 		if len(dropIDs) > 0 {
-			ids, _ := dialect.Onigmo(`\A(?:` + strings.Join(dropIDs, "|") + `)\z`)
+			ids, err := dialect.Onigmo(`\A(?:` + strings.Join(dropIDs, "|") + `)\z`)
+			if err != nil {
+				return nil, err
+			}
 			added = append(added, map[string]any{"name": "grep", "alias": "sievelog_drop", "match": t.Match, "exclude": "sievelog_rule " + ids})
 		}
 		if len(thresholds) > 0 {
@@ -201,17 +208,6 @@ func property(m map[string]any, name string) any {
 		}
 	}
 	return nil
-}
-
-func regexpQuote(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if strings.ContainsRune(`\.+*?()|[]{}^$`, r) {
-			b.WriteRune('\\')
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
 }
 
 // sampleLua is a pure LuaJIT SHA-256 plus the per-rule sampling decision.

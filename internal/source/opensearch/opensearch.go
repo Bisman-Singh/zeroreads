@@ -572,14 +572,17 @@ func (r *Reader) readMonitors(ctx context.Context, res *Result) error {
 					var d struct {
 						Indices []string `json:"indices"`
 					}
-					_ = json.Unmarshal(raw, &d)
+					_ = json.Unmarshal(raw, &d) // undecodable: no indices, so it reads every index
 					res.Uses = append(res.Uses, Use{Source: "monitor", Origin: origin, Indices: expandList(d.Indices), Opaque: true})
 				case "uri":
 					// cluster metrics monitors call cluster APIs; a path reading documents is treated like any request
 					var u struct {
 						Path string `json:"path"`
 					}
-					_ = json.Unmarshal(raw, &u)
+					if err := json.Unmarshal(raw, &u); err != nil {
+						res.Uses = append(res.Uses, Use{Source: "monitor", Origin: origin + " input uri (" + err.Error() + ")", Opaque: true})
+						continue
+					}
 					if reads, _ := readingEndpoint(http.MethodGet, u.Path); reads {
 						res.Uses = append(res.Uses, Use{Source: "monitor", Origin: origin, Indices: indicesOf(u.Path), Opaque: true})
 					}
@@ -655,7 +658,7 @@ func (r *Reader) readSavedObjects(ctx context.Context, res *Result) error {
 				ID   string `json:"id"`
 			} `json:"references"`
 		}
-		_ = json.Unmarshal(h.Source, &doc)
+		_ = json.Unmarshal(h.Source, &doc) // undecodable: no references, so it reads every index
 		var indices []string
 		unresolved := false
 		for _, ref := range doc.References {

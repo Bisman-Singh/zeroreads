@@ -28,24 +28,37 @@ func main() {
 		os.Exit(2)
 	}
 
-	w := bufio.NewWriter(os.Stdout)
-	var tick *time.Ticker
-	if *rate > 0 {
-		tick = time.NewTicker(time.Second / time.Duration(*rate))
-		defer tick.Stop()
+	if err := emit(g, *count, *rate); err != nil {
+		// A line lost on the way out would make the ground truth wrong: fail loudly instead.
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
-	for i := 0; i < *count; i++ {
-		if tick != nil {
-			<-tick.C
-		}
-		fmt.Fprintln(w, g.Next().Line)
-		if tick != nil {
-			w.Flush()
-		}
-	}
-	w.Flush()
 	// Nothing else is written to stdout or stderr: the container's log stream is the ground truth.
 	if *hold {
 		select {}
 	}
+}
+
+// emit writes count lines to stdout, rate per second (0: as fast as possible).
+func emit(g *gen.Generator, count, rate int) error {
+	w := bufio.NewWriter(os.Stdout)
+	var tick *time.Ticker
+	if rate > 0 {
+		tick = time.NewTicker(time.Second / time.Duration(rate))
+		defer tick.Stop()
+	}
+	for i := 0; i < count; i++ {
+		if tick != nil {
+			<-tick.C
+		}
+		if _, err := fmt.Fprintln(w, g.Next().Line); err != nil {
+			return err
+		}
+		if tick != nil {
+			if err := w.Flush(); err != nil {
+				return err
+			}
+		}
+	}
+	return w.Flush()
 }

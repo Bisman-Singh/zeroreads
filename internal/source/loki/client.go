@@ -432,7 +432,7 @@ func (c *Client) OpenTail(ctx context.Context, query string) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }() // the probe only needs the tail registered
 	key := make([]byte, 16)
 	if _, err := crand.Read(key); err != nil {
 		return err
@@ -451,16 +451,16 @@ func (c *Client) OpenTail(ctx context.Context, query string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
-	switch {
-	case resp.StatusCode == http.StatusSwitchingProtocols:
+	_ = resp.Body.Close() // a switching-protocols answer has no body; the status is what counts
+	switch resp.StatusCode {
+	case http.StatusSwitchingProtocols:
 		select { // let the querier register the tail before closing
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(time.Second):
 			return nil
 		}
-	case resp.StatusCode == 404 || resp.StatusCode == 501:
+	case http.StatusNotFound, http.StatusNotImplemented:
 		return ErrNotServed
 	}
 	return fmt.Errorf("loki: tail: HTTP %d", resp.StatusCode)

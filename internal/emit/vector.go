@@ -92,7 +92,7 @@ func (t VectorTarget) severityPaths() []string {
 // vrlField quotes a field name for a VRL path when it is not a plain identifier.
 func vrlField(k string) string {
 	for _, r := range k {
-		if !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+		if r != '_' && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
 			return vrlString(k)
 		}
 	}
