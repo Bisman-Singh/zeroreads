@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -45,14 +46,10 @@ type EnforcedRule struct {
 
 // WriteReport writes report.json, report.md and rules.json into dir.
 func WriteReport(dir string, c *Config, rep *Report) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, outputDir); err != nil {
 		return err
 	}
-	b, err := json.MarshalIndent(rep, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(dir, "report.json"), b, 0o644); err != nil {
+	if err := WriteJSON(filepath.Join(dir, "report.json"), rep, SharedFile); err != nil {
 		return err
 	}
 	rf := RulesFile{GeneratedAt: rep.GeneratedAt, DrainVersion: rep.DrainVersion, DrainConfigHash: c.DrainConfigHash(), LokiLabel: c.Scope.LokiLabel}
@@ -66,36 +63,80 @@ func WriteReport(dir string, c *Config, rep *Report) error {
 			Service: r.Candidate.Service, Template: r.Candidate.Template, RemovedBytesPerDay: r.RemovedBytesPerDay, Rewrites: r.Rewrites,
 		})
 	}
-	b, err = json.MarshalIndent(rf, "", "  ")
-	if err != nil {
+	if err := WriteJSON(filepath.Join(dir, "rules.json"), rf, SharedFile); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "rules.json"), b, 0o644); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, "report.md"), []byte(Markdown(rep)), 0o644)
+	return WriteFile(filepath.Join(dir, "report.md"), []byte(Markdown(rep)), SharedFile)
 }
 
 // SaveRules writes rules.json.
-func SaveRules(path string, rf *RulesFile) error {
-	b, err := json.MarshalIndent(rf, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, b, 0o644)
-}
+func SaveRules(path string, rf *RulesFile) error { return WriteJSON(path, rf, SharedFile) }
 
-// LoadRules reads rules.json.
+// LoadRules reads rules.json and refuses anything analyze would not have written: unknown fields,
+// trailing data, a rule no emitter can write safely, a rule whose ID does not match its service,
+// field and language (a hand-edited rule would otherwise keep the verdict of another), or a rewrite
+// that does not parse.
 func LoadRules(path string) (*RulesFile, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
 	var rf RulesFile
-	if err := json.Unmarshal(b, &rf); err != nil {
+	if err := dec.Decode(&rf); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if dec.More() {
+		return nil, fmt.Errorf("%s: data after the rules", path)
+	}
+	if err := rf.validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return &rf, nil
+}
+
+func (rf *RulesFile) validate() error {
+	if rf.DrainVersion == "" || rf.DrainConfigHash == "" {
+		return fmt.Errorf("no drain version or configuration hash: not a rules file written by analyze")
+	}
+	if !labelName.MatchString(rf.LokiLabel) {
+		return fmt.Errorf("loki_label %q is not a label name", rf.LokiLabel)
+	}
+	if err := emit.CheckRules(rf.emitRules()); err != nil {
+		return err
+	}
+	for _, r := range rf.Rules {
+		if r.Service != r.ScopeValue {
+			return fmt.Errorf("rule %s: service %q and scope value %q differ", r.ID, r.Service, r.ScopeValue)
+		}
+		if id := (analyze.Candidate{Service: r.Service, Field: r.Field, Language: r.Language}).ID(); id != r.ID {
+			return fmt.Errorf("rule %s: its service, field and language belong to rule %s; re-run analyze instead of editing rules", r.ID, id)
+		}
+		if len(r.Rewrites) > 0 && r.Action != "rollup" {
+			return fmt.Errorf("rule %s: only a rollup carries rewrites", r.ID)
+		}
+		for _, rw := range r.Rewrites {
+			switch rw.Store {
+			case "", "grafana", "loki-ruler":
+			default:
+				return fmt.Errorf("rule %s: unknown rewrite store %q", r.ID, rw.Store)
+			}
+			if _, err := logql.Parse(rw.New); err != nil {
+				return fmt.Errorf("rule %s: rewritten query does not parse: %w", r.ID, err)
+			}
+		}
+	}
+	return nil
+}
+
+// emitRules are the rules as the emitters take them.
+func (rf *RulesFile) emitRules() []emit.Rule {
+	out := make([]emit.Rule, len(rf.Rules))
+	for i, r := range rf.Rules {
+		out[i] = r.Rule
+	}
+	return out
 }
 
 func humanBytes(b float64) string {
@@ -296,7 +337,8 @@ func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time, opt Ve
 		pqs = append(pqs, parsed{q: q, parsed: p, sel: p.Selections})
 	}
 	res := &VerifyResult{CheckedAt: now.UTC(), DeployedMode: deployedMode, DeployedDiffs: deployedDiffs,
-		Keep: &RulesFile{GeneratedAt: rf.GeneratedAt, DrainVersion: rf.DrainVersion, DrainConfigHash: rf.DrainConfigHash, LokiLabel: rf.LokiLabel}}
+		Keep: &RulesFile{GeneratedAt: rf.GeneratedAt, DrainVersion: rf.DrainVersion, DrainConfigHash: rf.DrainConfigHash, LokiLabel: rf.LokiLabel,
+			RewritesAppliedAt: rf.RewritesAppliedAt}}
 	if opt.Drift {
 		d, err := c.Drift(ctx, rf, now)
 		if err != nil {

@@ -34,7 +34,7 @@ type RewriteOutcome struct {
 // being overwritten; Loki ruler groups are written back through the ruler API. rf.RewritesAppliedAt
 // is set when every rewrite was applied.
 func Rewrites(ctx context.Context, c *Config, rf *RulesFile, dir string, apply bool, now time.Time) ([]RewriteOutcome, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, outputDir); err != nil {
 		return nil, err
 	}
 	// One object can hold several rewritten queries: group by object.
@@ -252,8 +252,7 @@ func (c *Config) rewriteGrafana(ctx context.Context, base string, org int64, pat
 		_, res.Replaced = replaceExprs(obj, edits)
 		body = obj
 	}
-	b, _ := json.MarshalIndent(body, "", "  ")
-	if err := os.WriteFile(file, b, 0o644); err != nil {
+	if err := WriteJSON(file, body, SharedFile); err != nil {
 		return res, err
 	}
 	if res.Replaced == 0 {
@@ -315,7 +314,7 @@ func (c *Config) rewriteRuler(ctx context.Context, path string, edits map[string
 	if err != nil {
 		return res, err
 	}
-	if err := os.WriteFile(file, out, 0o644); err != nil {
+	if err := WriteFile(file, out, SharedFile); err != nil {
 		return res, err
 	}
 	if res.Replaced == 0 {

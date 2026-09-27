@@ -200,9 +200,10 @@ func TestKeepStreams(t *testing.T) {
 func TestReportFiles(t *testing.T) {
 	dir := t.TempDir()
 	c := &Config{Scope: ScopeConfig{OTelAttribute: "service.name", LokiLabel: "service_name"}}
+	rolled := analyze.Candidate{Service: "svc", Template: "t <*>", Language: `\At x\z`}
 	rep := &Report{GeneratedAt: time.Unix(0, 0), DrainVersion: "v", Recommendations: []analyze.Recommendation{
-		{ID: "r1", Action: "rollup", Candidate: analyze.Candidate{Service: "svc", Template: "t <*>", Language: `\At x\z`},
-			Rewrites: []analyze.Rewrite{{Source: "grafana", Origin: "o", Old: "A", New: "B"}}, RemovedBytesPerDay: 10},
+		{ID: rolled.ID(), Action: "rollup", Candidate: rolled,
+			Rewrites: []analyze.Rewrite{{Source: "grafana", Origin: "o", Old: `{a="b"}`, New: `{a="c"}`}}, RemovedBytesPerDay: 10},
 		{ID: "r2", Action: "none", Candidate: analyze.Candidate{Service: "svc", Template: "u"}, Blockers: []string{"because"},
 			Readers: []analyze.Reader{{Source: "grafana", Origin: "p", Expr: "q", Counting: true, Witness: "w"}}},
 	}, Gaps: []analyze.Gap{{Key: "k", Source: "s", Origin: "o", Reason: "r"}}, Notes: []string{"a note"}}
@@ -214,7 +215,7 @@ func TestReportFiles(t *testing.T) {
 		t.Fatalf("%v %+v", err, rf)
 	}
 	md, _ := os.ReadFile(dir + "/report.md")
-	for _, want := range []string{"`k`", "Blocked: because", "counts e.g. `w`", "to `B`", "a note"} {
+	for _, want := range []string{"`k`", "Blocked: because", "counts e.g. `w`", "to `{a=\"c\"}`", "a note"} {
 		if !strings.Contains(string(md), want) {
 			t.Fatalf("report.md lacks %q:\n%s", want, md)
 		}
@@ -268,5 +269,54 @@ func TestGrafanaDatasourcesFailClosed(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no unmapped gap naming only the forgotten datasource: %+v", gaps)
+	}
+}
+
+// rules.json is checked on load: whoever edited it, nothing the emitters or verify would act on
+// differently from what analyze decided gets through. Found by the v1 audit: it was not checked.
+func TestLoadRulesRefusesWhatAnalyzeWouldNotWrite(t *testing.T) {
+	dir := t.TempDir()
+	c := analyze.Candidate{Service: "svc", Language: `\Ax [0-9]+\z`}
+	good := func() map[string]any {
+		return map[string]any{"drain_version": "v", "drain_config_hash": "h", "loki_label": "service_name", "rules": []any{map[string]any{
+			"ID": c.ID(), "ScopeAttr": "service.name", "ScopeValue": "svc", "Language": c.Language, "Action": "drop", "service": "svc"}}}
+	}
+	rule := func(m map[string]any) map[string]any { return m["rules"].([]any)[0].(map[string]any) }
+	load := func(m map[string]any) error {
+		b, _ := json.Marshal(m)
+		os.WriteFile(dir+"/rules.json", b, 0o644)
+		_, err := LoadRules(dir + "/rules.json")
+		return err
+	}
+	if err := load(good()); err != nil {
+		t.Fatal(err)
+	}
+	for want, edit := range map[string]func(m map[string]any){
+		"unknown field":         func(m map[string]any) { m["rulez"] = 1 },
+		"not a rules file":      func(m map[string]any) { delete(m, "drain_config_hash") },
+		"not a label name":      func(m map[string]any) { m["loki_label"] = "service name" },
+		"belong to rule":        func(m map[string]any) { rule(m)["Language"] = `\Ax.*\z` },
+		"differ":                func(m map[string]any) { rule(m)["service"] = "other" },
+		"keep must be":          func(m map[string]any) { rule(m)["Action"] = "sample" },
+		"unknown action":        func(m map[string]any) { rule(m)["Action"] = "delete" },
+		"not r- followed":       func(m map[string]any) { rule(m)["ID"] = "r-1 ${env:X}" },
+		"only a rollup carries": func(m map[string]any) { rule(m)["rewrites"] = []any{map[string]any{"New": `{a="b"}`}} },
+	} {
+		m := good()
+		edit(m)
+		if err := load(m); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: got %v", want, err)
+		}
+	}
+	m := good()
+	rule(m)["Action"] = "rollup"
+	rule(m)["rewrites"] = []any{map[string]any{"Store": "grafana", "New": `sum(`}}
+	if err := load(m); err == nil || !strings.Contains(err.Error(), "does not parse") {
+		t.Fatalf("unparseable rewrite: %v", err)
+	}
+	b, _ := json.Marshal(good())
+	os.WriteFile(dir+"/rules.json", append(b, []byte(`{}`)...), 0o644)
+	if _, err := LoadRules(dir + "/rules.json"); err == nil {
+		t.Fatal("trailing data accepted")
 	}
 }

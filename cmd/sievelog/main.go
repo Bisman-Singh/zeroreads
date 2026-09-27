@@ -110,7 +110,7 @@ func runEmit(args []string) error {
 		if err != nil {
 			return err
 		}
-		defer os.RemoveAll(scratch)
+		defer func() { _ = os.RemoveAll(scratch) }() // a leftover temporary directory is harmless
 		b, skips, err := app.EmitPolicies(rf, scratch)
 		if err != nil {
 			return err
@@ -119,11 +119,7 @@ func runEmit(args []string) error {
 			fmt.Fprintf(os.Stderr, "not emitted as a policy: %s: %s\n", s.RuleID, s.Reason)
 		}
 		fmt.Fprintf(os.Stderr, "policies verified against %s\n", emit.PolicyRuntime)
-		if *out == "" {
-			_, err = os.Stdout.Write(b)
-			return err
-		}
-		return os.WriteFile(*out, b, 0o644)
+		return writeOutput(*out, b)
 	}
 	if *format != "collector" && *format != "vector" && *format != "fluentbit" {
 		return fmt.Errorf("-format must be collector, vector, fluentbit or policy")
@@ -145,11 +141,16 @@ func runEmit(args []string) error {
 	if err != nil {
 		return err
 	}
-	if *out == "" {
-		_, err = os.Stdout.Write(b)
+	return writeOutput(*out, b)
+}
+
+// writeOutput writes an emitted runtime configuration to path, or to stdout when path is empty.
+func writeOutput(path string, b []byte) error {
+	if path == "" {
+		_, err := os.Stdout.Write(b)
 		return err
 	}
-	return os.WriteFile(*out, b, 0o644)
+	return app.WriteFile(path, b, app.PrivateFile)
 }
 
 // runRewrite exits 5 when any stored query could not be rewritten.
@@ -178,10 +179,16 @@ func runRewrite(ctx context.Context, args []string) (int, error) {
 		switch {
 		case r.Err != "":
 			state, failed = "FAILED: "+r.Err, failed+1
+		case r.Applied && r.Replaced == 0:
+			state = "already rewritten"
 		case r.Applied:
 			state = "applied"
 		}
-		fmt.Printf("rewrite %s %s: %d quer%s replaced, %s (%s)\n", r.Store, r.Target, r.Replaced, map[bool]string{true: "y", false: "ies"}[r.Replaced == 1], state, r.File)
+		queries := "queries"
+		if r.Replaced == 1 {
+			queries = "query"
+		}
+		fmt.Printf("rewrite %s %s: %d %s replaced, %s (%s)\n", r.Store, r.Target, r.Replaced, queries, state, r.File)
 	}
 	if *apply && failed == 0 {
 		if err := app.SaveRules(*rulesPath, rf); err != nil {
@@ -224,14 +231,12 @@ func runVerify(ctx context.Context, args []string) (int, error) {
 		return 0, err
 	}
 	if *out != "" && *out != "-" {
-		b, _ := json.MarshalIndent(res.Keep, "", "  ")
-		if err := os.WriteFile(*out, b, 0o644); err != nil {
+		if err := app.SaveRules(*out, res.Keep); err != nil {
 			return 0, err
 		}
 	}
 	if *jsonOut != "" {
-		b, _ := json.MarshalIndent(res, "", "  ")
-		if err := os.WriteFile(*jsonOut, b, 0o644); err != nil {
+		if err := app.WriteJSON(*jsonOut, res, app.SharedFile); err != nil {
 			return 0, err
 		}
 	}
@@ -262,7 +267,10 @@ func runVerify(ctx context.Context, args []string) (int, error) {
 	fmt.Printf("verify: %d of %d rules must be reverted; %d remain safe\n", len(res.Violations), len(rf.Rules), len(res.Keep.Rules))
 	if *out == "-" {
 		// Printed so a scheduled Job keeps it in its log: emit and deploy these rules to revert.
-		b, _ := json.MarshalIndent(res.Keep, "", "  ")
+		b, err := json.MarshalIndent(res.Keep, "", "  ")
+		if err != nil {
+			return 0, err
+		}
 		fmt.Printf("verify: rules that remain safe (emit and deploy these to revert):\n%s\n", b)
 	}
 	return 3, nil
@@ -274,23 +282,27 @@ func writeStepSummary(res *app.VerifyResult, total int) error {
 	if path == "" {
 		return nil
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	var b strings.Builder
+	if len(res.Violations) == 0 {
+		fmt.Fprintf(&b, "### sievelog verify\n\nAll %d enforced rules are still safe.\n", total)
+	} else {
+		fmt.Fprintf(&b, "### sievelog verify\n\n%d of %d enforced rules are no longer safe.\n\n", len(res.Violations), total)
+		for _, v := range res.Violations {
+			fmt.Fprintf(&b, "- `%s`\n", v.RuleID)
+			for _, r := range v.Reasons {
+				fmt.Fprintf(&b, "  - %s\n", r)
+			}
+		}
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, app.PrivateFile)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	if len(res.Violations) == 0 {
-		_, err = fmt.Fprintf(f, "### sievelog verify\n\nAll %d enforced rules are still safe.\n", total)
+	if _, err := f.WriteString(b.String()); err != nil {
+		f.Close()
 		return err
 	}
-	fmt.Fprintf(f, "### sievelog verify\n\n%d of %d enforced rules are no longer safe.\n\n", len(res.Violations), total)
-	for _, v := range res.Violations {
-		fmt.Fprintf(f, "- `%s`\n", v.RuleID)
-		for _, r := range v.Reasons {
-			fmt.Fprintf(f, "  - %s\n", r)
-		}
-	}
-	return nil
+	return f.Close()
 }
 
 func parseWindow(s string) (app.Window, error) {
@@ -343,8 +355,7 @@ func runReconcile(ctx context.Context, args []string) (int, error) {
 		return 0, err
 	}
 	if *out != "" {
-		b, _ := json.MarshalIndent(res, "", "  ")
-		if err := os.WriteFile(*out, b, 0o644); err != nil {
+		if err := app.WriteJSON(*out, res, app.SharedFile); err != nil {
 			return 0, err
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"regexp"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -279,9 +280,15 @@ func (c *Config) defaults() {
 	}
 }
 
+// labelName matches a Loki label name, which sievelog writes into LogQL unquoted.
+var labelName = regexp.MustCompile(`\A[a-zA-Z_][a-zA-Z0-9_]*\z`)
+
 func (c *Config) validate() error {
 	if c.Loki.URL == "" {
 		return fmt.Errorf("loki.url is required")
+	}
+	if !labelName.MatchString(c.Scope.LokiLabel) {
+		return fmt.Errorf("scope.loki_label %q is not a Loki label name", c.Scope.LokiLabel)
 	}
 	for name, v := range map[string]int64{
 		"discovery.window": int64(c.Discovery.Window.Duration), "discovery.slices": int64(c.Discovery.Slices),

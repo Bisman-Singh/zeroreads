@@ -352,9 +352,15 @@ policy:
 			"targets": []any{map[string]any{"refId": "A", "expr": alertExpr}}}}}})
 	must(t, s, b, 200)
 	defer grafanaCall(t, grafanaURL, "DELETE", "/api/dashboards/uid/rollup-old", 1, nil)
-	out, code = e.run(e.root, e.bin, "verify", "-c", cfgPath, "-rules", rulesPath, "-drift=false")
+	keepPath := filepath.Join(e.work, "rollup-keep.json")
+	out, code = e.run(e.root, e.bin, "verify", "-c", cfgPath, "-rules", rulesPath, "-drift=false", "-o", keepPath)
 	if code != 3 || !strings.Contains(out, cacheRule.ID) || !strings.Contains(out, "rollup-old") {
 		t.Fatalf("verify should fail on a new unrewritten counting query (exit %d): %s", code, out)
+	}
+	// The revert file keeps when the rewrites were applied, so verifying it does not count old
+	// executions of the original queries as readers.
+	if keep, err := app.LoadRules(keepPath); err != nil || !keep.RewritesAppliedAt.Equal(rf.RewritesAppliedAt) {
+		t.Fatalf("revert file: %v, rewrites applied at %v, want %v", err, keep, rf.RewritesAppliedAt)
 	}
 	t.Logf("verify: passes after the rollup, fails once an unrewritten counting query appears")
 }
