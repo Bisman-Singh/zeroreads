@@ -42,8 +42,10 @@ func TestRollupRewritesKeepCounts(t *testing.T) {
 	os.WriteFile(userPath, []byte(userCfg), 0o644)
 	e.resetOutputs()
 	e.deployCollector(userPath)
+	preStart := time.Now().Add(-time.Second)
 	nsA := e.batch("rollup-pre", 31, 2000)
 	e.nsLines(nsA, 6000)
+	preEnd := time.Now()
 
 	// The readers: an API-managed alert rule and a dashboard panel, both counting cache lines.
 	s, b := grafanaCall(t, grafanaURL, "POST", "/api/folders", 1, map[string]any{"uid": "sievelog-rollup", "title": "sievelog rollup e2e"})
@@ -340,6 +342,26 @@ policy:
 		t.Fatalf("!= \"/healthz\" after enforcement: rewritten %s, ground truth %d (original now %s)\n%s", got, notHealth, instant(t, lc, orig2, at), res2.Expr)
 	}
 	t.Logf("enforce: a != \"/healthz\" count rewritten for %d rolled-up rules equals the ground truth %d", len(all), notHealth)
+
+	// Reconcile from Loki's own data: no rolled-up line is stored after enforcement, and the rollup
+	// records carry the removed lines' count.
+	window := func(a, b time.Time) string { return a.UTC().Format(time.RFC3339Nano) + "," + b.UTC().Format(time.RFC3339Nano) }
+	recPath := filepath.Join(e.work, "rollup-reconcile.json")
+	out, code = e.run(e.root, e.bin, "reconcile", "-c", cfgPath, "-rules", rulesPath, "-before", window(preStart, preEnd), "-after", window(batchStart, time.Now()), "-o", recPath)
+	if code != 0 {
+		t.Fatalf("reconcile (exit %d): %s", code, out)
+	}
+	var rec app.Reconciliation
+	rb, _ := os.ReadFile(recPath)
+	if err := json.Unmarshal(rb, &rec); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rec.Rules {
+		if r.RuleID == cacheRule.ID && (r.Status != "ok" || !strings.Contains(r.Detail, "rollup records count "+strconv.Itoa(removed)+" lines")) {
+			t.Fatalf("reconcile %s: %s, %s (removed %d)", r.RuleID, r.Status, r.Detail, removed)
+		}
+	}
+	t.Logf("reconcile: no rolled-up line stored after enforcement; rollup records count the %d removed lines", removed)
 
 	// 5. Verify passes against the deployed config; a new dashboard with the original query fails it.
 	out, code = e.run(e.root, e.bin, "verify", "-c", cfgPath, "-rules", rulesPath, "-deployed", enforcePath)

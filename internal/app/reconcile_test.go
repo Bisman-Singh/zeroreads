@@ -47,6 +47,11 @@ func TestReconcileStatuses(t *testing.T) {
 		"count_over_time({service_name=\"svc\"} |~ `\\Asample-ok\\z`":  {1000, 310},
 		"count_over_time({service_name=\"svc\"} |~ `\\Asample-bad\\z`": {1000, 900},
 		"count_over_time({service_name=\"svc\"} |~ `\\Aquiet\\z`":      {0, 0},
+		"count_over_time({service_name=\"svc\"} |~ `\\Aroll-ok\\z`":    {100, 0},
+		"count_over_time({service_name=\"svc\"} |~ `\\Aroll-raw\\z`":   {100, 4},
+		"count_over_time({service_name=\"svc\"} |~ `\\Aroll-lost\\z`":  {100, 0},
+		"`sievelog rollup r-roll-ok`":                                  {0, 97},
+		"`sievelog rollup r-roll-raw`":                                 {0, 90},
 	})
 	defer srv.Close()
 	c := &Config{Loki: LokiConfig{URL: srv.URL}, Scope: ScopeConfig{LokiLabel: "service_name"}}
@@ -59,12 +64,18 @@ func TestReconcileStatuses(t *testing.T) {
 		mk("r-sample-ok", `\Asample-ok\z`, "sample", 30),
 		mk("r-sample-bad", `\Asample-bad\z`, "sample", 30),
 		mk("r-quiet", `\Aquiet\z`, "sample", 30),
+		// Found by the v1 audit: no case matched rollup, so every rollup rule passed unchecked.
+		mk("r-roll-ok", `\Aroll-ok\z`, "rollup", 0),
+		mk("r-roll-raw", `\Aroll-raw\z`, "rollup", 0),
+		mk("r-roll-lost", `\Aroll-lost\z`, "rollup", 0),
+		mk("r-teleport", `\Aquiet\z`, "teleport", 0),
 	}}
 	res, err := Reconcile(context.Background(), c, rf, before, after, 0.05)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"r-drop-ok": "ok", "r-drop-bad": "mismatch", "r-sample-ok": "ok", "r-sample-bad": "mismatch", "r-quiet": "no-traffic"}
+	want := map[string]string{"r-drop-ok": "ok", "r-drop-bad": "mismatch", "r-sample-ok": "ok", "r-sample-bad": "mismatch", "r-quiet": "no-traffic",
+		"r-roll-ok": "ok", "r-roll-raw": "mismatch", "r-roll-lost": "mismatch", "r-teleport": "mismatch"}
 	for _, r := range res.Rules {
 		if r.Status != want[r.RuleID] {
 			t.Fatalf("%s: %s (%s), want %s", r.RuleID, r.Status, r.Detail, want[r.RuleID])

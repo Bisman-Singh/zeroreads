@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
+	"github.com/Bisman-Singh/sievelog/internal/rewrite"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -47,7 +49,8 @@ type Reconciliation struct {
 
 // Reconcile measures, from Loki itself, each enforced rule's stored lines before and after
 // enforcement. Drop and aggregate rules must store nothing afterwards; a sample rule's stored share
-// must be within tolerance of its keep percentage; dedupe must store fewer records than lines seen.
+// must be within tolerance of its keep percentage; dedupe must store fewer records than lines seen;
+// a rollup must store no line and, when the rule had lines before, rollup records carrying counts.
 func Reconcile(ctx context.Context, c *Config, rf *RulesFile, before, after Window, tolerance float64) (*Reconciliation, error) {
 	lc, err := c.lokiClient()
 	if err != nil {
@@ -91,11 +94,28 @@ func Reconcile(ctx context.Context, c *Config, rf *RulesFile, before, after Wind
 			rr.KeptFraction = afterRate / beforeRate
 		}
 		switch {
+		case !slices.Contains([]string{"drop", "aggregate", "rollup", "sample", "dedupe"}, r.Action):
+			rr.Status, rr.Detail = "mismatch", fmt.Sprintf("unknown action %q", r.Action)
 		case r.Action == "drop" || r.Action == "aggregate":
 			if rr.AfterLines == 0 {
 				rr.Status, rr.Detail = "ok", "no lines of this rule were stored after enforcement"
 			} else {
 				rr.Status, rr.Detail = "mismatch", fmt.Sprintf("%.0f lines of this rule were still stored after enforcement", rr.AfterLines)
+			}
+		case r.Action == "rollup":
+			q := fmt.Sprintf("sum(sum_over_time(%s |= %s | %s=%s | unwrap %s [%ds]))", c.selector(r.Service),
+				logqlString(rewrite.Marker(r.ID)), rewrite.RuleLabel, strconv.Quote(r.ID), rewrite.CountLabel, after.seconds())
+			rolled, err := c.scalar(ctx, lc, q, after.End)
+			if err != nil {
+				return nil, err
+			}
+			switch {
+			case rr.AfterLines > 0:
+				rr.Status, rr.Detail = "mismatch", fmt.Sprintf("%.0f lines of this rule were still stored after enforcement", rr.AfterLines)
+			case rolled == 0 && rr.BeforeLines > 0:
+				rr.Status, rr.Detail = "mismatch", fmt.Sprintf("no rollup record after enforcement, although the rule had %.0f lines before: their counts may be lost", rr.BeforeLines)
+			default:
+				rr.Status, rr.Detail = "ok", fmt.Sprintf("no lines stored after enforcement; rollup records count %.0f lines", rolled)
 			}
 		case rr.BeforeLines == 0:
 			rr.Status, rr.Detail = "no-traffic", "no lines of this rule in the before window"
