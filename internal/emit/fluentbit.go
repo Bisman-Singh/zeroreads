@@ -13,6 +13,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/Bisman-Singh/sievelog/internal/dialect"
+	"github.com/Bisman-Singh/sievelog/internal/topology"
 )
 
 // FluentBitTarget is where in a Fluent Bit YAML configuration rules are enforced.
@@ -78,13 +79,9 @@ func FluentBit(files [][]byte, t FluentBitTarget, rules []Rule, mode Mode) ([]by
 	if t.Match == "" || t.ScopeKey == "" || len(t.TextKey) == 0 || t.MetricsTag == "" {
 		return nil, fmt.Errorf("emit: fluent bit target needs match, scope key, text key and a metrics tag")
 	}
-	cfg := map[string]any{}
-	for i, f := range files {
-		var m map[string]any
-		if err := yaml.Unmarshal(f, &m); err != nil {
-			return nil, fmt.Errorf("emit: fluent bit file %d: %w", i, err)
-		}
-		cfg = merge(cfg, m)
+	cfg, err := topology.MergeFiles("fluent bit", files)
+	if err != nil {
+		return nil, err
 	}
 	pipeline := child(cfg, "pipeline")
 	filters, _ := pipeline["filters"].([]any)

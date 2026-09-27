@@ -3,10 +3,9 @@ package topology
 import (
 	"fmt"
 	"path"
+	"slices"
 	"sort"
 	"strings"
-
-	"go.yaml.in/yaml/v3"
 )
 
 // VectorConfig is a merged Vector configuration.
@@ -18,13 +17,9 @@ type VectorConfig struct {
 
 // LoadVector merges Vector YAML files (later files win).
 func LoadVector(files ...[]byte) (*VectorConfig, error) {
-	merged := map[string]any{}
-	for i, f := range files {
-		var m map[string]any
-		if err := yaml.Unmarshal(f, &m); err != nil {
-			return nil, fmt.Errorf("topology: vector file %d: %w", i, err)
-		}
-		merged = mergeMaps(merged, m)
+	merged, err := MergeFiles("vector", files)
+	if err != nil {
+		return nil, err
 	}
 	c := &VectorConfig{Sources: section(merged, "sources"), Transforms: section(merged, "transforms"), Sinks: section(merged, "sinks")}
 	for id, t := range c.Transforms {
@@ -119,7 +114,7 @@ func (c *VectorConfig) VectorDownstream(id string) (map[string][]string, []strin
 			}
 		}
 		for _, t := range ts {
-			if typ, _ := c.Transforms[t]["type"].(string); typ == "log_to_metric" && !contains(derived, t) {
+			if typ, _ := c.Transforms[t]["type"].(string); typ == "log_to_metric" && !slices.Contains(derived, t) {
 				derived = append(derived, t)
 			}
 			walk(t, append(append([]string(nil), pathSoFar...), from+"->"+t))

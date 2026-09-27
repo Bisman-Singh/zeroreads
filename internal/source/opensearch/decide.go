@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -115,30 +115,8 @@ func (s Scope) Expand(cat Catalog) Scope {
 	return out
 }
 
-func globRE(g string) string {
-	var b strings.Builder
-	b.WriteString(`\A`)
-	for _, r := range g {
-		if r == '*' {
-			b.WriteString(`.*`)
-			continue
-		}
-		b.WriteString(regexp.QuoteMeta(string(r)))
-	}
-	b.WriteString(`\z`)
-	return b.String()
-}
-
 // overlaps reports whether two index expressions (with * wildcards) can name the same index.
-func overlaps(a, b string) bool {
-	pa, err1 := automaton.Compile(globRE(a))
-	pb, err2 := automaton.Compile(globRE(b))
-	if err1 != nil || err2 != nil {
-		return true
-	}
-	_, found, err := automaton.Intersects(pa, pb, 0)
-	return err != nil || found
-}
+func overlaps(a, b string) bool { return automaton.Overlap(automaton.Glob(a), automaton.Glob(b)) }
 
 // Scope is where one service's logs live in OpenSearch.
 type Scope struct {
@@ -199,11 +177,11 @@ func proveExcludes(q map[string]json.RawMessage, s Scope) bool {
 		switch kind {
 		case "term":
 			if vals, ok := termValues(body, s.ServiceField); ok {
-				return !contains(vals, s.Service)
+				return !slices.Contains(vals, s.Service)
 			}
 		case "terms":
 			if vals, ok := termsValues(body, s.ServiceField); ok {
-				return !contains(vals, s.Service)
+				return !slices.Contains(vals, s.Service)
 			}
 		case "constant_score":
 			var cs struct {
@@ -241,11 +219,11 @@ func includesService(q map[string]json.RawMessage, s Scope) bool {
 		switch kind {
 		case "term":
 			if vals, ok := termValues(body, s.ServiceField); ok {
-				return contains(vals, s.Service)
+				return slices.Contains(vals, s.Service)
 			}
 		case "terms":
 			if vals, ok := termsValues(body, s.ServiceField); ok {
-				return contains(vals, s.Service)
+				return slices.Contains(vals, s.Service)
 			}
 		}
 	}
@@ -311,15 +289,6 @@ func termsValues(body json.RawMessage, field string) ([]string, bool) {
 		return nil, false // terms lookup or non-string values
 	}
 	return vals, true
-}
-
-func contains(vals []string, v string) bool {
-	for _, x := range vals {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }
 
 // VerifyScope checks, against the cluster, that exact term reasoning on the service field is sound

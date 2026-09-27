@@ -292,3 +292,20 @@ func TestWorkIsBounded(t *testing.T) {
 		t.Fatalf("got %v, want ErrLimit", err)
 	}
 }
+
+func TestGlobAndOverlap(t *testing.T) {
+	for g, s := range map[string][2]string{"logs-*": {"logs-checkout", "metrics"}, "kube.*": {"kube.app.x", "kubex"}, "a.b": {"a.b", "axb"}} {
+		re := regexp.MustCompile(Glob(g))
+		if !re.MatchString(s[0]) || re.MatchString(s[1]) {
+			t.Fatalf("%s: %s", g, Glob(g))
+		}
+	}
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{{Glob("logs-*"), Glob("*-checkout"), true}, {Glob("logs-*"), Glob("metrics-*"), false}, {"(", Glob("x"), true}} {
+		if got := Overlap(c.a, c.b); got != c.want {
+			t.Fatalf("%s %s: %v", c.a, c.b, got)
+		}
+	}
+}

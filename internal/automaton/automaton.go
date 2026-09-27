@@ -83,6 +83,28 @@ const DefaultLimit = 200000
 // and e2e suites needs about 66,000 steps; the bound for the default limit is 3.2 million.
 const workPerState = 16
 
+// Glob is the anchored pattern of a wildcard expression, where * matches any run of characters and
+// everything else is literal, as index names and Fluent Bit tags use them.
+func Glob(g string) string {
+	parts := strings.Split(g, "*")
+	for i, p := range parts {
+		parts[i] = regexp.QuoteMeta(p)
+	}
+	return `\A` + strings.Join(parts, ".*") + `\z`
+}
+
+// Overlap reports whether two patterns can match the same string. A pattern that does not compile,
+// or a question too large to decide, counts as overlapping: callers use it to prove things apart.
+func Overlap(a, b string) bool {
+	pa, err1 := Compile(a)
+	pb, err2 := Compile(b)
+	if err1 != nil || err2 != nil {
+		return true
+	}
+	_, found, err := Intersects(pa, pb, 0)
+	return err != nil || found
+}
+
 // Witness searches for a string satisfying every term. It returns the string and true if one exists,
 // or "" and false if none exists. It returns ErrLimit if deciding needs more than limit states.
 func Witness(terms []Term, limit int) (string, bool, error) {

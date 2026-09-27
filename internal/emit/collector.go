@@ -11,6 +11,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/Bisman-Singh/sievelog/internal/automaton"
+	"github.com/Bisman-Singh/sievelog/internal/topology"
 )
 
 // Rule is one decided rule, ready to enforce.
@@ -234,13 +235,9 @@ func Collector(files [][]byte, t Target, rules []Rule, mode Mode) ([]byte, error
 	if err := CheckRules(rules); err != nil {
 		return nil, err
 	}
-	cfg := map[string]any{}
-	for i, f := range files {
-		var m map[string]any
-		if err := yaml.Unmarshal(f, &m); err != nil {
-			return nil, fmt.Errorf("emit: file %d: %w", i, err)
-		}
-		cfg = merge(cfg, m)
+	cfg, err := topology.MergeFiles("collector", files)
+	if err != nil {
+		return nil, err
 	}
 	service := child(cfg, "service")
 	pipelines := child(service, "pipelines")
@@ -403,17 +400,4 @@ func child(m map[string]any, k string) map[string]any {
 		m[k] = c
 	}
 	return c
-}
-
-func merge(dst, src map[string]any) map[string]any {
-	for k, v := range src {
-		if sm, ok := v.(map[string]any); ok {
-			if dm, ok := dst[k].(map[string]any); ok {
-				dst[k] = merge(dm, sm)
-				continue
-			}
-		}
-		dst[k] = v
-	}
-	return dst
 }

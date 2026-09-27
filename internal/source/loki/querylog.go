@@ -277,37 +277,19 @@ func isOwnQuery(source string) bool { return strings.EqualFold(source, "sievelog
 // It proves the query log is being written and is readable, end to end. The marker is sent without
 // the analyzer's tag so it is logged like a user query.
 func (q *QueryLog) ProveLive(ctx context.Context, target *Client, timeout time.Duration) error {
-	nonce := make([]byte, 8)
-	if _, err := rand.Read(nonce); err != nil {
+	marker, err := newMarker()
+	if err != nil {
 		return err
 	}
-	marker := probePrefix + hex.EncodeToString(nonce)
 	probe := *target
 	probe.untagged = true
 	sent := time.Now().Add(-time.Second)
 	if _, err := probe.QueryRange(ctx, `{sievelog_probe="`+marker+`"}`, sent.Add(-time.Minute), sent.Add(time.Minute), 1); err != nil {
 		return fmt.Errorf("sending marker query: %w", err)
 	}
-	deadline := time.Now().Add(timeout)
-	for {
-		entries, err := q.Logs.QueryRange(ctx, q.Selector+` |= "`+marker+`"`, sent.Add(-time.Minute), time.Now().Add(time.Minute), 100)
-		if err != nil {
-			return fmt.Errorf("reading query log: %w", err)
-		}
-		for _, e := range entries {
-			if m, err := logfmt.Parse(e.Line); err == nil && strings.HasPrefix(m["caller"], "metrics.go") && strings.Contains(m["query"], marker) {
-				return nil
-			}
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("marker query %s never appeared in the query log within %s: the query log is not enabled (frontend.log_queries_longer_than must be negative) or its logs are not collected by %s", marker, timeout, q.Selector)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
-	}
+	return q.waitFor(ctx, marker, timeout, func(m map[string]string) bool {
+		return strings.HasPrefix(m["caller"], "metrics.go") && strings.Contains(m["query"], marker)
+	}, "the query log is not enabled (frontend.log_queries_longer_than must be negative) or its logs are not collected by "+q.Selector)
 }
 
 // ErrNotServed means the target does not serve the endpoint at all, so nobody can use it.

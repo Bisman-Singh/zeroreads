@@ -5,6 +5,7 @@ package topology
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -32,13 +33,9 @@ type Pipeline struct {
 // Load merges configuration files the way the collector does for repeated --config flags: maps are
 // merged deeply, later files win, and lists are replaced, not appended.
 func Load(files ...[]byte) (*Config, error) {
-	merged := map[string]any{}
-	for i, f := range files {
-		var m map[string]any
-		if err := yaml.Unmarshal(f, &m); err != nil {
-			return nil, fmt.Errorf("topology: file %d: %w", i, err)
-		}
-		merged = mergeMaps(merged, m)
+	merged, err := MergeFiles("collector", files)
+	if err != nil {
+		return nil, err
 	}
 	c := &Config{
 		Receivers:  asMap(merged["receivers"]),
@@ -92,6 +89,20 @@ func (c *Config) check() error {
 		}
 	}
 	return nil
+}
+
+// MergeFiles merges YAML configuration files in order, later files winning, as the runtime does
+// with several configuration flags.
+func MergeFiles(runtime string, files [][]byte) (map[string]any, error) {
+	merged := map[string]any{}
+	for i, f := range files {
+		var m map[string]any
+		if err := yaml.Unmarshal(f, &m); err != nil {
+			return nil, fmt.Errorf("topology: %s file %d: %w", runtime, i, err)
+		}
+		merged = mergeMaps(merged, m)
+	}
+	return merged, nil
 }
 
 func mergeMaps(dst, src map[string]any) map[string]any {
@@ -177,7 +188,7 @@ func (c *Config) Downstream(pipeline string, after int) (Reach, error) {
 						if rcv != e {
 							continue
 						}
-						if q.Signal != pp.Signal && !contains(r.Derived, e) {
+						if q.Signal != pp.Signal && !slices.Contains(r.Derived, e) {
 							r.Derived = append(r.Derived, e)
 						}
 						walk(qid, here)
@@ -194,15 +205,6 @@ func (c *Config) Downstream(pipeline string, after int) (Reach, error) {
 	sort.Strings(r.Derived)
 	sort.Strings(r.Pipelines)
 	return r, nil
-}
-
-func contains(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }
 
 // SinkKind classifies an exporter by type.

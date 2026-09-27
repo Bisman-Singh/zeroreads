@@ -129,13 +129,9 @@ func Vector(files [][]byte, t VectorTarget, rules []Rule, mode Mode) ([]byte, er
 			return nil, fmt.Errorf("emit: vector component %s not found", t.After)
 		}
 	}
-	cfg := map[string]any{}
-	for i, f := range files {
-		var m map[string]any
-		if err := yaml.Unmarshal(f, &m); err != nil {
-			return nil, fmt.Errorf("emit: vector file %d: %w", i, err)
-		}
-		cfg = merge(cfg, m)
+	cfg, err := topology.MergeFiles("vector", files)
+	if err != nil {
+		return nil, err
 	}
 	transforms, sinks := child(cfg, "transforms"), child(cfg, "sinks")
 	for _, n := range []string{vTag, vMeasure, vMeasureAgg, vEnforce, vRoute, vReduce, vClean} {

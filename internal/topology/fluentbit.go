@@ -6,8 +6,6 @@ import (
 	"sort"
 	"strings"
 
-	"go.yaml.in/yaml/v3"
-
 	"github.com/Bisman-Singh/sievelog/internal/automaton"
 )
 
@@ -19,13 +17,9 @@ type FluentBitConfig struct {
 
 // LoadFluentBit merges Fluent Bit YAML files (later files win; lists are replaced).
 func LoadFluentBit(files ...[]byte) (*FluentBitConfig, error) {
-	merged := map[string]any{}
-	for i, f := range files {
-		var m map[string]any
-		if err := yaml.Unmarshal(f, &m); err != nil {
-			return nil, fmt.Errorf("topology: fluent bit file %d: %w", i, err)
-		}
-		merged = mergeMaps(merged, m)
+	merged, err := MergeFiles("fluent bit", files)
+	if err != nil {
+		return nil, err
 	}
 	p := asMap(merged["pipeline"])
 	c := &FluentBitConfig{}
@@ -58,21 +52,6 @@ func ID(m map[string]any, i int) string {
 	return fmt.Sprintf("%v#%d", m["name"], i)
 }
 
-// globRegex turns a Fluent Bit tag wildcard pattern into an anchored RE2 pattern.
-func globRegex(g string) string {
-	var b strings.Builder
-	b.WriteString(`\A`)
-	for _, r := range g {
-		if r == '*' {
-			b.WriteString(`.*`)
-			continue
-		}
-		b.WriteString(regexp.QuoteMeta(string(r)))
-	}
-	b.WriteString(`\z`)
-	return b.String()
-}
-
 // tagMatcher returns the plugin's tag language as an anchored RE2 pattern. ok is false when it cannot
 // be modelled, in which case callers must assume it matches every tag.
 func tagMatcher(m map[string]any) (string, bool) {
@@ -83,23 +62,13 @@ func tagMatcher(m map[string]any) (string, bool) {
 		return re, true
 	}
 	if g, ok := m["match"].(string); ok && g != "" {
-		return globRegex(g), true
+		return automaton.Glob(g), true
 	}
 	return "", true // no match: the plugin receives nothing
 }
 
-func intersects(a, b string) bool {
-	if b == "" {
-		return false
-	}
-	pa, err1 := automaton.Compile(a)
-	pb, err2 := automaton.Compile(b)
-	if err1 != nil || err2 != nil {
-		return true
-	}
-	_, found, err := automaton.Intersects(pa, pb, 0)
-	return err != nil || found
-}
+// intersects reports whether two tag languages can share a tag; "" is a plugin that receives none.
+func intersects(a, b string) bool { return b != "" && automaton.Overlap(a, b) }
 
 // FluentBitDownstream returns the outputs that can receive records tagged by match after the filter
 // aliased after, and the filters after that point that re-emit (rewrite_tag) or count
@@ -117,7 +86,7 @@ func (c *FluentBitConfig) FluentBitDownstream(match, after string) (outputs map[
 			return nil, nil, fmt.Errorf("topology: no filter with alias %s", after)
 		}
 	}
-	tags := globRegex(match)
+	tags := automaton.Glob(match)
 	for i, f := range c.Filters[start:] {
 		name, _ := f["name"].(string)
 		if !strings.EqualFold(name, "rewrite_tag") && !strings.EqualFold(name, "log_to_metrics") {
