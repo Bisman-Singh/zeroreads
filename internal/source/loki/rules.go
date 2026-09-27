@@ -19,12 +19,16 @@ type RuleQuery struct {
 	Expr      string
 }
 
+// noRuleGroups is the body of the ruler's 404 when it has no rules. Any other 404, such as a
+// gateway or query frontend that does not route the ruler API, means the rules are unknown.
+const noRuleGroups = "no rule groups found"
+
 // Rules lists every rule the Loki ruler evaluates, from GET /loki/api/v1/rules. A ruler with no
 // rules answers 404 with "no rule groups found", which is reported as an empty list.
 func (c *Client) Rules(ctx context.Context) ([]RuleQuery, error) {
 	body, err := c.get(ctx, "/loki/api/v1/rules", url.Values{})
 	var he *HTTPError
-	if errors.As(err, &he) && he.Status == 404 {
+	if errors.As(err, &he) && he.Status == 404 && he.Body == noRuleGroups {
 		return nil, nil
 	}
 	if err != nil {

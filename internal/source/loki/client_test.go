@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
@@ -313,5 +314,25 @@ func TestQueryLogFoldsLegsOfFrontendQueries(t *testing.T) {
 	}
 	if len(got) != 2 || got[full] != 2 || got[`sum(count_over_time({a="b"} |~ "y"[5m]))`] != 1 {
 		t.Fatalf("%v", got)
+	}
+}
+
+// Only the ruler's own "no rule groups found" means no rules. A 404 from anything that does not
+// route the ruler API (Loki 3.7.8 answers "404 page not found") leaves the rules unknown. Found by
+// the v1 audit: every 404 read as "no rules", so the ruler's alerts went unseen with no gap.
+func TestRulesOnlyTrustTheRulersOwn404(t *testing.T) {
+	for body, empty := range map[string]bool{"no rule groups found\n": true, "404 page not found\n": false, "": false} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, body)
+		}))
+		rules, err := (&Client{Base: srv.URL}).Rules(context.Background())
+		srv.Close()
+		if empty && (err != nil || len(rules) != 0) {
+			t.Fatalf("%q: %v %v, want no rules", body, rules, err)
+		}
+		if !empty && err == nil {
+			t.Fatalf("%q: read as no rules", body)
+		}
 	}
 }
