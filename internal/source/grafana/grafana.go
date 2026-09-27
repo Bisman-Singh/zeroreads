@@ -280,6 +280,9 @@ func (r *orgReader) resolve(ref any) (uids []string, inherit bool) {
 		if r.lokiByUID[uid] {
 			return []string{uid}, false
 		}
+		if id, ok := r.lokiByName[uid]; ok && (typ == "" || typ == "loki") {
+			return []string{id}, false // Grafana also looks a reference's uid up as a datasource name
+		}
 		if typ == "loki" {
 			return []string{AnyLoki}, false // a Loki datasource this org cannot see: may be any Loki
 		}

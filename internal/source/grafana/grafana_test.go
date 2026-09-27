@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -250,5 +251,25 @@ func TestOrgsListing(t *testing.T) {
 	orgs, gaps, err = c.orgs(context.Background())
 	if err != nil || len(gaps) != 0 || len(orgs) != orgsPerPage+1 || orgs[len(orgs)-1] != 5000 {
 		t.Fatalf("paging: %d orgs, %v %+v", len(orgs), err, gaps)
+	}
+}
+
+// A datasource reference's uid can hold the datasource's name. Found by the v1 audit: a map
+// reference {"uid": "<Loki name>"} resolved to nothing and its query was dropped.
+func TestResolveMapReferenceByName(t *testing.T) {
+	r := &orgReader{lokiByUID: map[string]bool{"l1": true}, lokiByName: map[string]string{"Loki": "l1"}}
+	for _, c := range []struct {
+		ref  map[string]any
+		want []string
+	}{
+		{map[string]any{"uid": "Loki"}, []string{"l1"}},
+		{map[string]any{"uid": "Loki", "type": "loki"}, []string{"l1"}},
+		{map[string]any{"uid": "l1"}, []string{"l1"}},
+		{map[string]any{"uid": "Loki", "type": "prometheus"}, nil},
+		{map[string]any{"uid": "Prometheus"}, nil},
+	} {
+		if got, _ := r.resolve(c.ref); !slices.Equal(got, c.want) {
+			t.Fatalf("%v: %v, want %v", c.ref, got, c.want)
+		}
 	}
 }
