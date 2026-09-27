@@ -6,6 +6,7 @@ package grafana
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -82,12 +83,23 @@ func (c *Client) do(ctx context.Context, org int64, path string, out any) error 
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("grafana: %s: HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+		return &HTTPError{Path: path, Status: resp.StatusCode, Body: strings.TrimSpace(string(body))}
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("grafana: %s: decode: %w", path, err)
 	}
 	return nil
+}
+
+// HTTPError is a non-200 answer from Grafana.
+type HTTPError struct {
+	Path   string
+	Status int
+	Body   string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("grafana: %s: HTTP %d: %s", e.Path, e.Status, e.Body)
 }
 
 // namespace is the Kubernetes-style namespace Grafana uses for an org.
@@ -101,11 +113,11 @@ func namespace(org int64) string {
 // Read collects every stored Loki query from every org the credentials can see.
 func (c *Client) Read(ctx context.Context) (Result, error) {
 	res := Result{LokiDatasources: map[int64]map[string]string{}}
-	orgs, err := c.orgs(ctx)
+	orgs, gaps, err := c.orgs(ctx)
 	if err != nil {
 		return res, err
 	}
-	res.Orgs = orgs
+	res.Orgs, res.Gaps = orgs, gaps
 	for _, org := range orgs {
 		r := &orgReader{c: c, org: org, res: &res}
 		if err := r.datasources(ctx); err != nil {
@@ -129,26 +141,51 @@ func (c *Client) Read(ctx context.Context) (Result, error) {
 	return res, nil
 }
 
-// orgs lists orgs visible to a server admin; a non-admin token sees only its own org.
-func (c *Client) orgs(ctx context.Context) ([]int64, error) {
-	var all []struct {
-		ID int64 `json:"id"`
-	}
-	if err := c.do(ctx, 0, "/api/orgs?perpage=1000", &all); err == nil && len(all) > 0 {
-		var out []int64
-		for _, o := range all {
+// orgsPerPage is the page size for listing orgs.
+const orgsPerPage = 1000
+
+// orgs lists every org. Only a server admin can list them: other credentials (every service account
+// token, which belongs to one org) are refused, read their own org only, and the other orgs stay
+// unknown, which is a gap.
+func (c *Client) orgs(ctx context.Context) ([]int64, []Gap, error) {
+	var out []int64
+	for page := 1; ; page++ {
+		var batch []struct {
+			ID int64 `json:"id"`
+		}
+		err := c.do(ctx, 0, fmt.Sprintf("/api/orgs?perpage=%d&page=%d", orgsPerPage, page), &batch)
+		var he *HTTPError
+		if page == 1 && errors.As(err, &he) && (he.Status == http.StatusUnauthorized || he.Status == http.StatusForbidden) {
+			return c.ownOrg(ctx, he)
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, o := range batch {
 			out = append(out, o.ID)
 		}
-		sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
-		return out, nil
+		if len(batch) < orgsPerPage {
+			break
+		}
 	}
+	if len(out) == 0 {
+		return nil, nil, fmt.Errorf("grafana: /api/orgs listed no org")
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out, nil, nil
+}
+
+// ownOrg reads the credentials' own org when they cannot list orgs, with a gap for the rest.
+func (c *Client) ownOrg(ctx context.Context, refused *HTTPError) ([]int64, []Gap, error) {
 	var cur struct {
 		ID int64 `json:"id"`
 	}
 	if err := c.do(ctx, 0, "/api/org", &cur); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return []int64{cur.ID}, nil
+	gap := Gap{Org: cur.ID, Origin: "orgs", Reason: fmt.Sprintf("these credentials cannot list organisations (HTTP %d), so only org %d was read; "+
+		"dashboards, alerts and links in any other org are unseen. Use a server admin's credentials, or acknowledge if this Grafana has one org", refused.Status, cur.ID)}
+	return []int64{cur.ID}, []Gap{gap}, nil
 }
 
 type orgReader struct {

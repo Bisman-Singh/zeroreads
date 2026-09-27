@@ -96,6 +96,7 @@ matter; write down why.
 | `grafana-unreadable` | a Grafana could not be read | check its URL and credentials; the token needs read access to every org |
 | `grafana-datasource-unmapped` | a Grafana Loki datasource is in neither `datasources` nor `other_datasources` | list it in `datasources` if it points at `loki.url`, otherwise in `other_datasources` |
 | `grafana-queryhistory` | only the credentials' own Explore history is readable | acknowledge, or accept that other users' history is invisible through the API |
+| `grafana-orgs` | only the credentials' own organisation was read | use a server admin's credentials, or acknowledge if this Grafana has one organisation |
 | `grafana-<kind>` | one kind of Grafana object could not be read | grant the credentials access to it |
 | `sink:<id>` | an exporter after the enforcement point has no evidence | map it under `collector.sinks` as `loki: true`, `opensearch: <name>`, or `exempt: <reason>` |
 | `derived:<id>` | a connector turns these logs into metrics | removing lines changes that metric; exempt it only if that is acceptable |

@@ -132,6 +132,7 @@ pricing:
 | `ruler-not-checked`, `ruler-unreadable` | Loki ruler rules were not read |
 | `grafana-not-configured`, `grafana-unreadable` | no Grafana, or it could not be read |
 | `grafana-queryhistory` | only the credentials' own Explore history is readable |
+| `grafana-orgs` | the credentials cannot list organisations (a service account token never can), so only their own org was read |
 | `grafana-<kind>` | a Grafana object of that kind could not be read |
 | `opensearch-unreadable` | the cluster, or its index catalog, could not be read |
 | `opensearch-audit-config-unreadable` | the audit configuration could not be read |
