@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"time"
 
@@ -118,8 +119,8 @@ type CollectorConfig struct {
 	DedupeInterval     string            `yaml:"dedupe_interval"`
 	Sinks              map[string]Sink   `yaml:"sinks"`
 	Derived            map[string]string `yaml:"derived_exempt"` // connector -> reason it may change
-	// SeverityKeys are the log attributes (and structured body fields) that carry a level; nil means
-	// the defaults. A record at warning or above is never removed, whatever the rules say.
+	// SeverityKeys are the log attributes (and structured body fields) that carry a level, in addition
+	// to the defaults. A record at warning or above is never removed, whatever the rules say.
 	SeverityKeys []string `yaml:"severity_keys"`
 }
 
@@ -135,7 +136,7 @@ type VectorConfig struct {
 	MeasureSink map[string]any    `yaml:"measure_sink"`
 	Sinks       map[string]Sink   `yaml:"sinks"`
 	Derived     map[string]string `yaml:"derived_exempt"`
-	// SeverityPaths are VRL paths of level fields; nil means the defaults.
+	// SeverityPaths are VRL paths of level fields, in addition to the defaults.
 	SeverityPaths []string `yaml:"severity_paths"`
 }
 
@@ -150,7 +151,7 @@ type FluentBitConfig struct {
 	MetricsTag  string              `yaml:"metrics_tag"`
 	Sinks       map[string]Sink     `yaml:"sinks"`
 	Derived     map[string]string   `yaml:"derived_exempt"`
-	// SeverityKeys are record paths of level fields; nil means the defaults.
+	// SeverityKeys are record paths of level fields, in addition to the defaults.
 	SeverityKeys [][]string `yaml:"severity_keys"`
 }
 
@@ -252,8 +253,11 @@ func (c *Config) defaults() {
 	if c.Scope.LokiLabel == "" {
 		c.Scope.LokiLabel = "service_name"
 	}
-	if c.Scope.SeverityKeys == nil {
-		c.Scope.SeverityKeys = []string{"level", "severity", "severity_text", "detected_level", "lvl", "loglevel", "log.level"}
+	// Configured level fields add to the defaults: an empty or partial list must never hide a level.
+	for _, k := range []string{"level", "severity", "severity_text", "detected_level", "lvl", "loglevel", "log.level"} {
+		if !slices.Contains(c.Scope.SeverityKeys, k) {
+			c.Scope.SeverityKeys = append(c.Scope.SeverityKeys, k)
+		}
 	}
 	if c.Discovery.Window.Duration == 0 {
 		c.Discovery.Window.Duration = 24 * time.Hour

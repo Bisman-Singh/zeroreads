@@ -37,12 +37,30 @@ type Target struct {
 	DedupeInterval string
 	// SeverityKeys are log attributes (and, for structured records, body fields) that carry a level
 	// such as "error". Records at warning or above there, or in severity_number or severity_text,
-	// never match a rule. Nil means DefaultSeverityKeys.
+	// never match a rule. They are checked in addition to the default level fields.
 	SeverityKeys []string
 }
 
-// DefaultSeverityKeys are the level fields checked when none are configured.
-var DefaultSeverityKeys = []string{"level", "severity", "lvl", "loglevel", "log.level"}
+// defaultSeverityKeys are the level fields always checked.
+func defaultSeverityKeys() []string {
+	return []string{"level", "severity", "lvl", "loglevel", "log.level"}
+}
+
+// withDefaults returns defaults followed by the configured entries not among them. Configured level
+// fields only ever add to the guard: an empty or partial list must never switch it off.
+func withDefaults[T any](defaults, configured []T, key func(T) string) []T {
+	seen := map[string]bool{}
+	var out []T
+	for _, x := range append(append([]T(nil), defaults...), configured...) {
+		if k := key(x); !seen[k] {
+			seen[k] = true
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+func sameString(s string) string { return s }
 
 // SeverePattern matches a level of warning or above, case-insensitively, in any common spelling
 // (warn, warning, error, err, fatal, critical, crit, alert, emerg, emergency, panic, severe).
@@ -51,9 +69,7 @@ const SeverePattern = `(?i)\A\s*(?:warn|err|fatal|crit|alert|emerg|panic|severe)
 // GuardedCondition is Condition plus the runtime severity guard: whatever analysis concluded, a
 // record at warning or above is never measured as removable and never removed.
 func (r Rule) GuardedCondition(keys []string) string {
-	if keys == nil {
-		keys = DefaultSeverityKeys
-	}
+	keys = withDefaults(defaultSeverityKeys(), keys, sameString)
 	g := []string{r.Condition(), "log.severity_number < SEVERITY_NUMBER_WARN", "not IsMatch(log.severity_text, " + ottlString(SeverePattern) + ")"}
 	for _, k := range keys {
 		g = append(g, "not IsMatch(log.attributes["+ottlString(k)+"], "+ottlString(SeverePattern)+")")

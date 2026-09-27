@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -116,5 +117,16 @@ func TestCredentials(t *testing.T) {
 	}
 	if _, err := (OpenSearchConfig{Name: "os", URL: "https://o", PasswordEnv: "SIEVELOG_TEST_UNSET"}).client(); err == nil {
 		t.Fatal("unset OpenSearch password accepted")
+	}
+}
+
+func TestScopeSeverityKeysKeepDefaults(t *testing.T) {
+	cfg, err := LoadConfig(write(t, "loki: {url: http://l}\nscope: {severity_keys: []}\ncollector: {config_files: [c.yaml], pipeline: logs}\n"))
+	if err != nil || !slices.Contains(cfg.Scope.SeverityKeys, "level") || !slices.Contains(cfg.Scope.SeverityKeys, "detected_level") {
+		t.Fatalf("%v %v", err, cfg.Scope.SeverityKeys)
+	}
+	cfg, err = LoadConfig(write(t, "loki: {url: http://l}\nscope: {severity_keys: [sev]}\ncollector: {config_files: [c.yaml], pipeline: logs}\n"))
+	if err != nil || !slices.Contains(cfg.Scope.SeverityKeys, "sev") || !slices.Contains(cfg.Scope.SeverityKeys, "level") {
+		t.Fatalf("%v %v", err, cfg.Scope.SeverityKeys)
 	}
 }

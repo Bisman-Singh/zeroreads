@@ -2,7 +2,9 @@ package emit
 
 import (
 	"fmt"
+	"maps"
 	"math/big"
+	"slices"
 	"sort"
 	"strings"
 
@@ -19,8 +21,8 @@ type VectorTarget struct {
 	TextPath   string            // VRL path of the templated text for plain logs, e.g. .message
 	FieldPaths map[string]string // service -> VRL path of the templated field for structured logs
 	// SeverityPaths are VRL paths of level fields; an event at warning or above in any of them, or
-	// with severity_number >= 13 (OTLP WARN), never matches a rule. Nil means the defaults: the
-	// DefaultSeverityKeys at the top level and beside every structured field.
+	// with severity_number >= 13 (OTLP WARN), never matches a rule. They are checked in addition to
+	// the default level fields at the top level and beside every structured field.
 	SeverityPaths []string
 	GroupBy       []string // extra reduce keys for dedupe, e.g. kubernetes.pod_name
 	// MeasureSink is a complete sink definition (type and options) that receives the per-rule metrics.
@@ -72,33 +74,19 @@ func vrlString(s string) string {
 }
 
 func (t VectorTarget) severityPaths() []string {
-	if t.SeverityPaths != nil {
-		return t.SeverityPaths
-	}
-	var out []string
-	seen := map[string]bool{}
-	add := func(parent string) {
-		for _, k := range DefaultSeverityKeys {
-			p := parent + "." + vrlField(k)
-			if !seen[p] {
-				seen[p] = true
-				out = append(out, p)
-			}
+	parents := []string{""}
+	for _, svc := range slices.Sorted(maps.Keys(t.FieldPaths)) {
+		if fp := t.FieldPaths[svc]; strings.LastIndex(fp, ".") > 0 {
+			parents = append(parents, fp[:strings.LastIndex(fp, ".")])
 		}
 	}
-	add("")
-	var svcs []string
-	for svc := range t.FieldPaths {
-		svcs = append(svcs, svc)
-	}
-	sort.Strings(svcs)
-	for _, svc := range svcs {
-		fp := t.FieldPaths[svc]
-		if i := strings.LastIndex(fp, "."); i > 0 {
-			add(fp[:i])
+	var defaults []string
+	for _, parent := range parents {
+		for _, k := range defaultSeverityKeys() {
+			defaults = append(defaults, parent+"."+vrlField(k))
 		}
 	}
-	return out
+	return withDefaults(defaults, t.SeverityPaths, sameString)
 }
 
 // vrlField quotes a field name for a VRL path when it is not a plain identifier.

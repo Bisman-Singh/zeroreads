@@ -2,7 +2,9 @@ package emit
 
 import (
 	"fmt"
+	"maps"
 	"math/big"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,38 +23,25 @@ type FluentBitTarget struct {
 	FieldKeys  map[string][]string // service -> path of the templated field of structured records
 	MetricsTag string              // tag of the measurement metrics; outputs matching it receive them
 	// SeverityKeys are record paths of level fields; a record at warning or above in any of them
-	// never matches a rule. Nil means DefaultSeverityKeys at the top level and beside every
-	// structured field.
+	// never matches a rule. They are checked in addition to the default level fields at the top level
+	// and beside every structured field.
 	SeverityKeys [][]string
 }
 
 func (t FluentBitTarget) severityKeys() [][]string {
-	if t.SeverityKeys != nil {
-		return t.SeverityKeys
-	}
-	var out [][]string
-	seen := map[string]bool{}
-	add := func(parent []string) {
-		for _, k := range DefaultSeverityKeys {
-			p := append(append([]string(nil), parent...), k)
-			if key := strings.Join(p, "\x00"); !seen[key] {
-				seen[key] = true
-				out = append(out, p)
-			}
-		}
-	}
-	add(nil)
-	var svcs []string
-	for svc := range t.FieldKeys {
-		svcs = append(svcs, svc)
-	}
-	sort.Strings(svcs)
-	for _, svc := range svcs {
+	parents := [][]string{nil}
+	for _, svc := range slices.Sorted(maps.Keys(t.FieldKeys)) {
 		if fk := t.FieldKeys[svc]; len(fk) > 1 {
-			add(fk[:len(fk)-1])
+			parents = append(parents, fk[:len(fk)-1])
 		}
 	}
-	return out
+	var defaults [][]string
+	for _, parent := range parents {
+		for _, k := range defaultSeverityKeys() {
+			defaults = append(defaults, append(append([]string(nil), parent...), k))
+		}
+	}
+	return withDefaults(defaults, t.SeverityKeys, func(p []string) string { return strings.Join(p, "\x00") })
 }
 
 // FluentBitSampleThreshold is the integer below which the first 13 hex digits of the SHA-256 of a

@@ -20,9 +20,10 @@ scope:
   services: []                   # empty: every value of the label
   structured:                    # services whose records reach the pipeline as maps,
     orders: msg                  #   and the field their templates are built from
-  severity_keys: [level, severity, severity_text, detected_level, lvl, loglevel, log.level]
-                                 # where a sampled line's level is read (Loki labels and structured
-                                 # metadata, and record fields); warning or above blocks the rule
+  severity_keys: []              # where a sampled line's level is read (Loki labels and structured
+                                 # metadata, and record fields), in addition to level, severity,
+                                 # severity_text, detected_level, lvl, loglevel and log.level;
+                                 # warning or above blocks the rule
 
 discovery:
   window: 24h                    # sample and measure over this window
@@ -74,8 +75,8 @@ collector:
   measure_exporters: [prometheus] # receive the per-rule measurement metrics
   aggregate_exporters: [prometheus] # receive the counters that replace aggregated lines
   dedupe_interval: 10s
-  severity_keys: [level, severity, lvl, loglevel, log.level]
-                                 # log attributes (and structured body fields) holding a level; a record
+  severity_keys: []              # log attributes (and structured body fields) holding a level, in
+                                 # addition to level, severity, lvl, loglevel and log.level; a record
                                  # at warning or above there, or by severity_number/severity_text, is
                                  # never measured as removable and never removed
   sinks:                         # every exporter downstream of the enforcement point
@@ -93,8 +94,8 @@ vector:
   dedupe_group_by: [kubernetes.pod_name]
   dedupe_ms: 10000
   measure_sink: {type: prometheus_exporter, address: "0.0.0.0:9598"}
-  severity_paths: []             # VRL paths of level fields; empty: the defaults at the top level and
-                                 # beside every structured field, plus severity_number >= 13
+  severity_paths: []             # VRL paths of level fields, checked in addition to the defaults at
+                                 # the top level and beside every structured field, and severity_number
   sinks: {loki: {loki: true}}
   derived_exempt: {}
 
@@ -106,8 +107,8 @@ fluentbit:
   text_key: [log]
   field_keys: {orders: [body, msg]}
   metrics_tag: sievelog.metrics  # outputs matching this tag receive the measurement metrics
-  severity_keys: []              # record paths of level fields, e.g. [[level], [body, level]]; empty:
-                                 # the defaults at the top level and beside every structured field
+  severity_keys: []              # record paths of level fields, e.g. [[custom]], checked in addition
+                                 # to the defaults at the top level and beside every structured field
   sinks: {loki: {loki: true}}
   derived_exempt: {}
 

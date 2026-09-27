@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"math/rand/v2"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -826,5 +827,35 @@ func TestCheckRules(t *testing.T) {
 	sample := with(func(r *Rule) { r.Action, r.Keep = "sample", 100 })
 	if err := CheckRules(sample); err == nil {
 		t.Fatal("keep 100 accepted")
+	}
+}
+
+// Configured level fields add to the defaults. Found by the v1 audit: the documented
+// "severity_paths: []" decodes as an empty list, not nil, and turned the level-field guard off.
+func TestSeverityGuardKeepsDefaults(t *testing.T) {
+	r := Rule{ID: "r-x", ScopeAttr: "service.name", ScopeValue: "a", Language: `\Ax\z`, Field: "msg"}
+	for _, configured := range [][]string{nil, {}, {"custom"}} {
+		cond := r.GuardedCondition(configured)
+		for _, k := range append(defaultSeverityKeys(), configured...) {
+			if !strings.Contains(cond, `log.attributes["`+k+`"]`) || !strings.Contains(cond, `log.body["`+k+`"]`) {
+				t.Fatalf("configured %v: %s is not guarded:\n%s", configured, k, cond)
+			}
+		}
+	}
+	for _, configured := range [][]string{nil, {}, {".custom"}} {
+		paths := VectorTarget{FieldPaths: map[string]string{"orders": ".body.msg"}, SeverityPaths: configured}.severityPaths()
+		for _, want := range append([]string{".level", ".body.level", ".\"log.level\""}, configured...) {
+			if !slices.Contains(paths, want) {
+				t.Fatalf("vector, configured %v: %s missing from %v", configured, want, paths)
+			}
+		}
+	}
+	for _, configured := range [][][]string{nil, {}, {{"custom"}}} {
+		keys := FluentBitTarget{FieldKeys: map[string][]string{"orders": {"body", "msg"}}, SeverityKeys: configured}.severityKeys()
+		for _, want := range append([][]string{{"level"}, {"body", "level"}}, configured...) {
+			if !slices.ContainsFunc(keys, func(k []string) bool { return slices.Equal(k, want) }) {
+				t.Fatalf("fluent bit, configured %v: %v missing from %v", configured, want, keys)
+			}
+		}
 	}
 }

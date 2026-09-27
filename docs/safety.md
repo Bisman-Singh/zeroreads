@@ -78,8 +78,9 @@ fields named in `scope.severity_keys`), gets no action. And every emitted rule c
 whatever the analysis saw: a record whose `severity_number` is WARN or above, whose `severity_text`
 says warning or worse, or whose configured level field does, never matches a rule, so it is neither
 measured as removable nor removed. The Collector checks `severity_number`, `severity_text`, log
-attributes and structured body fields; Vector checks the configured paths and `severity_number`;
-Fluent Bit checks the configured record keys. Each is tested against the real engine.
+attributes and structured body fields; Vector checks level paths and `severity_number`; Fluent Bit
+checks level record keys. The default level fields are always checked: configured ones are added to
+them, so no configuration can switch the guard off. Each is tested against the real engine.
 
 **Measure before removing.** Shadow mode adds only measurement: per rule, the lines (and, where the
 runtime can count them, bytes) that enforcement would remove. In the Collector, measurement runs after
