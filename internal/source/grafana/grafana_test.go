@@ -174,12 +174,21 @@ func TestReadEveryStoredQuery(t *testing.T) {
 		gaps[g.Origin] = g.Reason
 	}
 	for origin, part := range map[string]string{
-		"dashboard:d1/panel:9": "lib-missing", "dashboard:v2only/lib": "lib-gone", "dashboard:v2only/odd": "unknown element",
-		"dashboard:broken": "conversion failed", "shorturl:s4": "without readable queries", "queryhistory": "only the history",
-		"datasources": "forbidden",
+		"dashboard:v2only/odd": "unknown element", "dashboard:broken": "conversion failed", "shorturl:s4": "without readable queries",
+		"queryhistory": "only the history", "datasources": "forbidden",
 	} {
 		if !strings.Contains(gaps[origin], part) {
 			t.Fatalf("gap %s: %q, want it to mention %q\nall: %v", origin, gaps[origin], part, gaps)
+		}
+	}
+	// A panel whose library panel does not exist reads nothing: a note, never a gap.
+	notes := map[string]string{}
+	for _, n := range res.Notes {
+		notes[n.Origin] = n.Reason
+	}
+	for origin, part := range map[string]string{"dashboard:d1/panel:9": "lib-missing", "dashboard:v2only/lib": "lib-gone"} {
+		if !strings.Contains(notes[origin], part) || gaps[origin] != "" {
+			t.Fatalf("%s: note %q, gap %q", origin, notes[origin], gaps[origin])
 		}
 	}
 	if res.LokiDatasources[1]["loki"] != "http://loki:3100" || len(res.Orgs) != 2 || res.Orgs[0] != 1 {

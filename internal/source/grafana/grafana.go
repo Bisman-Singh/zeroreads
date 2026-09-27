@@ -50,6 +50,8 @@ type Gap struct {
 type Result struct {
 	Queries []Query
 	Gaps    []Gap
+	// Notes are findings that hide no reader, such as a panel whose library panel does not exist.
+	Notes []Gap
 	Orgs    []int64
 	// LokiDatasources maps Loki datasource UID to its URL, per org.
 	LokiDatasources map[int64]map[string]string
@@ -217,6 +219,10 @@ type orgReader struct {
 
 func (r *orgReader) gap(origin, format string, a ...any) {
 	r.res.Gaps = append(r.res.Gaps, Gap{Org: r.org, Origin: origin, Reason: fmt.Sprintf(format, a...)})
+}
+
+func (r *orgReader) note(origin, format string, a ...any) {
+	r.res.Notes = append(r.res.Notes, Gap{Org: r.org, Origin: origin, Reason: fmt.Sprintf(format, a...)})
 }
 
 func (r *orgReader) add(origin string, ds []string, expr string, hidden bool) {

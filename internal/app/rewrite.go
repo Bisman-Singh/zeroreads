@@ -193,11 +193,15 @@ func (c *Config) grafanaDo(ctx context.Context, base string, org int64, method, 
 	for i := 0; i+1 < len(headers); i += 2 {
 		req.Header.Set(headers[i], headers[i+1])
 	}
+	gc, err := g.client()
+	if err != nil {
+		return err
+	}
 	switch {
-	case g.TokenEnv != "":
-		req.Header.Set("Authorization", "Bearer "+os.Getenv(g.TokenEnv))
-	case g.Username != "":
-		req.SetBasicAuth(g.Username, os.Getenv(g.PasswordEnv))
+	case gc.Token != "":
+		req.Header.Set("Authorization", "Bearer "+gc.Token)
+	case gc.Username != "":
+		req.SetBasicAuth(gc.Username, gc.Password)
 	}
 	resp, err := (&http.Client{Timeout: 60 * time.Second}).Do(req)
 	if err != nil {
@@ -288,7 +292,10 @@ func (c *Config) rewriteGrafana(ctx context.Context, base string, org int64, pat
 func (c *Config) rewriteRuler(ctx context.Context, path string, edits map[string]string, file string, apply bool) (RewriteOutcome, error) {
 	res := RewriteOutcome{File: file}
 	ns, group, _ := strings.Cut(path, "/")
-	lc := c.lokiClient(c.Loki.URL)
+	lc, err := c.lokiClient()
+	if err != nil {
+		return res, err
+	}
 	raw, err := lc.RuleNamespace(ctx, ns)
 	if err != nil {
 		return res, err

@@ -32,10 +32,11 @@ type OpenSearchConfig struct {
 }
 
 func (o OpenSearchConfig) client() (*opensearch.Client, error) {
-	c := &opensearch.Client{Base: o.URL, Username: o.Username, InsecureSkipVerify: o.InsecureSkipVerify}
-	if o.PasswordEnv != "" {
-		c.Password = os.Getenv(o.PasswordEnv)
+	password, err := secret("evidence.opensearch."+o.Name+".password_env", o.PasswordEnv)
+	if err != nil {
+		return nil, err
 	}
+	c := &opensearch.Client{Base: o.URL, Username: o.Username, Password: password, InsecureSkipVerify: o.InsecureSkipVerify}
 	if o.CAFile != "" {
 		pem, err := os.ReadFile(o.CAFile)
 		if err != nil {

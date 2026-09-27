@@ -49,7 +49,10 @@ type Reconciliation struct {
 // enforcement. Drop and aggregate rules must store nothing afterwards; a sample rule's stored share
 // must be within tolerance of its keep percentage; dedupe must store fewer records than lines seen.
 func Reconcile(ctx context.Context, c *Config, rf *RulesFile, before, after Window, tolerance float64) (*Reconciliation, error) {
-	lc := c.lokiClient(c.Loki.URL)
+	lc, err := c.lokiClient()
+	if err != nil {
+		return nil, err
+	}
 	res := &Reconciliation{Before: before, After: after, OK: true}
 	measure := func(fn, svc, field, lang string, w Window) (float64, error) {
 		sel := c.selector(svc)

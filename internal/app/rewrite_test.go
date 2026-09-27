@@ -186,7 +186,11 @@ func TestKeepStreams(t *testing.T) {
 		{ID: "ok", Action: "sample", Candidate: cand(`\Aother\z`), RemovedBytesPerDay: 5},
 		{ID: "dd", Action: "dedupe", Candidate: cand(`\Aheartbeat\z`)},
 	}
-	if err := c.keepStreams(context.Background(), c.lokiClient(srv.URL), recs, time.Now().Add(-time.Hour), time.Now()); err != nil {
+	lc, err := c.lokiClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.keepStreams(context.Background(), lc, recs, time.Now().Add(-time.Hour), time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if recs[0].Action != "none" || !strings.Contains(strings.Join(recs[0].Blockers, ";"), "disappear") || recs[0].RemovedBytesPerDay != 0 {
@@ -250,10 +254,7 @@ func TestGrafanaDatasourcesFailClosed(t *testing.T) {
 	defer srv.Close()
 	c := &Config{Loki: LokiConfig{URL: "http://analysed"}, Evidence: EvidenceConfig{
 		Grafana: []GrafanaConfig{{URL: srv.URL, Datasources: []string{"listed"}, OtherDatasources: []string{"other"}}}}}
-	qs, _, gaps, err := c.evidence(context.Background(), time.Now(), nil, &Report{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	qs, _, gaps := c.evidence(context.Background(), time.Now(), nil, &Report{})
 	got := map[string]bool{}
 	for _, q := range qs {
 		got[q.Expr] = true

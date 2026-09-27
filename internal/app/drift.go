@@ -86,7 +86,10 @@ type RuleDrift struct {
 // cover. Such lines pass through untouched, so drift never makes a rule unsafe; it means the rule
 // removes less than it did and the template needs re-analysis.
 func (c *Config) Drift(ctx context.Context, rf *RulesFile, now time.Time) ([]RuleDrift, error) {
-	lc := c.lokiClient(c.Loki.URL)
+	lc, err := c.lokiClient()
+	if err != nil {
+		return nil, err
+	}
 	w := c.Discovery.Window.Duration
 	start := now.Add(-w)
 	rng := "[" + strconv.FormatInt(int64(w/time.Second), 10) + "s]"

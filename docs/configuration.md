@@ -1,6 +1,10 @@
 # Configuration
 
-`sievelog.yaml` configures one analysis. Unknown keys are rejected.
+`sievelog.yaml` configures one analysis. Unknown keys are rejected. Credentials never go in a URL
+(URLs appear in reports and verify output): name an environment variable in a `*_env` setting, and
+set it; a named variable that is empty is an error. Values that sievelog writes into queries and
+pipeline programs are checked: label and field names are plain names, Vector paths are VRL paths
+and Fluent Bit keys are plain record keys.
 
 ```yaml
 loki:
@@ -38,6 +42,10 @@ evidence:
     url: ""                      # a Loki that stores Loki's own logs (default: loki.url)
     selector: '{service_name="loki"}'
     prove_live: true             # send a marker query and wait until it shows up
+    org_id: ""                   # credentials for url, as under loki; when url is loki.url, loki's
+    username: ""                 # are the default, and another Loki never receives them
+    password_env: ""
+    bearer_token_env: ""
   ruler: true
   grafana:
     - url: http://grafana:3000
@@ -87,8 +95,6 @@ vector:
   measure_sink: {type: prometheus_exporter, address: "0.0.0.0:9598"}
   severity_paths: []             # VRL paths of level fields; empty: the defaults at the top level and
                                  # beside every structured field, plus severity_number >= 13
-  severity_keys: []              # record paths of level fields, e.g. [[level], [body, level]]; empty:
-                                 # the defaults at the top level and beside every structured field
   sinks: {loki: {loki: true}}
   derived_exempt: {}
 
@@ -100,6 +106,8 @@ fluentbit:
   text_key: [log]
   field_keys: {orders: [body, msg]}
   metrics_tag: sievelog.metrics  # outputs matching this tag receive the measurement metrics
+  severity_keys: []              # record paths of level fields, e.g. [[level], [body, level]]; empty:
+                                 # the defaults at the top level and beside every structured field
   sinks: {loki: {loki: true}}
   derived_exempt: {}
 

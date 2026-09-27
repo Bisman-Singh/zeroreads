@@ -1,11 +1,13 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -59,18 +61,37 @@ type EvidenceSummary struct {
 	Sinks                []string `json:"sinks"`
 }
 
-func (c *Config) lokiClient(url string) *loki.Client {
-	cl := &loki.Client{Base: url, OrgID: c.Loki.OrgID, Username: c.Loki.Username}
-	if c.Loki.PasswordEnv != "" {
-		cl.Password = os.Getenv(c.Loki.PasswordEnv)
-	}
-	if c.Loki.BearerTokenEnv != "" {
-		cl.BearerToken = os.Getenv(c.Loki.BearerTokenEnv)
-	}
-	return cl
+// lokiClient is the client for the analysed Loki.
+func (c *Config) lokiClient() (*loki.Client, error) {
+	return lokiClient(c.Loki.URL, c.Loki.OrgID, c.Loki.Username, "loki", c.Loki.PasswordEnv, c.Loki.BearerTokenEnv)
 }
 
-// logqlString quotes s for LogQL: a raw string when possible, otherwise a Go-quoted string.
+// queryLogClient is the client for the Loki holding Loki's own logs. It gets loki's credentials only
+// when it is that same Loki; settings under evidence.query_log override them.
+func (c *Config) queryLogClient() (*loki.Client, error) {
+	q := c.Evidence.QueryLog
+	org, user, passEnv, tokenEnv := q.OrgID, q.Username, q.PasswordEnv, q.BearerTokenEnv
+	if strings.TrimRight(q.URL, "/") == strings.TrimRight(c.Loki.URL, "/") {
+		org = cmp.Or(org, c.Loki.OrgID)
+		if user == "" && tokenEnv == "" {
+			user, passEnv, tokenEnv = c.Loki.Username, c.Loki.PasswordEnv, c.Loki.BearerTokenEnv
+		}
+	}
+	return lokiClient(q.URL, org, user, "evidence.query_log", passEnv, tokenEnv)
+}
+
+func lokiClient(url, org, user, setting, passwordEnv, tokenEnv string) (*loki.Client, error) {
+	password, err := secret(setting+".password_env", passwordEnv)
+	if err != nil {
+		return nil, err
+	}
+	token, err := secret(setting+".bearer_token_env", tokenEnv)
+	if err != nil {
+		return nil, err
+	}
+	return &loki.Client{Base: url, OrgID: org, Username: user, Password: password, BearerToken: token}, nil
+}
+
 func logqlString(s string) string {
 	if !strings.Contains(s, "`") {
 		return "`" + s + "`"
@@ -98,7 +119,10 @@ func Analyze(ctx context.Context, c *Config, now time.Time) (*Report, error) {
 	if v, err := templating.DrainVersion(); err == nil {
 		rep.DrainVersion = v
 	}
-	lc := c.lokiClient(c.Loki.URL)
+	lc, err := c.lokiClient()
+	if err != nil {
+		return nil, err
+	}
 	start := now.Add(-c.Discovery.Window.Duration)
 
 	services := c.Scope.Services
@@ -122,7 +146,7 @@ func Analyze(ctx context.Context, c *Config, now time.Time) (*Report, error) {
 		rep.Notes = append(rep.Notes, notes...)
 	}
 
-	queries, scoped, gaps, err := c.evidence(ctx, now, services, rep)
+	queries, scoped, gaps := c.evidence(ctx, now, services, rep)
 	if err != nil {
 		return nil, err
 	}
@@ -505,157 +529,209 @@ func (c *Config) keepStreams(ctx context.Context, lc *loki.Client, recs []analyz
 }
 
 // evidence reads every usage source. Anything that cannot be read becomes a gap with a stable key.
-func (c *Config) evidence(ctx context.Context, now time.Time, services []string, rep *Report) ([]analyze.UsageQuery, []analyze.ScopedReader, []analyze.Gap, error) {
+func (c *Config) evidence(ctx context.Context, now time.Time, services []string, rep *Report) ([]analyze.UsageQuery, []analyze.ScopedReader, []analyze.Gap) {
+	from := now.Add(-c.Evidence.Window.Duration)
 	var qs []analyze.UsageQuery
 	var gaps []analyze.Gap
-	from := now.Add(-c.Evidence.Window.Duration)
-
-	if !c.Evidence.QueryLog.Enabled {
-		gaps = append(gaps, analyze.Gap{Source: "loki", Origin: "query-log", Key: "querylog-disabled", Reason: "the Loki query log is not read, so executed queries are unknown"})
-	} else {
-		ql := &loki.QueryLog{Logs: c.lokiClient(c.Evidence.QueryLog.URL), Selector: c.Evidence.QueryLog.Selector}
-		rep.Evidence.QueryLogLive = "not checked"
-		if c.Evidence.QueryLog.ProveLive {
-			if err := ql.ProveLive(ctx, c.lokiClient(c.Loki.URL), 2*time.Minute); err != nil {
-				rep.Evidence.QueryLogLive = err.Error()
-				gaps = append(gaps, analyze.Gap{Source: "loki", Origin: "query-log", Key: "querylog-not-live", Reason: err.Error()})
-			} else {
-				rep.Evidence.QueryLogLive = "proven with a marker query"
-			}
-			// Live tails and pattern requests (Logs Drilldown) are logged by other lines, under other
-			// settings: each is proven separately. An endpoint the target does not serve has no users.
-			target := c.lokiClient(c.Loki.URL)
-			for _, p := range []struct {
-				key   string
-				prove func(context.Context, *loki.Client, time.Duration) error
-				what  string
-			}{
-				{"querylog-tail-not-visible", ql.ProveTail, "live tails"},
-				{"querylog-patterns-not-visible", ql.ProvePatterns, "pattern requests"},
-			} {
-				switch err := p.prove(ctx, target, 2*time.Minute); {
-				case errors.Is(err, loki.ErrNotServed):
-					rep.Notes = append(rep.Notes, "Loki does not serve "+p.what+", so none can read the lines")
-				case err != nil:
-					gaps = append(gaps, analyze.Gap{Source: "loki", Origin: "query-log", Key: p.key, Reason: err.Error()})
-				}
-			}
-		} else {
-			gaps = append(gaps, analyze.Gap{Source: "loki", Origin: "query-log", Key: "querylog-not-proven",
-				Reason: "evidence.query_log.prove_live is off, so it is not proven that queries, live tails and pattern requests are logged"})
-		}
-		res, err := ql.Read(ctx, from, now)
-		if err != nil {
-			gaps = append(gaps, analyze.Gap{Source: "loki", Origin: "query-log", Key: "querylog-unreadable", Reason: err.Error()})
-		} else {
-			rep.Evidence.QueryLogQueries = len(res.Queries)
-			rep.Evidence.QueryLogLines = res.Lines
-			rep.Evidence.QueryLogOldest = res.Oldest
-			if res.Unparsed > 0 {
-				gaps = append(gaps, analyze.Gap{Source: "loki", Origin: "query-log", Key: "querylog-unparsed", Reason: fmt.Sprintf("%d query-log lines did not parse", res.Unparsed)})
-			}
-			tol := c.Evidence.Window.Duration / 100
-			if tol < time.Minute {
-				tol = time.Minute
-			}
-			if tol > time.Hour {
-				tol = time.Hour
-			}
-			if res.Oldest.IsZero() || res.Oldest.After(from.Add(tol)) {
-				gaps = append(gaps, analyze.Gap{Source: "loki", Origin: "query-log", Key: "querylog-window",
-					Reason: fmt.Sprintf("the query log starts at %s, after the evidence window start %s", res.Oldest.UTC().Format(time.RFC3339), from.UTC().Format(time.RFC3339))})
-			}
-			for _, q := range res.Queries {
-				qs = append(qs, analyze.UsageQuery{Source: "loki-querylog", Origin: "query-log (" + q.Component + ")", Expr: q.Query, Count: q.Count, Last: q.Last})
-			}
-		}
-	}
-
-	if !c.Evidence.Ruler {
-		gaps = append(gaps, analyze.Gap{Source: "loki", Origin: "ruler", Key: "ruler-not-checked", Reason: "Loki ruler rules are not read"})
-	} else {
-		rules, err := c.lokiClient(c.Loki.URL).Rules(ctx)
-		if err != nil {
-			gaps = append(gaps, analyze.Gap{Source: "loki", Origin: "ruler", Key: "ruler-unreadable", Reason: err.Error()})
-		}
-		rep.Evidence.RulerRules = len(rules)
-		for _, r := range rules {
-			qs = append(qs, analyze.UsageQuery{Source: "loki-ruler", Origin: fmt.Sprintf("%s/%s/%s (%s)", r.Namespace, r.Group, r.Name, r.Kind), Expr: r.Expr,
-				Store: "loki-ruler", StoreURL: c.Loki.URL, Path: r.Namespace + "/" + r.Group + "/" + r.Name})
-		}
-	}
-
-	if len(c.Evidence.Grafana) == 0 {
-		gaps = append(gaps, analyze.Gap{Source: "grafana", Origin: "config", Key: "grafana-not-configured", Reason: "no Grafana is configured; dashboards, alerts and saved links elsewhere are unknown"})
-	}
-	for _, g := range c.Evidence.Grafana {
-		gc := &grafana.Client{Base: g.URL, Username: g.Username}
-		if g.PasswordEnv != "" {
-			gc.Password = os.Getenv(g.PasswordEnv)
-		}
-		if g.TokenEnv != "" {
-			gc.Token = os.Getenv(g.TokenEnv)
-		}
-		res, err := gc.Read(ctx)
-		if err != nil {
-			gaps = append(gaps, analyze.Gap{Source: "grafana", Origin: g.URL, Key: "grafana-unreadable", Reason: err.Error()})
-			continue
-		}
-		// A query counts when its datasource is the analysed Loki: listed, or pointing at exactly
-		// loki.url. A Loki datasource that is neither listed nor declared other counts too, and is a
-		// gap until the config says which Loki it is: a forgotten entry must never hide readers.
-		want := map[string]bool{grafana.AnyLoki: true}
-		for _, d := range g.Datasources {
-			want[d] = true
-		}
-		other := map[string]bool{}
-		for _, d := range g.OtherDatasources {
-			other[d] = true
-		}
-		var unmapped []string
-		for org, dss := range res.LokiDatasources {
-			for uid, u := range dss {
-				switch {
-				case want[uid] || other[uid]:
-				case strings.TrimRight(u, "/") == strings.TrimRight(c.Loki.URL, "/"):
-					want[uid] = true
-				default:
-					want[uid] = true
-					unmapped = append(unmapped, fmt.Sprintf("%s (org %d, %s)", uid, org, u))
-				}
-			}
-		}
-		if len(unmapped) > 0 {
-			sort.Strings(unmapped)
-			gaps = append(gaps, analyze.Gap{Source: "grafana", Origin: g.URL, Key: "grafana-datasource-unmapped",
-				Reason: "these Loki datasources are in neither datasources nor other_datasources, so their queries count as reading the analysed Loki: " + strings.Join(unmapped, ", ")})
-		}
-		for _, q := range res.Queries {
-			hit := false
-			for _, d := range q.Datasources {
-				if want[d] {
-					hit = true
-				}
-			}
-			if !hit {
-				continue // runs against a different Loki
-			}
-			rep.Evidence.GrafanaQueries++
-			qs = append(qs, analyze.UsageQuery{Source: "grafana", Origin: fmt.Sprintf("%s org %d %s", g.URL, q.Org, q.Origin), Expr: q.Expr,
-				Store: "grafana", StoreURL: g.URL, Org: q.Org, Path: q.Origin})
-		}
-		for _, gp := range res.Gaps {
-			if strings.Contains(gp.Reason, "library panel") && strings.Contains(gp.Reason, "does not exist") {
-				rep.Notes = append(rep.Notes, fmt.Sprintf("grafana org %d %s: %s (it reads nothing)", gp.Org, gp.Origin, gp.Reason))
-				continue
-			}
-			key := "grafana-" + strings.SplitN(strings.SplitN(gp.Origin, ":", 2)[0], "/", 2)[0]
-			gaps = append(gaps, analyze.Gap{Source: "grafana", Origin: fmt.Sprintf("org %d %s", gp.Org, gp.Origin), Key: key, Reason: gp.Reason})
-		}
+	for _, source := range []func() ([]analyze.UsageQuery, []analyze.Gap){
+		func() ([]analyze.UsageQuery, []analyze.Gap) { return c.queryLogEvidence(ctx, from, now, rep) },
+		func() ([]analyze.UsageQuery, []analyze.Gap) { return c.rulerEvidence(ctx, rep) },
+		func() ([]analyze.UsageQuery, []analyze.Gap) { return c.grafanaEvidence(ctx, rep) },
+	} {
+		q, g := source()
+		qs, gaps = append(qs, q...), append(gaps, g...)
 	}
 	scoped, og := c.openSearchEvidence(ctx, from, now, services, rep)
-	gaps = append(gaps, og...)
-	return qs, scoped, gaps, nil
+	return qs, scoped, append(gaps, og...)
+}
+
+func queryLogGap(key, reason string) analyze.Gap {
+	return analyze.Gap{Source: "loki", Origin: "query-log", Key: key, Reason: reason}
+}
+
+// markerTimeout is how long a marker query, tail or pattern request may take to reach the query
+// log: Loki's own logs pass through the collection pipeline first.
+const markerTimeout = 2 * time.Minute
+
+// queryLogEvidence reads the queries Loki executed, after proving the query log records them.
+func (c *Config) queryLogEvidence(ctx context.Context, from, now time.Time, rep *Report) ([]analyze.UsageQuery, []analyze.Gap) {
+	if !c.Evidence.QueryLog.Enabled {
+		return nil, []analyze.Gap{queryLogGap("querylog-disabled", "the Loki query log is not read, so executed queries are unknown")}
+	}
+	logs, err := c.queryLogClient()
+	if err != nil {
+		return nil, []analyze.Gap{queryLogGap("querylog-unreadable", err.Error())}
+	}
+	target, err := c.lokiClient()
+	if err != nil {
+		return nil, []analyze.Gap{queryLogGap("querylog-unreadable", err.Error())}
+	}
+	ql := &loki.QueryLog{Logs: logs, Selector: c.Evidence.QueryLog.Selector}
+	gaps := c.proveQueryLog(ctx, ql, target, rep)
+	res, err := ql.Read(ctx, from, now)
+	if err != nil {
+		return nil, append(gaps, queryLogGap("querylog-unreadable", err.Error()))
+	}
+	rep.Evidence.QueryLogQueries = len(res.Queries)
+	rep.Evidence.QueryLogLines = res.Lines
+	rep.Evidence.QueryLogOldest = res.Oldest
+	if res.Unparsed > 0 {
+		gaps = append(gaps, queryLogGap("querylog-unparsed", fmt.Sprintf("%d query-log lines did not parse", res.Unparsed)))
+	}
+	// Loki's own logs arrive in batches, so the oldest line trails the window start a little even
+	// when the log covers it: allow 1% of the window, between a minute and an hour.
+	tolerance := min(max(c.Evidence.Window.Duration/100, time.Minute), time.Hour)
+	if res.Oldest.IsZero() || res.Oldest.After(from.Add(tolerance)) {
+		gaps = append(gaps, queryLogGap("querylog-window",
+			fmt.Sprintf("the query log starts at %s, after the evidence window start %s", res.Oldest.UTC().Format(time.RFC3339), from.UTC().Format(time.RFC3339))))
+	}
+	var qs []analyze.UsageQuery
+	for _, q := range res.Queries {
+		qs = append(qs, analyze.UsageQuery{Source: "loki-querylog", Origin: "query-log (" + q.Component + ")", Expr: q.Query, Count: q.Count, Last: q.Last})
+	}
+	return qs, gaps
+}
+
+// proveQueryLog sends a marker query, tail and pattern request and waits for each in the query log.
+// Tails and pattern requests (Logs Drilldown) are logged by other lines under other settings, so
+// each is proven on its own; an endpoint the target does not serve has no users.
+func (c *Config) proveQueryLog(ctx context.Context, ql *loki.QueryLog, target *loki.Client, rep *Report) []analyze.Gap {
+	rep.Evidence.QueryLogLive = "not checked"
+	if !c.Evidence.QueryLog.ProveLive {
+		return []analyze.Gap{queryLogGap("querylog-not-proven",
+			"evidence.query_log.prove_live is off, so it is not proven that queries, live tails and pattern requests are logged")}
+	}
+	var gaps []analyze.Gap
+	if err := ql.ProveLive(ctx, target, markerTimeout); err != nil {
+		rep.Evidence.QueryLogLive = err.Error()
+		gaps = append(gaps, queryLogGap("querylog-not-live", err.Error()))
+	} else {
+		rep.Evidence.QueryLogLive = "proven with a marker query"
+	}
+	for _, p := range []struct {
+		key   string
+		prove func(context.Context, *loki.Client, time.Duration) error
+		what  string
+	}{
+		{"querylog-tail-not-visible", ql.ProveTail, "live tails"},
+		{"querylog-patterns-not-visible", ql.ProvePatterns, "pattern requests"},
+	} {
+		switch err := p.prove(ctx, target, markerTimeout); {
+		case errors.Is(err, loki.ErrNotServed):
+			rep.Notes = append(rep.Notes, "Loki does not serve "+p.what+", so none can read the lines")
+		case err != nil:
+			gaps = append(gaps, queryLogGap(p.key, err.Error()))
+		}
+	}
+	return gaps
+}
+
+// rulerEvidence reads the Loki ruler's alerting and recording rules.
+func (c *Config) rulerEvidence(ctx context.Context, rep *Report) ([]analyze.UsageQuery, []analyze.Gap) {
+	gap := func(key, reason string) []analyze.Gap {
+		return []analyze.Gap{{Source: "loki", Origin: "ruler", Key: key, Reason: reason}}
+	}
+	if !c.Evidence.Ruler {
+		return nil, gap("ruler-not-checked", "Loki ruler rules are not read")
+	}
+	lc, err := c.lokiClient()
+	if err != nil {
+		return nil, gap("ruler-unreadable", err.Error())
+	}
+	rules, err := lc.Rules(ctx)
+	if err != nil {
+		return nil, gap("ruler-unreadable", err.Error())
+	}
+	rep.Evidence.RulerRules = len(rules)
+	var qs []analyze.UsageQuery
+	for _, r := range rules {
+		qs = append(qs, analyze.UsageQuery{Source: "loki-ruler", Origin: fmt.Sprintf("%s/%s/%s (%s)", r.Namespace, r.Group, r.Name, r.Kind), Expr: r.Expr,
+			Store: "loki-ruler", StoreURL: c.Loki.URL, Path: r.Namespace + "/" + r.Group + "/" + r.Name})
+	}
+	return qs, nil
+}
+
+// grafanaEvidence reads every stored query from every configured Grafana.
+func (c *Config) grafanaEvidence(ctx context.Context, rep *Report) ([]analyze.UsageQuery, []analyze.Gap) {
+	if len(c.Evidence.Grafana) == 0 {
+		return nil, []analyze.Gap{{Source: "grafana", Origin: "config", Key: "grafana-not-configured", Reason: "no Grafana is configured; dashboards, alerts and saved links elsewhere are unknown"}}
+	}
+	var qs []analyze.UsageQuery
+	var gaps []analyze.Gap
+	for _, g := range c.Evidence.Grafana {
+		q, gp := c.readGrafana(ctx, g, rep)
+		qs, gaps = append(qs, q...), append(gaps, gp...)
+	}
+	return qs, gaps
+}
+
+func (c *Config) readGrafana(ctx context.Context, g GrafanaConfig, rep *Report) ([]analyze.UsageQuery, []analyze.Gap) {
+	unreadable := func(err error) []analyze.Gap {
+		return []analyze.Gap{{Source: "grafana", Origin: g.URL, Key: "grafana-unreadable", Reason: err.Error()}}
+	}
+	gc, err := g.client()
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	res, err := gc.Read(ctx)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	want, gaps := c.analysedDatasources(g, res.LokiDatasources)
+	var qs []analyze.UsageQuery
+	for _, q := range res.Queries {
+		if !slices.ContainsFunc(q.Datasources, func(d string) bool { return want[d] }) {
+			continue // runs against a different Loki
+		}
+		rep.Evidence.GrafanaQueries++
+		qs = append(qs, analyze.UsageQuery{Source: "grafana", Origin: fmt.Sprintf("%s org %d %s", g.URL, q.Org, q.Origin), Expr: q.Expr,
+			Store: "grafana", StoreURL: g.URL, Org: q.Org, Path: q.Origin})
+	}
+	for _, n := range res.Notes {
+		rep.Notes = append(rep.Notes, fmt.Sprintf("grafana %s org %d %s: %s", g.URL, n.Org, n.Origin, n.Reason))
+	}
+	for _, gp := range res.Gaps {
+		gaps = append(gaps, analyze.Gap{Source: "grafana", Origin: fmt.Sprintf("org %d %s", gp.Org, gp.Origin), Key: grafanaGapKey(gp.Origin), Reason: gp.Reason})
+	}
+	return qs, gaps
+}
+
+// grafanaGapKey is the kind of object a Grafana gap is about: the origin up to its first ":" or "/",
+// such as dashboard for dashboard:uid/panel:3.
+func grafanaGapKey(origin string) string {
+	kind, _, _ := strings.Cut(origin, ":")
+	kind, _, _ = strings.Cut(kind, "/")
+	return "grafana-" + kind
+}
+
+// analysedDatasources returns the Loki datasources whose queries read the analysed Loki: listed in
+// datasources, or pointing at exactly loki.url. A Loki datasource that is neither listed nor declared
+// other counts too, and is a gap until the config says which Loki it is: a forgotten entry must
+// never hide readers.
+func (c *Config) analysedDatasources(g GrafanaConfig, byOrg map[int64]map[string]string) (map[string]bool, []analyze.Gap) {
+	want := map[string]bool{grafana.AnyLoki: true}
+	for _, d := range g.Datasources {
+		want[d] = true
+	}
+	var unmapped []string
+	for org, dss := range byOrg {
+		for uid, u := range dss {
+			switch {
+			case want[uid] || slices.Contains(g.OtherDatasources, uid):
+			case strings.TrimRight(u, "/") == strings.TrimRight(c.Loki.URL, "/"):
+				want[uid] = true
+			default:
+				want[uid] = true
+				unmapped = append(unmapped, fmt.Sprintf("%s (org %d, %s)", uid, org, u))
+			}
+		}
+	}
+	if len(unmapped) == 0 {
+		return want, nil
+	}
+	sort.Strings(unmapped)
+	return want, []analyze.Gap{{Source: "grafana", Origin: g.URL, Key: "grafana-datasource-unmapped",
+		Reason: "these Loki datasources are in neither datasources nor other_datasources, so their queries count as reading the analysed Loki: " + strings.Join(unmapped, ", ")}}
 }
 
 // topologyGaps checks every destination downstream of the enforcement point.

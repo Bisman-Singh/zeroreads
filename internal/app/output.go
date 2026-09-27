@@ -284,10 +284,7 @@ func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time, opt Ve
 			services = append(services, r.Service)
 		}
 	}
-	queries, scoped, gaps, err := c.evidence(ctx, now, services, rep)
-	if err != nil {
-		return nil, err
-	}
+	queries, scoped, gaps := c.evidence(ctx, now, services, rep)
 	tg, err := c.topologyGaps(rep)
 	if err != nil {
 		return nil, err

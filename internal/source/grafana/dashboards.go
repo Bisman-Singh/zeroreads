@@ -97,7 +97,7 @@ func (r *orgReader) classicPanels(origin string, panels []any) {
 		if lp, ok := pm["libraryPanel"].(map[string]any); ok {
 			uid, _ := lp["uid"].(string)
 			if !r.libraries[uid] {
-				r.gap(origin+"/panel:"+id, "library panel %q does not exist", uid)
+				r.note(origin+"/panel:"+id, "library panel %q does not exist, so the panel reads nothing", uid)
 			}
 			continue // the library panel's own queries are read from the library
 		}
@@ -148,7 +148,7 @@ func (r *orgReader) v2Dashboard(uid string, spec map[string]any) {
 			lp, _ := es["libraryPanel"].(map[string]any)
 			uid, _ := lp["uid"].(string)
 			if !r.libraries[uid] {
-				r.gap(origin+"/"+key, "library panel %q does not exist", uid)
+				r.note(origin+"/"+key, "library panel %q does not exist, so the panel reads nothing", uid)
 			}
 		case "Panel":
 			data, _ := es["data"].(map[string]any)

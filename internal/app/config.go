@@ -5,9 +5,13 @@ package app
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"time"
+
+	"github.com/Bisman-Singh/sievelog/internal/source/grafana"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -83,6 +87,12 @@ type QueryLogConfig struct {
 	URL       string `yaml:"url"` // default: loki.url
 	Selector  string `yaml:"selector"`
 	ProveLive bool   `yaml:"prove_live"`
+	// Credentials for url. When url is loki.url, loki's credentials are the default; another Loki
+	// never receives them.
+	OrgID          string `yaml:"org_id"`
+	Username       string `yaml:"username"`
+	PasswordEnv    string `yaml:"password_env"`
+	BearerTokenEnv string `yaml:"bearer_token_env"`
 }
 
 // GrafanaConfig is one Grafana.
@@ -189,22 +199,28 @@ type PricingConfig struct {
 // Duration parses Go and day-suffixed durations ("720h", "30d").
 type Duration struct{ time.Duration }
 
+// days matches a whole number of days, at most ten years: the longest window that makes sense.
+var days = regexp.MustCompile(`\A([0-9]{1,4})d\z`)
+
+const maxDays = 3650
+
 // UnmarshalYAML implements yaml.Unmarshaler.
 func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	var s string
 	if err := n.Decode(&s); err != nil {
 		return err
 	}
-	if len(s) > 1 && s[len(s)-1] == 'd' {
-		var days int
-		if _, err := fmt.Sscanf(s, "%dd", &days); err == nil {
-			d.Duration = time.Duration(days) * 24 * time.Hour
-			return nil
+	if m := days.FindStringSubmatch(s); m != nil {
+		n, _ := strconv.Atoi(m[1]) // at most four digits
+		if n > maxDays {
+			return fmt.Errorf("duration %q: at most %dd", s, maxDays)
 		}
+		d.Duration = time.Duration(n) * 24 * time.Hour
+		return nil
 	}
 	v, err := time.ParseDuration(s)
 	if err != nil {
-		return fmt.Errorf("duration %q: %w", s, err)
+		return fmt.Errorf("duration %q: a Go duration such as 720h, or a number of days such as 30d", s)
 	}
 	d.Duration = v
 	return nil
@@ -283,13 +299,102 @@ func (c *Config) defaults() {
 // labelName matches a Loki label name, which sievelog writes into LogQL unquoted.
 var labelName = regexp.MustCompile(`\A[a-zA-Z_][a-zA-Z0-9_]*\z`)
 
+// fieldName matches a structured field name. Loki's json parser reads a dotted name as a path into
+// nested objects while the pipelines read it as one key, so only plain names are allowed.
+var fieldName = regexp.MustCompile(`\A[A-Za-z_][A-Za-z0-9_]*\z`)
+
+// vrlPath matches a VRL path of plain or quoted segments. Paths are written into VRL programs as
+// they are, so nothing that VRL or Vector's configuration would interpret may appear in them.
+var vrlPath = regexp.MustCompile(`\A(?:\.(?:[A-Za-z0-9_@]+|"[^"\\${}]+"))+\z`)
+
+// recordKey matches one Fluent Bit record key, and recordAccessor a key or a record accessor
+// ($a['b']). Both are written into Fluent Bit configuration and Lua as they are.
+var (
+	recordKey      = regexp.MustCompile(`\A[A-Za-z0-9_.@/-]+\z`)
+	recordAccessor = regexp.MustCompile(`\A(?:[A-Za-z0-9_.@/-]+|\$[A-Za-z0-9_.@/-]+(?:\['[A-Za-z0-9_.@/-]+'\])*)\z`)
+	tagPattern     = regexp.MustCompile(`\A[A-Za-z0-9_.*/-]+\z`)
+)
+
 func (c *Config) validate() error {
+	for _, check := range []func() error{c.validateSources, c.validateScope, c.validateBounds, c.validateRuntime, c.validatePolicy} {
+		if err := check(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkURL requires an http or https URL with a host and nothing a base URL cannot carry. URLs are
+// printed in reports, gaps and verify output, so credentials in one are refused: they belong in
+// username and the *_env settings.
+func checkURL(field, raw string) error {
+	u, err := url.Parse(raw)
+	switch {
+	case err != nil:
+		return fmt.Errorf("%s is not a URL", field) // the parse error would repeat the URL
+	case u.User != nil:
+		return fmt.Errorf("%s holds credentials; use username and password_env or the token setting instead", field)
+	case (u.Scheme != "http" && u.Scheme != "https") || u.Host == "":
+		return fmt.Errorf("%s must be an http or https URL with a host", field)
+	case u.RawQuery != "" || u.Fragment != "":
+		return fmt.Errorf("%s must not have a query or fragment", field)
+	}
+	return nil
+}
+
+func (c *Config) validateSources() error {
 	if c.Loki.URL == "" {
 		return fmt.Errorf("loki.url is required")
 	}
+	if err := checkURL("loki.url", c.Loki.URL); err != nil {
+		return err
+	}
+	ql := c.Evidence.QueryLog
+	if err := checkURL("evidence.query_log.url", ql.URL); err != nil {
+		return err
+	}
+	if ql.Enabled && ql.Selector == "" {
+		return fmt.Errorf("evidence.query_log.selector is required when the query log is enabled")
+	}
+	for i, g := range c.Evidence.Grafana {
+		if g.URL == "" || len(g.Datasources) == 0 {
+			return fmt.Errorf("evidence.grafana[%d]: url and datasources (the Loki datasource UIDs of loki.url) are required", i)
+		}
+		if err := checkURL(fmt.Sprintf("evidence.grafana[%d].url", i), g.URL); err != nil {
+			return err
+		}
+	}
+	names := map[string]bool{}
+	for i, o := range c.Evidence.OpenSearch {
+		switch {
+		case o.Name == "" || o.URL == "":
+			return fmt.Errorf("evidence.opensearch[%d]: name and url are required", i)
+		case names[o.Name]:
+			return fmt.Errorf("evidence.opensearch[%d]: duplicate name %q", i, o.Name)
+		case len(o.Indices) == 0:
+			return fmt.Errorf("evidence.opensearch.%s: indices is required", o.Name)
+		}
+		if err := checkURL("evidence.opensearch."+o.Name+".url", o.URL); err != nil {
+			return err
+		}
+		names[o.Name] = true
+	}
+	return nil
+}
+
+func (c *Config) validateScope() error {
 	if !labelName.MatchString(c.Scope.LokiLabel) {
 		return fmt.Errorf("scope.loki_label %q is not a Loki label name", c.Scope.LokiLabel)
 	}
+	for svc, f := range c.Scope.Structured {
+		if !fieldName.MatchString(f) {
+			return fmt.Errorf("scope.structured.%s: %q is not a plain field name (letters, digits and _)", svc, f)
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateBounds() error {
 	for name, v := range map[string]int64{
 		"discovery.window": int64(c.Discovery.Window.Duration), "discovery.slices": int64(c.Discovery.Slices),
 		"discovery.sample_lines_per_service": int64(c.Discovery.SampleLinesPerService), "discovery.min_samples": int64(c.Discovery.MinSamples),
@@ -308,69 +413,107 @@ func (c *Config) validate() error {
 	if d, err := time.ParseDuration(c.Collector.DedupeInterval); err != nil || d <= 0 {
 		return fmt.Errorf("collector.dedupe_interval %q must be a positive duration", c.Collector.DedupeInterval)
 	}
-	if c.Evidence.QueryLog.Enabled && c.Evidence.QueryLog.Selector == "" {
-		return fmt.Errorf("evidence.query_log.selector is required when the query log is enabled")
-	}
+	return nil
+}
+
+func (c *Config) validateRuntime() error {
 	clusters := map[string]bool{}
-	for i, o := range c.Evidence.OpenSearch {
-		switch {
-		case o.Name == "" || o.URL == "":
-			return fmt.Errorf("evidence.opensearch[%d]: name and url are required", i)
-		case clusters[o.Name]:
-			return fmt.Errorf("evidence.opensearch[%d]: duplicate name %q", i, o.Name)
-		case len(o.Indices) == 0:
-			return fmt.Errorf("evidence.opensearch.%s: indices is required", o.Name)
-		}
+	for _, o := range c.Evidence.OpenSearch {
 		clusters[o.Name] = true
-	}
-	for i, g := range c.Evidence.Grafana {
-		if g.URL == "" || len(g.Datasources) == 0 {
-			return fmt.Errorf("evidence.grafana[%d]: url and datasources (the Loki datasource UIDs of loki.url) are required", i)
-		}
 	}
 	switch c.Runtime {
 	case "collector":
-		if len(c.Collector.ConfigFiles) == 0 || c.Collector.Pipeline == "" {
-			return fmt.Errorf("collector.config_files and collector.pipeline are required")
-		}
-		for id, s := range c.Collector.Sinks {
-			if err := s.check("collector.sinks."+id, clusters); err != nil {
-				return err
-			}
-		}
+		return c.validateCollector(clusters)
 	case "vector":
-		v := c.Vector
-		if len(v.ConfigFiles) == 0 || v.After == "" || v.ScopePath == "" || v.TextPath == "" || v.MeasureSink == nil {
-			return fmt.Errorf("vector.config_files, after, scope_path, text_path and measure_sink are required")
-		}
-		for id, s := range v.Sinks {
-			if err := s.check("vector.sinks."+id, clusters); err != nil {
-				return err
-			}
-		}
-		for svc := range c.Scope.Structured {
-			if v.FieldPaths[svc] == "" {
-				return fmt.Errorf("vector.field_paths.%s is required for a structured service", svc)
-			}
-		}
+		return c.validateVector(clusters)
 	case "fluentbit":
-		f := c.FluentBit
-		if len(f.ConfigFiles) == 0 || f.Match == "" || f.ScopeKey == "" || len(f.TextKey) == 0 || f.MetricsTag == "" {
-			return fmt.Errorf("fluentbit.config_files, match, scope_key, text_key and metrics_tag are required")
-		}
-		for id, s := range f.Sinks {
-			if err := s.check("fluentbit.sinks."+id, clusters); err != nil {
-				return err
-			}
-		}
-		for svc := range c.Scope.Structured {
-			if len(f.FieldKeys[svc]) == 0 {
-				return fmt.Errorf("fluentbit.field_keys.%s is required for a structured service", svc)
-			}
-		}
-	default:
-		return fmt.Errorf("runtime must be collector, vector or fluentbit, got %q", c.Runtime)
+		return c.validateFluentBit(clusters)
 	}
+	return fmt.Errorf("runtime must be collector, vector or fluentbit, got %q", c.Runtime)
+}
+
+func checkSinks(prefix string, sinks map[string]Sink, clusters map[string]bool) error {
+	for id, s := range sinks {
+		if err := s.check(prefix+"."+id, clusters); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateCollector(clusters map[string]bool) error {
+	if len(c.Collector.ConfigFiles) == 0 || c.Collector.Pipeline == "" {
+		return fmt.Errorf("collector.config_files and collector.pipeline are required")
+	}
+	return checkSinks("collector.sinks", c.Collector.Sinks, clusters)
+}
+
+func (c *Config) validateVector(clusters map[string]bool) error {
+	v := c.Vector
+	if len(v.ConfigFiles) == 0 || v.After == "" || v.ScopePath == "" || v.TextPath == "" || v.MeasureSink == nil {
+		return fmt.Errorf("vector.config_files, after, scope_path, text_path and measure_sink are required")
+	}
+	paths := map[string]string{"vector.scope_path": v.ScopePath, "vector.text_path": v.TextPath}
+	for svc, p := range v.FieldPaths {
+		paths["vector.field_paths."+svc] = p
+	}
+	for i, p := range v.SeverityPaths {
+		paths[fmt.Sprintf("vector.severity_paths[%d]", i)] = p
+	}
+	for field, p := range paths {
+		if !vrlPath.MatchString(p) {
+			return fmt.Errorf("%s: %q is not a VRL path such as .service or .\"k8s.pod\"", field, p)
+		}
+	}
+	for i, g := range v.GroupBy {
+		if !recordKey.MatchString(g) {
+			return fmt.Errorf("vector.dedupe_group_by[%d]: %q is not a field name", i, g)
+		}
+	}
+	for svc := range c.Scope.Structured {
+		if v.FieldPaths[svc] == "" {
+			return fmt.Errorf("vector.field_paths.%s is required for a structured service", svc)
+		}
+	}
+	return checkSinks("vector.sinks", v.Sinks, clusters)
+}
+
+func (c *Config) validateFluentBit(clusters map[string]bool) error {
+	f := c.FluentBit
+	if len(f.ConfigFiles) == 0 || f.Match == "" || f.ScopeKey == "" || len(f.TextKey) == 0 || f.MetricsTag == "" {
+		return fmt.Errorf("fluentbit.config_files, match, scope_key, text_key and metrics_tag are required")
+	}
+	if !recordAccessor.MatchString(f.ScopeKey) {
+		return fmt.Errorf("fluentbit.scope_key: %q is not a record key or accessor such as $kubernetes['container_name']", f.ScopeKey)
+	}
+	for field, t := range map[string]string{"fluentbit.match": f.Match, "fluentbit.metrics_tag": f.MetricsTag} {
+		if !tagPattern.MatchString(t) {
+			return fmt.Errorf("%s: %q is not a tag pattern", field, t)
+		}
+	}
+	keys := map[string][]string{"fluentbit.text_key": f.TextKey}
+	for svc, k := range f.FieldKeys {
+		keys["fluentbit.field_keys."+svc] = k
+	}
+	for i, k := range f.SeverityKeys {
+		keys[fmt.Sprintf("fluentbit.severity_keys[%d]", i)] = k
+	}
+	for field, path := range keys {
+		for _, k := range path {
+			if !recordKey.MatchString(k) {
+				return fmt.Errorf("%s: %q is not a record key", field, k)
+			}
+		}
+	}
+	for svc := range c.Scope.Structured {
+		if len(f.FieldKeys[svc]) == 0 {
+			return fmt.Errorf("fluentbit.field_keys.%s is required for a structured service", svc)
+		}
+	}
+	return checkSinks("fluentbit.sinks", f.Sinks, clusters)
+}
+
+func (c *Config) validatePolicy() error {
 	for _, a := range c.Policy.Actions {
 		if a == "rollup" && !c.Policy.ExperimentalRollup {
 			return fmt.Errorf("policy.actions: rollup is experimental; set policy.experimental_rollup: true to allow it")
@@ -380,4 +523,30 @@ func (c *Config) validate() error {
 		return fmt.Errorf("policy.sample_percent must be 1..99")
 	}
 	return nil
+}
+
+// client is a Grafana client with the credentials the config names.
+func (g GrafanaConfig) client() (*grafana.Client, error) {
+	password, err := secret("evidence.grafana.password_env", g.PasswordEnv)
+	if err != nil {
+		return nil, err
+	}
+	token, err := secret("evidence.grafana.token_env", g.TokenEnv)
+	if err != nil {
+		return nil, err
+	}
+	return &grafana.Client{Base: g.URL, Username: g.Username, Password: password, Token: token}, nil
+}
+
+// secret returns the value of the environment variable a setting names. A named variable that is
+// empty is an error: sending no credentials would surface far from its cause, as a permission
+// problem.
+func secret(setting, env string) (string, error) {
+	if env == "" {
+		return "", nil
+	}
+	if v := os.Getenv(env); v != "" {
+		return v, nil
+	}
+	return "", fmt.Errorf("%s names the environment variable %s, which is empty or unset", setting, env)
 }
