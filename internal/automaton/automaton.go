@@ -70,12 +70,18 @@ type Term struct {
 	Negate  bool
 }
 
-// ErrLimit is returned when a question needs more states than the caller allowed. Callers must treat
-// it as "unknown", never as "no".
-var ErrLimit = errors.New("automaton: state limit exceeded")
+// ErrLimit is returned when a question needs more states, or more work, than the caller allowed.
+// Callers must treat it as "unknown", never as "no".
+var ErrLimit = errors.New("automaton: state or work limit exceeded")
 
 // DefaultLimit bounds the explored product states.
 const DefaultLimit = 200000
+
+// workPerState bounds the work of a question as a multiple of its state limit. Each state is
+// stepped once per character-class cell and pattern, and a pattern of many Unicode classes has
+// hundreds of cells, so counting states alone does not bound time. The largest question in the unit
+// and e2e suites needs about 66,000 steps; the bound for the default limit is 3.2 million.
+const workPerState = 16
 
 // Witness searches for a string satisfying every term. It returns the string and true if one exists,
 // or "" and false if none exists. It returns ErrLimit if deciding needs more than limit states.
@@ -328,6 +334,7 @@ func (s *search) run(limit int) (string, bool, error) {
 	}
 	nodes := []*node{n0}
 	seen := map[string]bool{n0.key(): true}
+	work, maxWork := 0, limit*workPerState
 	for qi := 0; qi < len(nodes); qi++ {
 		n := nodes[qi]
 		if s.acceptsAtEnd(n) {
@@ -361,7 +368,11 @@ func (s *search) run(limit int) (string, bool, error) {
 				}
 			}
 		}
-		for _, cell := range cells(cuts) {
+		cs := cells(cuts)
+		if work += len(cs) * len(s.machines); work > maxWork {
+			return "", false, ErrLimit
+		}
+		for _, cell := range cs {
 			rep, ok := representative(cell)
 			if !ok {
 				continue

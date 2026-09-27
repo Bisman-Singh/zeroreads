@@ -1,10 +1,12 @@
 package automaton
 
 import (
+	"errors"
 	"math/rand/v2"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // alphabet used by random strings and brute force. It contains a word char, a digit, a space, a
@@ -271,5 +273,22 @@ func TestRepresentative(t *testing.T) {
 		if got != c.want || ok != c.ok {
 			t.Fatalf("representative(%x) = %x,%v want %x,%v", c.cell, got, ok, c.want, c.ok)
 		}
+	}
+}
+
+// Time is bounded, not only states: patterns of many Unicode classes make every state expensive.
+// Found by the v1 audit: the limit counted states only, and this question took 3m19s without
+// reaching it. Exceeding the work bound is ErrLimit, which callers treat as "reads".
+func TestWorkIsBounded(t *testing.T) {
+	class := `[\p{Greek}\p{Cyrillic}\p{Han}\p{Arabic}\p{Hebrew}\p{Thai}\p{Lu}\p{Nd}\p{Devanagari}\p{Hangul}]`
+	a := MustCompile(`\A(?:` + class + `|a){0,150}b\z`)
+	b := MustCompile(`\A(?:` + strings.ReplaceAll(class, "Greek", "Latin") + `|a){0,150}c(?:` + class + `){0,150}\z`)
+	start := time.Now()
+	_, _, err := Intersects(a, b, 0)
+	if d := time.Since(start); d > 20*time.Second {
+		t.Fatalf("took %v", d)
+	}
+	if !errors.Is(err, ErrLimit) {
+		t.Fatalf("got %v, want ErrLimit", err)
 	}
 }
