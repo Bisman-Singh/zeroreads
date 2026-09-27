@@ -4,6 +4,7 @@ package emit
 import (
 	"fmt"
 	"math/big"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -97,9 +98,11 @@ func RollupMarker(id string) string { return "sievelog rollup " + id }
 // AggregateLines names the counter that replaces an aggregated rule's lines.
 func AggregateLines(id string) string { return "sievelog.aggregate.lines." + id }
 
-// ottlString quotes s as an OTTL string literal.
+// ottlString quotes s as an OTTL string literal inside the Collector's configuration. The Collector
+// expands ${...} in every configuration string before OTTL parses it, and $$ is its escape, so a
+// service named "a${env:X}" would otherwise read the environment variable X.
 func ottlString(s string) string {
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `$$`).Replace(s) + `"`
 }
 
 func (r Rule) target() string {
@@ -145,23 +148,56 @@ func (r Rule) sampleDrop(guarded string) string {
 		guarded, r.SampleKey(), th, observed, th)
 }
 
-// CheckDisjoint proves no two rules in the same scope and field can match the same line.
-func CheckDisjoint(rules []Rule) error {
+// validID matches the rule IDs emitters accept. IDs become component, metric and alias names, YAML
+// keys, Lua table keys and regex literals, so only characters that need no escaping in any of them
+// are allowed.
+var validID = regexp.MustCompile(`\Ar-[a-z0-9-]{1,64}\z`)
+
+// CheckRules rejects rules no emitter can write safely: an unsafe or repeated ID, an unknown
+// action, a sample share outside 1..99, a rollup of structured records, a language that does not
+// compile, or two rules in one scope whose languages overlap (a line must match at most one rule).
+func CheckRules(rules []Rule) error {
+	seen := map[string]bool{}
+	languages := make([]*automaton.Pattern, len(rules))
+	for i, r := range rules {
+		if !validID.MatchString(r.ID) {
+			return fmt.Errorf("emit: rule ID %q is not r- followed by lowercase letters, digits and dashes", r.ID)
+		}
+		if seen[r.ID] {
+			return fmt.Errorf("emit: rule %s appears twice", r.ID)
+		}
+		seen[r.ID] = true
+		switch r.Action {
+		case "aggregate", "dedupe", "drop":
+		case "sample":
+			if r.Keep <= 0 || r.Keep >= 100 {
+				return fmt.Errorf("emit: rule %s: sample keep must be 1..99, got %d", r.ID, r.Keep)
+			}
+		case "rollup":
+			if r.Field != "" {
+				return fmt.Errorf("emit: rule %s: rollup applies to plain lines only", r.ID)
+			}
+		default:
+			return fmt.Errorf("emit: rule %s: unknown action %q", r.ID, r.Action)
+		}
+		p, err := automaton.Compile(r.Language)
+		if err != nil {
+			return fmt.Errorf("emit: rule %s: language: %w", r.ID, err)
+		}
+		languages[i] = p
+	}
+	return checkDisjoint(rules, languages)
+}
+
+// checkDisjoint proves no two rules in the same scope and field can match the same line.
+func checkDisjoint(rules []Rule, languages []*automaton.Pattern) error {
 	for i := range rules {
 		for j := i + 1; j < len(rules); j++ {
 			a, b := rules[i], rules[j]
 			if a.ScopeAttr != b.ScopeAttr || a.ScopeValue != b.ScopeValue || a.Field != b.Field {
 				continue
 			}
-			pa, err := automaton.Compile(a.Language)
-			if err != nil {
-				return fmt.Errorf("emit: %s: %w", a.ID, err)
-			}
-			pb, err := automaton.Compile(b.Language)
-			if err != nil {
-				return fmt.Errorf("emit: %s: %w", b.ID, err)
-			}
-			w, found, err := automaton.Intersects(pa, pb, 0)
+			w, found, err := automaton.Intersects(languages[i], languages[j], 0)
 			if err != nil {
 				return fmt.Errorf("emit: cannot prove %s and %s disjoint: %w", a.ID, b.ID, err)
 			}
@@ -179,7 +215,7 @@ func CheckDisjoint(rules []Rule) error {
 // half, which holds the remaining processors, the enforcement processors and the original
 // exporters.
 func Collector(files [][]byte, t Target, rules []Rule, mode Mode) ([]byte, error) {
-	if err := CheckDisjoint(rules); err != nil {
+	if err := CheckRules(rules); err != nil {
 		return nil, err
 	}
 	cfg := map[string]any{}
@@ -217,21 +253,7 @@ func Collector(files [][]byte, t Target, rules []Rule, mode Mode) ([]byte, error
 	}
 	needAgg := false
 	for _, r := range rules {
-		if r.Action == "aggregate" {
-			needAgg = true
-		}
-		switch r.Action {
-		case "aggregate", "dedupe", "sample", "drop":
-		case "rollup":
-			if r.Field != "" {
-				return nil, fmt.Errorf("emit: rule %s: rollup applies to plain lines only", r.ID)
-			}
-		default:
-			return nil, fmt.Errorf("emit: rule %s: unknown action %q", r.ID, r.Action)
-		}
-		if r.Action == "sample" && (r.Keep <= 0 || r.Keep >= 100) {
-			return nil, fmt.Errorf("emit: rule %s: sample keep must be 1..99, got %d", r.ID, r.Keep)
-		}
+		needAgg = needAgg || r.Action == "aggregate"
 	}
 	if needAgg && len(t.AggregateExporters) == 0 {
 		return nil, fmt.Errorf("emit: rules aggregate but no aggregate exporter is configured")

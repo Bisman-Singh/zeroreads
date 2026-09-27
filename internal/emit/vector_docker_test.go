@@ -70,7 +70,18 @@ func runVector(t *testing.T, cfg []byte, recs []record) (events []map[string]any
 // runVectorInput runs Vector over raw JSON lines with the config already written to dir.
 func runVectorInput(t *testing.T, dir, input string) (events []map[string]any, metrics map[string]float64) {
 	t.Helper()
-	cmd := exec.Command("docker", "run", "-i", "--rm", "-v", dir+":/w", "timberio/vector:0.58.0-debian", "--config", "/w/vector.yaml")
+	return runVectorArgs(t, dir, input, nil, nil)
+}
+
+// runVectorArgs runs Vector with extra environment variables (NAME=value) and Vector flags.
+func runVectorArgs(t *testing.T, dir, input string, env, flags []string) (events []map[string]any, metrics map[string]float64) {
+	t.Helper()
+	args := []string{"run", "-i", "--rm", "-v", dir + ":/w"}
+	for _, e := range env {
+		args = append(args, "-e", e)
+	}
+	args = append(append(append(args, "timberio/vector:0.58.0-debian"), flags...), "--config", "/w/vector.yaml")
+	cmd := exec.Command("docker", args...)
 	cmd.Stdin = strings.NewReader(input)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("vector: %v\n%s", err, out)
@@ -293,6 +304,43 @@ func TestVectorSeverityGuard(t *testing.T) {
 	for k, v := range want {
 		if metrics[k] != v {
 			t.Fatalf("%s counted %v, want %v (severe events must not be measured)", k, metrics[k], v)
+		}
+	}
+}
+
+// Service names come from the logs. VRL reads {{ }} in a string as a template, and Vector can expand
+// $NAME and ${NAME} anywhere in its configuration: with interpolation on or off (the default), the
+// rule must match exactly the service it names. Found by the v1 audit.
+func TestVectorWritesValuesLiterally(t *testing.T) {
+	svc := "svc${SECRET}$HOME{{ x }}caf\u00e9\"\\"
+	rules := []Rule{{ID: "r-dollar", ScopeAttr: "service.name", ScopeValue: svc, Language: `\Acost \$HOME ok\z`, Action: "drop"}}
+	cfg, err := Vector([][]byte{[]byte(vectorUserConfig)}, vectorTarget(), rules, Enforce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var in strings.Builder
+	for i, ev := range []map[string]any{
+		{"service": svc, "message": "cost $HOME ok"},
+		{"service": "svcleaked/leak{{ x }}caf\u00e9\"\\", "message": "cost $HOME ok"},
+		{"service": svc, "message": "cost /leak ok"},
+	} {
+		ev["tsn"], ev["case"] = 1790000000000000000+i, i
+		b, _ := json.Marshal(ev)
+		in.Write(b)
+		in.WriteByte('\n')
+	}
+	for _, flags := range [][]string{nil, {"--dangerously-allow-env-var-interpolation"}} {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "vector.yaml"), cfg, 0o644)
+		events, _ := runVectorArgs(t, dir, in.String(), []string{"SECRET=leaked", "HOME=/leak"}, flags)
+		kept := map[int]bool{}
+		for _, ev := range events {
+			if n, ok := ev["case"].(float64); ok {
+				kept[int(n)] = true
+			}
+		}
+		if kept[0] || !kept[1] || !kept[2] {
+			t.Fatalf("flags %v: kept %v, want only cases 1 and 2", flags, kept)
 		}
 	}
 }

@@ -19,6 +19,8 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/confmap"
+	"go.opentelemetry.io/collector/confmap/provider/envprovider"
+	"go.opentelemetry.io/collector/confmap/provider/yamlprovider"
 	"go.opentelemetry.io/collector/connector/connectortest"
 	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -141,16 +143,88 @@ func sampleDigest(text string, ts int64) string {
 
 func emitted(t *testing.T, mode Mode) map[string]any {
 	t.Helper()
+	return emittedRules(t, testRules, mode)
+}
+
+// emittedRules emits rules and resolves the result exactly as the Collector does before building
+// components: ${...} references are expanded and $$ becomes $.
+func emittedRules(t *testing.T, rules []Rule, mode Mode) map[string]any {
+	t.Helper()
 	out, err := Collector([][]byte{[]byte(userConfig)}, Target{Pipeline: "logs", After: "transform/prep",
-		MeasureExporters: []string{"file/metrics"}, AggregateExporters: []string{"file/metrics"}, DedupeInterval: "300ms"}, testRules, mode)
+		MeasureExporters: []string{"file/metrics"}, AggregateExporters: []string{"file/metrics"}, DedupeInterval: "300ms"}, rules, mode)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var m map[string]any
-	if err := yaml.Unmarshal(out, &m); err != nil {
+	resolver, err := confmap.NewResolver(confmap.ResolverSettings{
+		URIs:              []string{"yaml:" + string(out)},
+		ProviderFactories: []confmap.ProviderFactory{yamlprovider.NewFactory(), envprovider.NewFactory()},
+		DefaultScheme:     "env",
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	return m
+	conf, err := resolver.Resolve(context.Background())
+	if err != nil {
+		t.Fatalf("the Collector would not resolve the emitted configuration: %v", err)
+	}
+	return conf.ToStringMap()
+}
+
+// runFilter runs the real filter processor configured from m and returns the records that survive,
+// as service and text.
+func runFilter(t *testing.T, m map[string]any, recs []record) map[[2]string]bool {
+	t.Helper()
+	f := filterprocessor.NewFactory()
+	cfg := f.CreateDefaultConfig()
+	componentConfig(t, m, "processors", "filter/sievelog", cfg)
+	sink := new(consumertest.LogsSink)
+	proc, err := f.CreateLogs(context.Background(), processortest.NewNopSettings(f.Type()), cfg, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := proc.Start(context.Background(), componenttest.NewNopHost()); err != nil {
+		t.Fatal(err)
+	}
+	defer proc.Shutdown(context.Background())
+	if err := proc.ConsumeLogs(context.Background(), toLogs(recs)); err != nil {
+		t.Fatal(err)
+	}
+	survived := map[[2]string]bool{}
+	for _, ld := range sink.AllLogs() {
+		for i := 0; i < ld.ResourceLogs().Len(); i++ {
+			rl := ld.ResourceLogs().At(i)
+			svc, _ := rl.Resource().Attributes().Get("service.name")
+			lrs := rl.ScopeLogs().At(0).LogRecords()
+			for j := 0; j < lrs.Len(); j++ {
+				txt, _ := textOf(lrs.At(j))
+				survived[[2]string{svc.Str(), txt}] = true
+			}
+		}
+	}
+	return survived
+}
+
+// Service names come from the logs, and the Collector expands ${...} in its configuration before
+// OTTL reads it: every value must stay literal. Found by the v1 audit: a service named
+// "svc${env:X}" made the emitted rule read the environment variable X.
+func TestCollectorWritesDollarLiterally(t *testing.T) {
+	t.Setenv("SIEVELOG_TEST_SECRET", "leaked")
+	svc := "svc${env:SIEVELOG_TEST_SECRET}$${SIEVELOG_TEST_SECRET}$HOME"
+	text := "cost ${SIEVELOG_TEST_SECRET} $$ ok"
+	rules := []Rule{{ID: "r-dollar", ScopeAttr: "service.name", ScopeValue: svc, Language: `\A` + regexp.QuoteMeta(text) + `\z`, Action: "drop"}}
+	survived := runFilter(t, emittedRules(t, rules, Enforce), []record{
+		{service: svc, text: text, ts: 1},
+		{service: "svcleaked$leaked$HOME", text: text, ts: 2},
+		{service: svc, text: "cost leaked $$ ok", ts: 3},
+		{service: svc, text: "cost leaked $ ok", ts: 4},
+	})
+	for k, want := range map[[2]string]bool{
+		{svc, text}: false, {"svcleaked$leaked$HOME", text}: true, {svc, "cost leaked $$ ok"}: true, {svc, "cost leaked $ ok"}: true,
+	} {
+		if survived[k] != want {
+			t.Fatalf("%q: survived %v, want %v", k, survived[k], want)
+		}
+	}
 }
 
 func componentConfig(t *testing.T, m map[string]any, section, name string, into any) {
@@ -389,8 +463,8 @@ func TestShadowAddsNoEnforcement(t *testing.T) {
 
 func TestOverlappingRulesRejected(t *testing.T) {
 	bad := []Rule{
-		{ID: "a", ScopeAttr: "service.name", ScopeValue: "x", Language: `\Auser [a-z]+ logged in\z`, Action: "drop"},
-		{ID: "b", ScopeAttr: "service.name", ScopeValue: "x", Language: `\Auser .* logged in\z`, Action: "drop"},
+		{ID: "r-a", ScopeAttr: "service.name", ScopeValue: "x", Language: `\Auser [a-z]+ logged in\z`, Action: "drop"},
+		{ID: "r-b", ScopeAttr: "service.name", ScopeValue: "x", Language: `\Auser .* logged in\z`, Action: "drop"},
 	}
 	if _, err := Collector([][]byte{[]byte(userConfig)}, Target{Pipeline: "logs", MeasureExporters: []string{"file/metrics"}}, bad, Enforce); err == nil || !strings.Contains(err.Error(), "overlap") {
 		t.Fatalf("got %v", err)
@@ -721,5 +795,36 @@ func TestSampleUntimedRecords(t *testing.T) {
 	}
 	if frac := float64(len(kept)) / n; frac < 0.25 || frac > 0.35 {
 		t.Fatalf("untimed records kept %.3f, want about 0.30", frac)
+	}
+}
+
+// Every emitter refuses a rule it cannot write safely, whoever wrote the rules file.
+func TestCheckRules(t *testing.T) {
+	ok := Rule{ID: "r-0123456789ab", ScopeAttr: "service.name", ScopeValue: "x", Language: `\Aa\z`, Action: "drop"}
+	with := func(f func(r *Rule)) []Rule {
+		r := ok
+		f(&r)
+		return []Rule{r}
+	}
+	if err := CheckRules([]Rule{ok}); err != nil {
+		t.Fatal(err)
+	}
+	for want, rules := range map[string][]Rule{
+		"rule ID":         with(func(r *Rule) { r.ID = "r-1 ${env:ARCHIVE_SECRET}" }),
+		"rule ID \"R-1\"": with(func(r *Rule) { r.ID = "R-1" }),
+		"rule ID \"r-\"":  with(func(r *Rule) { r.ID = "r-" }),
+		"appears twice":   {ok, ok},
+		"unknown action":  with(func(r *Rule) { r.Action = "teleport" }),
+		"keep must be":    with(func(r *Rule) { r.Action, r.Keep = "sample", 0 }),
+		"plain lines":     with(func(r *Rule) { r.Action, r.Field = "rollup", "msg" }),
+		"language":        with(func(r *Rule) { r.Language = `(` }),
+	} {
+		if err := CheckRules(rules); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: got %v", want, err)
+		}
+	}
+	sample := with(func(r *Rule) { r.Action, r.Keep = "sample", 100 })
+	if err := CheckRules(sample); err == nil {
+		t.Fatal("keep 100 accepted")
 	}
 }

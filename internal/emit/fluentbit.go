@@ -82,7 +82,7 @@ func metricName(prefix, id string) string {
 
 // FluentBit returns the user's Fluent Bit YAML configuration with the rules wired in.
 func FluentBit(files [][]byte, t FluentBitTarget, rules []Rule, mode Mode) ([]byte, error) {
-	if err := CheckDisjoint(rules); err != nil {
+	if err := CheckRules(rules); err != nil {
 		return nil, err
 	}
 	if t.Match == "" || t.ScopeKey == "" || len(t.TextKey) == 0 || t.MetricsTag == "" {
@@ -127,8 +127,8 @@ func FluentBit(files [][]byte, t FluentBitTarget, rules []Rule, mode Mode) ([]by
 	}
 	var added []any
 	for _, r := range rules {
-		if r.Action == "dedupe" && mode == Enforce {
-			return nil, fmt.Errorf("emit: rule %s: Fluent Bit cannot deduplicate with a count; re-run analyze for runtime fluentbit", r.ID)
+		if (r.Action == "dedupe" || r.Action == "rollup") && mode == Enforce {
+			return nil, fmt.Errorf("emit: rule %s: Fluent Bit cannot enforce %s, which keeps a count of the removed lines; re-run analyze for runtime fluentbit", r.ID, r.Action)
 		}
 		path, err := pathOf(r)
 		if err != nil {

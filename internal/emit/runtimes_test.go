@@ -99,12 +99,12 @@ func TestVectorRefusals(t *testing.T) {
 			return err
 		},
 		"unknown action": func() error {
-			_, err := Vector([][]byte{[]byte(vectorUnit)}, vtarget(), []Rule{{ID: "r", ScopeAttr: "s", ScopeValue: "a", Language: `\Ax\z`, Action: "teleport"}}, Enforce)
+			_, err := Vector([][]byte{[]byte(vectorUnit)}, vtarget(), []Rule{{ID: "r-x", ScopeAttr: "s", ScopeValue: "a", Language: `\Ax\z`, Action: "teleport"}}, Enforce)
 			return err
 		},
 		"overlapping rules": func() error {
 			_, err := Vector([][]byte{[]byte(vectorUnit)}, vtarget(), []Rule{
-				{ID: "a", ScopeValue: "s", Language: `\Ax+\z`, Action: "drop"}, {ID: "b", ScopeValue: "s", Language: `\Axx\z`, Action: "drop"}}, Enforce)
+				{ID: "r-a", ScopeValue: "s", Language: `\Ax+\z`, Action: "drop"}, {ID: "r-b", ScopeValue: "s", Language: `\Axx\z`, Action: "drop"}}, Enforce)
 			return err
 		},
 	}
@@ -203,4 +203,32 @@ func fbRules() []Rule {
 		}
 	}
 	return out
+}
+
+func TestVRLString(t *testing.T) {
+	for in, want := range map[string]string{
+		`checkout`:       `"checkout"`,
+		`a"b\c`:          `"a\"b\\c"`,
+		`svc${SECRET}`:   `"svc\u{24}\{SECRET}"`,
+		`$HOME`:          `"\u{24}HOME"`,
+		`a{{ x }}b`:      `"a\{\{ x }}b"`,
+		"tab\tnew\nline": `"tab\u{9}new\u{a}line"`,
+		"café ☕":         `"caf\u{e9} \u{2615}"`,
+	} {
+		if got := vrlString(in); got != want {
+			t.Fatalf("%q: %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestFluentBitRefusesCounts(t *testing.T) {
+	for _, action := range []string{"dedupe", "rollup"} {
+		_, err := FluentBit([][]byte{[]byte(fluentBitUnit)}, fbTarget(), []Rule{{ID: "r-x", ScopeValue: "a", Language: `\Ax\z`, Action: action}}, Enforce)
+		if err == nil || !strings.Contains(err.Error(), "cannot enforce "+action) {
+			t.Fatalf("%s: %v", action, err)
+		}
+		if _, err := FluentBit([][]byte{[]byte(fluentBitUnit)}, fbTarget(), []Rule{{ID: "r-x", ScopeValue: "a", Language: `\Ax\z`, Action: action}}, Shadow); err != nil {
+			t.Fatalf("%s in shadow mode only measures: %v", action, err)
+		}
+	}
 }

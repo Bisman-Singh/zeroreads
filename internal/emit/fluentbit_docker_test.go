@@ -62,6 +62,12 @@ type fbRecord struct {
 
 func runFluentBit(t *testing.T, cfg []byte, recs []record) ([]fbRecord, string) {
 	t.Helper()
+	return runFluentBitEnv(t, cfg, recs, nil)
+}
+
+// runFluentBitEnv runs Fluent Bit with extra environment variables (NAME=value).
+func runFluentBitEnv(t *testing.T, cfg []byte, recs []record, env []string) ([]fbRecord, string) {
+	t.Helper()
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "fb.yaml"), cfg, 0o644)
 	var in strings.Builder
@@ -86,7 +92,11 @@ func runFluentBit(t *testing.T, cfg []byte, recs []record) ([]fbRecord, string) 
 	// Fluent Bit exits at stdin EOF without draining rewrite_tag's emitter, so part of the raw copy
 	// would be lost (reproduced with the user config alone). stdin stays open until the whole raw
 	// copy is out, then closes so the rest flushes.
-	cmd := exec.Command("docker", "run", "-i", "--rm", "-v", dir+":/w", "fluent/fluent-bit:5.1.2", "-c", "/w/fb.yaml")
+	args := []string{"run", "-i", "--rm", "-v", dir + ":/w"}
+	for _, e := range env {
+		args = append(args, "-e", e)
+	}
+	cmd := exec.Command("docker", append(args, "fluent/fluent-bit:5.1.2", "-c", "/w/fb.yaml")...)
 	stdin, _ := cmd.StdinPipe()
 	stdout, _ := cmd.StdoutPipe()
 	var stderr strings.Builder
@@ -303,7 +313,7 @@ func TestFluentBitEnforcesExactly(t *testing.T) {
 }
 
 func TestFluentBitRefusesDedupe(t *testing.T) {
-	if _, err := FluentBit([][]byte{[]byte(fluentBitUserConfig)}, fluentBitTarget(), testRules, Enforce); err == nil || !strings.Contains(err.Error(), "deduplicate") {
+	if _, err := FluentBit([][]byte{[]byte(fluentBitUserConfig)}, fluentBitTarget(), testRules, Enforce); err == nil || !strings.Contains(err.Error(), "cannot enforce dedupe") {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -361,6 +371,33 @@ func TestFluentBitSeverityGuard(t *testing.T) {
 		m := re.FindAllStringSubmatch(metrics, -1)
 		if len(m) == 0 || m[len(m)-1][1] != strconv.Itoa(n) {
 			t.Fatalf("%s: counted %v, want %d (severe records must not be measured)", id, m, n)
+		}
+	}
+}
+
+// Fluent Bit expands ${NAME} anywhere in its configuration and has no escape for it: values from
+// the logs must reach it only as regex escapes. Found by the v1 audit.
+func TestFluentBitWritesDollarLiterally(t *testing.T) {
+	svc, text := "svc${SECRET}", "cost ${SECRET} x"
+	rules := []Rule{{ID: "r-dollar", ScopeAttr: "service.name", ScopeValue: svc, Language: `\A` + regexp.QuoteMeta(text) + `\z`, Action: "drop"}}
+	cfg, err := FluentBit([][]byte{[]byte(fluentBitUserConfig)}, fluentBitTarget(), rules, Enforce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(cfg), "${") {
+		t.Fatalf("the emitted configuration contains ${:\n%s", cfg)
+	}
+	recs := []record{{service: svc, text: text, ts: 1}, {service: "svcleaked", text: text, ts: 2}, {service: svc, text: "cost leaked x", ts: 3}}
+	out, _ := runFluentBitEnv(t, cfg, recs, []string{"SECRET=leaked"})
+	kept := map[[2]string]bool{}
+	for _, r := range out {
+		if r.stream == "app" {
+			kept[[2]string{r.service, r.text}] = true
+		}
+	}
+	for k, want := range map[[2]string]bool{{svc, text}: false, {"svcleaked", text}: true, {svc, "cost leaked x"}: true} {
+		if kept[k] != want {
+			t.Fatalf("%q: kept %v, want %v", k, kept[k], want)
 		}
 	}
 }

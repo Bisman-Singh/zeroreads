@@ -68,6 +68,8 @@ require (
 	go.opentelemetry.io/collector/client v1.67.0 // indirect
 	go.opentelemetry.io/collector/component/componentstatus v0.161.0 // indirect
 	go.opentelemetry.io/collector/config/configoptional v1.67.0 // indirect
+	go.opentelemetry.io/collector/confmap/provider/envprovider v1.67.0 // indirect
+	go.opentelemetry.io/collector/confmap/provider/yamlprovider v1.67.0 // indirect
 	go.opentelemetry.io/collector/connector v0.161.0 // indirect
 	go.opentelemetry.io/collector/connector/xconnector v0.161.0 // indirect
 	go.opentelemetry.io/collector/consumer v1.67.0 // indirect

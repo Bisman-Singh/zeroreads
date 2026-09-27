@@ -44,7 +44,7 @@ const PolicyRuntime = "policy-go/policy v1.12.1 with backend/teroscan v1.10.3"
 // policy is checked against the real policy-go engine on members of the rule's language and on
 // near misses; a policy the engine would apply to a different set of lines is left out.
 func Policies(rules []Rule, dir string) ([]byte, []PolicySkip, error) {
-	if err := CheckDisjoint(rules); err != nil {
+	if err := CheckRules(rules); err != nil {
 		return nil, nil, err
 	}
 	var pf policyFile

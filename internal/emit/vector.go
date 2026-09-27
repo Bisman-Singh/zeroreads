@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
-	"strconv"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -49,28 +48,27 @@ func VectorSampleThreshold(keep int) int64 {
 	return k.Div(k, big.NewInt(100)).Int64()
 }
 
-// vrlString quotes s as a VRL string literal. Only printable ASCII is accepted: VRL's escapes differ
-// from Go's, and scope values and rule IDs never need more.
+// vrlString quotes s as a VRL string literal that means s exactly. VRL reads {{ ... }} in a string
+// as a template, and Vector expands $NAME and ${NAME} anywhere in its configuration when
+// interpolation is on, where $$ is its escape but stays $$ when it is off. So { is escaped, and $
+// and every character outside printable ASCII are written as \u{...}, which VRL decodes after
+// interpolation in both cases.
 func vrlString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
 	for _, r := range s {
-		if r < 0x20 || r > 0x7e {
-			panic(fmt.Sprintf("emit: %q is not printable ASCII", s))
+		switch {
+		case r == '\\' || r == '"' || r == '{':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case r == '$' || r < 0x20 || r > 0x7e:
+			fmt.Fprintf(&b, `\u{%x}`, r)
+		default:
+			b.WriteRune(r)
 		}
 	}
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
-}
-
-func checkVRLSafe(rules []Rule) error {
-	for _, r := range rules {
-		for _, s := range []string{r.ID, r.ScopeValue} {
-			for _, c := range s {
-				if c < 0x20 || c > 0x7e {
-					return fmt.Errorf("emit: %q contains characters Vector output does not support", s)
-				}
-			}
-		}
-	}
-	return nil
+	b.WriteByte('"')
+	return b.String()
 }
 
 func (t VectorTarget) severityPaths() []string {
@@ -107,7 +105,7 @@ func (t VectorTarget) severityPaths() []string {
 func vrlField(k string) string {
 	for _, r := range k {
 		if !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
-			return strconv.Quote(k)
+			return vrlString(k)
 		}
 	}
 	return k
@@ -128,10 +126,7 @@ func (t VectorTarget) textPath(r Rule) (string, error) {
 // adds only the tagging and measurement branch; enforce mode also rewires every consumer of
 // t.After to read from the enforcement chain.
 func Vector(files [][]byte, t VectorTarget, rules []Rule, mode Mode) ([]byte, error) {
-	if err := CheckDisjoint(rules); err != nil {
-		return nil, err
-	}
-	if err := checkVRLSafe(rules); err != nil {
+	if err := CheckRules(rules); err != nil {
 		return nil, err
 	}
 	if t.ScopePath == "" || t.TextPath == "" || t.MeasureSink == nil {
@@ -240,7 +235,7 @@ func Vector(files [][]byte, t VectorTarget, rules []Rule, mode Mode) ([]byte, er
 			fmt.Fprintf(&enf, "if .sievelog_rule == %s { .sievelog_count = 1 }\n", vrlString(r.ID))
 			dedupe = append(dedupe, r.ID)
 		default:
-			return nil, fmt.Errorf("emit: rule %s: unknown action %q", r.ID, r.Action)
+			return nil, fmt.Errorf("emit: rule %s: Vector cannot enforce %s; re-run analyze for runtime vector", r.ID, r.Action)
 		}
 	}
 	transforms[vEnforce] = map[string]any{"type": "remap", "inputs": []any{vTag}, "source": enf.String(), "drop_on_abort": true}
