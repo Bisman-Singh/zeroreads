@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // summary renders a parsed query compactly so tests can compare it with an expected string.
@@ -159,5 +160,38 @@ func TestCanonical(t *testing.T) {
 		if Canonical(p[0]) == Canonical(p[1]) {
 			t.Fatalf("%q and %q must stay different", p[0], p[1])
 		}
+	}
+}
+
+// Query text comes from anyone who can save a dashboard. Found by the v1 audit: Canonical stripped
+// parentheses in quadratic time (5 s for 50,000 levels) and nothing bounded the text.
+func TestParseIsBounded(t *testing.T) {
+	half := MaxQueryBytes/2 - 16
+	for name, q := range map[string]string{
+		"parentheses":      strings.Repeat("(", half) + `{a="b"}` + strings.Repeat(")", half),
+		"aggregation":      "sum" + strings.Repeat("(", half-2) + `count_over_time({a="b"}[5m])` + strings.Repeat(")", half-2),
+		"unary":            strings.Repeat("-", MaxQueryBytes-8) + `1`,
+		"label filters":    `{a="b"} | ` + strings.Repeat("(", half/2) + `x="1"` + strings.Repeat(")", half/2),
+		"alternatives":     `{a="b"} |= "x"` + strings.Repeat(` or "x"`, MaxQueryBytes/8),
+		"binary operators": strings.Repeat(`count_over_time({a="b"}[1m]) + `, MaxQueryBytes/40) + `1`,
+	} {
+		if len(q) > MaxQueryBytes {
+			q = q[:MaxQueryBytes]
+		}
+		start := time.Now()
+		Parse(q)
+		Canonical(q)
+		if d := time.Since(start); d > 2*time.Second {
+			t.Fatalf("%s: %d bytes took %v", name, len(q), d)
+		}
+	}
+	if _, err := Parse(`{a="b"}` + strings.Repeat(" ", MaxQueryBytes)); err == nil {
+		t.Fatal("a query longer than the bound parsed")
+	}
+	if got := Canonical(`((({a="b"})))`); got != `{ a = "b" }` {
+		t.Fatalf("canonical %q", got)
+	}
+	if got := Canonical(`({a="b"}) or ({c="d"})`); got != `( { a = "b" } ) or ( { c = "d" } )` {
+		t.Fatalf("canonical %q", got)
 	}
 }

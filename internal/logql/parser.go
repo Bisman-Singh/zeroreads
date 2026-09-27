@@ -87,13 +87,21 @@ type Filter struct {
 	Value string
 }
 
+// MaxQueryBytes bounds the query text Parse and Canonical accept. Query text comes from anyone who
+// can run a query or save a dashboard; the bound keeps parsing time and stack depth small. A longer
+// query does not parse, so it counts as reading everything.
+const MaxQueryBytes = 256 << 10
+
 // Parse parses a LogQL query.
 func Parse(src string) (*Query, error) {
+	if len(src) > MaxQueryBytes {
+		return nil, fmt.Errorf("logql: query of %d bytes is longer than %d", len(src), MaxQueryBytes)
+	}
 	toks, err := lex(src)
 	if err != nil {
 		return nil, err
 	}
-	p := &parser{toks: toks, src: src}
+	p := &parser{toks: toks, src: src, closing: closingParens(toks)}
 	q := &Query{}
 	p.q = q
 	if err := p.expr(0); err != nil {
@@ -110,6 +118,7 @@ func Parse(src string) (*Query, error) {
 
 type parser struct {
 	src      string
+	closing  []int   // for each "(" token, the index of its ")"; -1 when unmatched
 	log      logSpan // the last log expression parsed inside a range aggregation
 	toks     []token
 	i        int
@@ -355,20 +364,24 @@ func (p *parser) vectorAgg() error {
 func (p *parser) isOp2(i int, s string) bool { return p.toks[i].kind == tOp && p.toks[i].text == s }
 
 // matching returns the index of the parenthesis closing the one at i.
-func (p *parser) matching(i int) int {
-	depth := 0
-	for j := i; j < len(p.toks); j++ {
+func (p *parser) matching(i int) int { return p.closing[i] }
+
+// closingParens maps each "(" token to the index of its ")", in one pass: -1 for any other token and
+// for an unmatched "(".
+func closingParens(toks []token) []int {
+	closing := make([]int, len(toks))
+	var open []int
+	for i, t := range toks {
+		closing[i] = -1
 		switch {
-		case p.isOp2(j, "("):
-			depth++
-		case p.isOp2(j, ")"):
-			depth--
-			if depth == 0 {
-				return j
-			}
+		case t.kind == tOp && t.text == "(":
+			open = append(open, i)
+		case t.kind == tOp && t.text == ")" && len(open) > 0:
+			closing[open[len(open)-1]] = i
+			open = open[:len(open)-1]
 		}
 	}
-	return -1
+	return closing
 }
 
 // groupingSpec parses an optional "by (...)" or "without (...)".
@@ -871,6 +884,9 @@ func (p *parser) labelFilterTerm() error {
 // quoting style, parentheses around the whole query and "offset <duration>" (added when a query is
 // split by time) are dropped. Queries that differ in anything else stay different.
 func Canonical(src string) string {
+	if len(src) > MaxQueryBytes {
+		return src
+	}
 	toks, err := lex(src)
 	if err != nil {
 		return src
@@ -891,25 +907,14 @@ func Canonical(src string) string {
 		}
 		kept = append(kept, t)
 	}
-	// Drop parentheses that wrap the whole query.
-	for len(kept) >= 2 && kept[0].kind == tOp && kept[0].text == "(" && kept[len(kept)-1].kind == tOp && kept[len(kept)-1].text == ")" {
-		depth, whole := 0, true
-		for i, t := range kept {
-			if t.kind == tOp && t.text == "(" {
-				depth++
-			} else if t.kind == tOp && t.text == ")" {
-				depth--
-				if depth == 0 && i != len(kept)-1 {
-					whole = false
-					break
-				}
-			}
-		}
-		if !whole {
-			break
-		}
-		kept = kept[1 : len(kept)-1]
+	// Drop parentheses that wrap the whole query: pairs whose opening token is the n-th from the start
+	// and whose closing token is the n-th from the end.
+	closing := closingParens(kept)
+	strip := 0
+	for strip < len(kept)/2 && closing[strip] == len(kept)-1-strip {
+		strip++
 	}
+	kept = kept[strip : len(kept)-strip]
 	var b strings.Builder
 	for i, t := range kept {
 		if i > 0 {
