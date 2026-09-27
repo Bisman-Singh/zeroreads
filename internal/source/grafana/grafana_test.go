@@ -217,18 +217,31 @@ func TestOrgFallbackAndAuth(t *testing.T) {
 
 // Credentials that cannot list orgs (Grafana 13.2.2 answers a service account token 403, "orgs:read")
 // read their own org and leave a gap for the others. Found by the v1 audit: the fallback was silent.
-// Any other failure is an error, and every page of orgs is read.
+// Any other failure is an error, and every page of orgs is read, whether pages are numbered from 0
+// (Grafana 13.2.2) or from 1.
 func TestOrgsListing(t *testing.T) {
 	status := http.StatusInternalServerError
-	pages := map[string][]any{}
+	firstPage := 0
+	total := 0
+	ignorePage := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/orgs":
-			if p, ok := pages[r.URL.Query().Get("page")]; ok && r.URL.Query().Get("perpage") == strconv.Itoa(orgsPerPage) {
-				json.NewEncoder(w).Encode(p)
+			if total == 0 {
+				http.Error(w, "refused", status)
 				return
 			}
-			http.Error(w, "refused", status)
+			per, _ := strconv.Atoi(r.URL.Query().Get("perpage"))
+			page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+			page = max(page-firstPage, 0)
+			if ignorePage {
+				page = 0
+			}
+			var out []any
+			for id := page*per + 1; id <= min((page+1)*per, total); id++ {
+				out = append(out, map[string]any{"id": id})
+			}
+			json.NewEncoder(w).Encode(append([]any{}, out...))
 		case "/api/org":
 			w.Write([]byte(`{"id":3}`))
 		}
@@ -243,14 +256,16 @@ func TestOrgsListing(t *testing.T) {
 	if err != nil || len(orgs) != 1 || orgs[0] != 3 || len(gaps) != 1 || gaps[0].Origin != "orgs" {
 		t.Fatalf("%v %v %+v", orgs, err, gaps)
 	}
-	var first []any
-	for i := 1; i <= orgsPerPage; i++ {
-		first = append(first, map[string]any{"id": i})
+	for _, c2 := range []struct{ first, total int }{{0, 2}, {1, 2}, {0, orgsPerPage}, {1, orgsPerPage}, {0, 2*orgsPerPage + 5}, {1, 2*orgsPerPage + 5}} {
+		firstPage, total = c2.first, c2.total
+		orgs, gaps, err := c.orgs(context.Background())
+		if err != nil || len(gaps) != 0 || len(orgs) != total || orgs[len(orgs)-1] != int64(total) {
+			t.Fatalf("pages from %d, %d orgs: got %d, %v %+v", c2.first, c2.total, len(orgs), err, gaps)
+		}
 	}
-	pages["1"], pages["2"] = first, []any{map[string]any{"id": 5000}}
-	orgs, gaps, err = c.orgs(context.Background())
-	if err != nil || len(gaps) != 0 || len(orgs) != orgsPerPage+1 || orgs[len(orgs)-1] != 5000 {
-		t.Fatalf("paging: %d orgs, %v %+v", len(orgs), err, gaps)
+	ignorePage, total = true, orgsPerPage
+	if _, _, err := c.orgs(context.Background()); err == nil {
+		t.Fatal("a server that ignores the page number was read as having one page")
 	}
 }
 

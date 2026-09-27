@@ -148,24 +148,40 @@ const orgsPerPage = 1000
 // token, which belongs to one org) are refused, read their own org only, and the other orgs stay
 // unknown, which is a gap.
 func (c *Client) orgs(ctx context.Context) ([]int64, []Gap, error) {
+	seen := map[int64]bool{}
 	var out []int64
-	for page := 1; ; page++ {
+	stalled := 0
+	// Grafana 13 numbers pages from 0 (page=1 is the second page); versions that number them from 1
+	// return the first page twice. Reading from 0 and skipping repeats is right for both.
+	for page := 0; ; page++ {
 		var batch []struct {
 			ID int64 `json:"id"`
 		}
 		err := c.do(ctx, 0, fmt.Sprintf("/api/orgs?perpage=%d&page=%d", orgsPerPage, page), &batch)
 		var he *HTTPError
-		if page == 1 && errors.As(err, &he) && (he.Status == http.StatusUnauthorized || he.Status == http.StatusForbidden) {
+		if page == 0 && errors.As(err, &he) && (he.Status == http.StatusUnauthorized || he.Status == http.StatusForbidden) {
 			return c.ownOrg(ctx, he)
 		}
 		if err != nil {
 			return nil, nil, err
 		}
+		added := 0
 		for _, o := range batch {
-			out = append(out, o.ID)
+			if !seen[o.ID] {
+				seen[o.ID] = true
+				out = append(out, o.ID)
+				added++
+			}
 		}
 		if len(batch) < orgsPerPage {
 			break
+		}
+		if added == 0 {
+			if stalled++; stalled == 2 {
+				return nil, nil, fmt.Errorf("grafana: /api/orgs returns the same page whatever the page number, so orgs beyond the first %d are unknown", len(out))
+			}
+		} else {
+			stalled = 0
 		}
 	}
 	if len(out) == 0 {
