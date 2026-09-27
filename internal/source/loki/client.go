@@ -4,6 +4,7 @@ package loki
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	crand "crypto/rand"
 	"crypto/tls"
@@ -30,9 +31,19 @@ type Client struct {
 	Password    string
 	BearerToken string
 	HTTP        *http.Client
+	// MaxPage is the largest page asked for when one timestamp holds more lines than a normal page;
+	// 0 means 1<<20.
+	MaxPage int
+	// Chunk bounds the time range of one request made by EachWindow, keeping each under Loki's
+	// query length limit; 0 means 24h.
+	Chunk time.Duration
 
 	untagged bool // send without Tag (only for the query-log liveness marker)
 }
+
+func (c *Client) maxPage() int { return cmp.Or(c.MaxPage, 1<<20) }
+
+func (c *Client) chunk() time.Duration { return cmp.Or(c.Chunk, 24*time.Hour) }
 
 // Tag is sent as X-Query-Tags on every request, so the analyzer's own queries can be told apart in
 // Loki's query log and never counted as usage.
@@ -128,28 +139,22 @@ type HTTPError struct {
 
 func (e *HTTPError) Error() string { return fmt.Sprintf("loki: HTTP %d: %s", e.Status, e.Body) }
 
-// ErrTruncated means a single timestamp holds more lines than MaxLimit, so they cannot all be read.
+// ErrTruncated means a single timestamp holds more lines than the largest page, so they cannot all
+// be read.
 var ErrTruncated = errors.New("loki: more lines share one timestamp than the largest page allowed")
 
-// MaxLimit is the largest page QueryRange asks for when one timestamp needs it.
-var MaxLimit = 1 << 20
-
-// Chunk bounds the time range of one QueryRange call made by QueryWindow, keeping each request
-// under Loki's query length limits.
-var Chunk = 24 * time.Hour
-
-// QueryWindow reads [start, end) in consecutive chunks of at most Chunk.
+// QueryWindow reads [start, end) in consecutive chunks of at most c.Chunk.
 func (c *Client) QueryWindow(ctx context.Context, query string, start, end time.Time, pageSize int) ([]Entry, error) {
 	var out []Entry
 	err := c.EachWindow(ctx, query, start, end, pageSize, func(e Entry) error { out = append(out, e); return nil })
 	return out, err
 }
 
-// EachWindow calls fn for every line of [start, end), oldest first, in chunks of at most Chunk,
+// EachWindow calls fn for every line of [start, end), oldest first, in chunks of at most c.Chunk,
 // without holding more than one page in memory.
 func (c *Client) EachWindow(ctx context.Context, query string, start, end time.Time, pageSize int, fn func(Entry) error) error {
-	for s := start; s.Before(end); s = s.Add(Chunk) {
-		e := s.Add(Chunk)
+	for s := start; s.Before(end); s = s.Add(c.chunk()) {
+		e := s.Add(c.chunk())
 		if e.After(end) {
 			e = end
 		}
@@ -210,7 +215,7 @@ func (c *Client) Each(ctx context.Context, query string, start, end time.Time, p
 		}
 		// The whole page is one timestamp: read that nanosecond alone until it fits.
 		for limit := pageSize * 2; ; limit *= 2 {
-			if limit > MaxLimit {
+			if limit > c.maxPage() {
 				return ErrTruncated
 			}
 			all, err := c.page(ctx, query, last, last.Add(time.Nanosecond), limit)
@@ -243,6 +248,13 @@ func (c *Client) page(ctx context.Context, query string, start, end time.Time, l
 	page, err := decodeStreams(body)
 	if err != nil {
 		return nil, err
+	}
+	// A line outside the requested range (a misbehaving proxy or cache) would move the paging cursor
+	// backwards and repeat pages forever, or count lines twice.
+	for _, e := range page {
+		if e.TS.Before(start) || !e.TS.Before(end) {
+			return nil, fmt.Errorf("loki: a line at %s is outside the requested range %s..%s", e.TS.Format(time.RFC3339Nano), start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano))
+		}
 	}
 	sort.SliceStable(page, func(i, j int) bool { return page[i].TS.Before(page[j].TS) })
 	return page, nil

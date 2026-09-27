@@ -41,8 +41,8 @@ type Verdict struct {
 	Reason   string
 }
 
-// Limit bounds each automaton question. Exceeding it yields "used".
-var Limit = automaton.DefaultLimit
+// limit bounds each automaton question. Exceeding it yields "used".
+const limit = automaton.DefaultLimit
 
 // Evaluate decides one selection against one rule.
 func Evaluate(sel logql.Selection, r Rule) Verdict {
@@ -70,7 +70,7 @@ func Evaluate(sel logql.Selection, r Rule) Verdict {
 		terms = append(terms, t...)
 		ignored = append(ignored, why...)
 	}
-	w, found, err := automaton.Witness(terms, Limit)
+	w, found, err := automaton.Witness(terms, limit)
 	switch {
 	case errors.Is(err, automaton.ErrLimit):
 		v.Used = true
@@ -210,8 +210,8 @@ func exactPattern(f logql.Filter) (*automaton.Pattern, bool, string) {
 }
 
 func equivalent(a, b *automaton.Pattern) bool {
-	ab, _, err1 := automaton.Subset(a, b, Limit)
-	ba, _, err2 := automaton.Subset(b, a, Limit)
+	ab, _, err1 := automaton.Subset(a, b, limit)
+	ba, _, err2 := automaton.Subset(b, a, limit)
 	return err1 == nil && err2 == nil && ab && ba
 }
 
@@ -307,7 +307,7 @@ func Covers(sel logql.Selection, r Rule) bool {
 				if !ok {
 					return false
 				}
-				if _, found, err := automaton.Intersects(r.Language, p, Limit); err != nil || found {
+				if _, found, err := automaton.Intersects(r.Language, p, limit); err != nil || found {
 					return false
 				}
 			}
@@ -325,7 +325,7 @@ func Covers(sel logql.Selection, r Rule) bool {
 		if err != nil {
 			return false
 		}
-		if sub, _, err := automaton.Subset(r.Language, kept, Limit); err != nil || !sub {
+		if sub, _, err := automaton.Subset(r.Language, kept, limit); err != nil || !sub {
 			return false
 		}
 	}

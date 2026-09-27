@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -144,9 +145,6 @@ func TestHTTPErrorsSurface(t *testing.T) {
 }
 
 func TestQueryRangeTruncatedAtCap(t *testing.T) {
-	old := MaxLimit
-	MaxLimit = 40
-	defer func() { MaxLimit = old }()
 	var lines []fakeLine
 	for i := 0; i < 100; i++ {
 		lines = append(lines, fakeLine{stream: "a", ts: 100, line: fmt.Sprint(i)})
@@ -154,16 +152,13 @@ func TestQueryRangeTruncatedAtCap(t *testing.T) {
 	calls := 0
 	srv := fakeLoki(t, lines, &calls)
 	defer srv.Close()
-	c := &Client{Base: srv.URL}
+	c := &Client{Base: srv.URL, MaxPage: 40}
 	if _, err := c.QueryRange(context.Background(), `{s="a"}`, time.Unix(0, 0), time.Unix(0, 1000), 5); err != ErrTruncated {
 		t.Fatalf("got %v, want ErrTruncated", err)
 	}
 }
 
 func TestQueryWindowChunks(t *testing.T) {
-	old := Chunk
-	Chunk = 100
-	defer func() { Chunk = old }()
 	var lines []fakeLine
 	for i := int64(0); i < 1000; i += 3 {
 		lines = append(lines, fakeLine{stream: "a", ts: i, line: fmt.Sprint(i)})
@@ -171,7 +166,7 @@ func TestQueryWindowChunks(t *testing.T) {
 	calls := 0
 	srv := fakeLoki(t, lines, &calls)
 	defer srv.Close()
-	c := &Client{Base: srv.URL}
+	c := &Client{Base: srv.URL, Chunk: 100}
 	got, err := c.QueryWindow(context.Background(), `{s="a"}`, time.Unix(0, 0), time.Unix(0, 1000), 7)
 	if err != nil {
 		t.Fatal(err)
@@ -370,5 +365,32 @@ func TestQueryLogKeepsQueriesThatReadMoreThanTheirHost(t *testing.T) {
 	want := map[string]int{host: 2, `{a="b"} |= "x"`: 1, `{a="b"}`: 1, `sum(count_over_time({a="b"} |= "x" |= "y" [5m]))`: 1}
 	if !maps.Equal(got, want) {
 		t.Fatalf("got %v\nwant %v", got, want)
+	}
+}
+
+// A proxy or cache that answers with lines outside the requested range must not send the paging
+// cursor backwards. Found by the v1 audit: nothing checked, and such a page repeated forever.
+func TestEachRefusesLinesOutsideTheRange(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var vals [][2]string
+		for i := 0; i < 5; i++ {
+			vals = append(vals, [2]string{"50", "stale"}) // always the same old page
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "success", "data": map[string]any{"resultType": "streams",
+			"result": []any{map[string]any{"stream": map[string]string{"s": "a"}, "values": vals}}}})
+	}))
+	defer srv.Close()
+	done := make(chan error, 1)
+	go func() {
+		_, err := (&Client{Base: srv.URL}).QueryRange(context.Background(), `{s="a"}`, time.Unix(0, 100), time.Unix(0, 1000), 5)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "outside the requested range") {
+			t.Fatalf("got %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("paging did not stop")
 	}
 }
