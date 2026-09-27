@@ -3,6 +3,7 @@ package logql
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -57,6 +58,15 @@ type Selection struct {
 	// NoRollups is true when a stage keeps only lines without a sievelog rollup rule
 	// (| sievelog_rule=""), so the selection reads no rollup record.
 	NoRollups bool
+}
+
+// Same reports whether two selections read the same lines in the same way.
+func (s Selection) Same(o Selection) bool {
+	return s.Counting == o.Counting && s.Rewritten == o.Rewritten && s.NoRollups == o.NoRollups &&
+		slices.Equal(s.Matchers, o.Matchers) &&
+		slices.EqualFunc(s.Stages, o.Stages, func(a, b Stage) bool {
+			return a.Negative == b.Negative && slices.Equal(a.Alternatives, b.Alternatives)
+		})
 }
 
 // Matcher is one stream selector matcher.

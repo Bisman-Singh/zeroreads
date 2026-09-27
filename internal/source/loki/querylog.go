@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -56,179 +58,212 @@ type Result struct {
 	Tails, Patterns int
 }
 
+// queryLogLines selects the three kinds of query-log line: metrics.go lines are range and instant
+// queries; live tails and pattern requests are logged elsewhere: "starting to tail logs" by the
+// querier, and the frontend's query stats line (frontend.query_stats_enabled) for
+// /loki/api/v1/patterns.
+const queryLogLines = ` |~ "caller=metrics\\.go|starting to tail logs|path=/loki/api/v1/patterns "`
+
 // Read collects executed queries between start and end. Queries the analyzer itself sent (tagged
 // with Tag) are excluded.
 func (q *QueryLog) Read(ctx context.Context, start, end time.Time) (Result, error) {
-	// metrics.go lines are range and instant queries; live tails and pattern requests are logged
-	// elsewhere: "starting to tail logs" by the querier, and the frontend's query stats line
-	// (frontend.query_stats_enabled) for /loki/api/v1/patterns.
-	logQuery := q.Selector + ` |~ "caller=metrics\\.go|starting to tail logs|path=/loki/api/v1/patterns "`
-	var res Result
-	other := map[string]*ExecutedQuery{} // tails and pattern requests: logged once each, by one component
-	record := func(byQuery map[string]*ExecutedQuery, query, typ, comp string, ts time.Time) {
-		eq := byQuery[query]
-		if eq == nil {
-			eq = &ExecutedQuery{Query: query, Type: typ, First: ts, Component: comp}
-			byQuery[query] = eq
-		}
-		eq.Count++
-		if ts.Before(eq.First) {
-			eq.First = ts
-		}
-		if ts.After(eq.Last) {
-			eq.Last = ts
-		}
-	}
 	// Executions are folded per component as they stream in: a query log can hold millions of lines.
-	byComponent := map[string]map[string]*ExecutedQuery{}
-	err := q.Logs.EachWindow(ctx, logQuery, start, end, 5000, func(e Entry) error {
-		res.Lines++
-		m, err := logfmt.Parse(e.Line)
-		if err != nil {
-			res.Unparsed++
-			return nil
-		}
-		switch {
-		case m["msg"] == "starting to tail logs" && m["selectors"] != "":
-			if res.Oldest.IsZero() || e.TS.Before(res.Oldest) {
-				res.Oldest = e.TS
-			}
-			if strings.Contains(m["selectors"], probePrefix) {
-				return nil
-			}
-			res.Tails++
-			record(other, m["selectors"], "tail", "tail", e.TS) // a person watching lines arrive
-			return nil
-		case m["path"] == "/loki/api/v1/patterns" && m["param_query"] != "":
-			if res.Oldest.IsZero() || e.TS.Before(res.Oldest) {
-				res.Oldest = e.TS
-			}
-			if strings.Contains(m["param_query"], probePrefix) {
-				return nil
-			}
-			res.Patterns++
-			record(other, m["param_query"], "patterns", "patterns", e.TS) // pattern counts change with the lines
-			return nil
-		}
-		if !strings.HasPrefix(m["caller"], "metrics.go") || m["query"] == "" {
-			return nil
-		}
-		if res.Oldest.IsZero() || e.TS.Before(res.Oldest) {
-			res.Oldest = e.TS
-		}
-		if isOwnQuery(m["source"]) || strings.Contains(m["query"], probePrefix) {
-			return nil // the analyzer's own reads and liveness markers are not usage
-		}
-		switch m["query_type"] {
-		case "labels", "series", "stats":
-			// These read the index, never a line: label names and values, series label sets and size
-			// estimates. Removal changes them only by emptying a stream, which analysis checks
-			// directly. They carry no query tags, so the analyzer's own cannot be told apart anyway.
-			res.Metadata++
-			return nil
-		}
-		comp := m["component"]
-		byQuery := byComponent[comp]
-		if byQuery == nil {
-			byQuery = map[string]*ExecutedQuery{}
-			byComponent[comp] = byQuery
-		}
-		eq := byQuery[m["query"]]
-		if eq == nil {
-			eq = &ExecutedQuery{Query: m["query"], Type: m["query_type"], First: e.TS, Component: comp}
-			byQuery[m["query"]] = eq
-		}
-		eq.Count++
-		if e.TS.Before(eq.First) {
-			eq.First = e.TS
-		}
-		if e.TS.After(eq.Last) {
-			eq.Last = e.TS
-		}
-		if src := m["source"]; src != "" && !contains(eq.Sources, src) {
-			eq.Sources = append(eq.Sources, src)
-		}
-		return nil
-	})
-	if err != nil {
+	r := &logReader{byComponent: map[string]executions{}, other: executions{}}
+	if err := q.Logs.EachWindow(ctx, q.Selector+queryLogLines, start, end, 5000, r.line); err != nil {
 		return Result{}, err
 	}
-	// The frontend logs every query once; queriers log sub-queries. Prefer the frontend when present.
-	// Every component counts. The frontend logs each query once, as sent; queriers log it again split
-	// by time (with an offset) and the ruler logs its own evaluations re-formatted. A line whose
-	// canonical form matches a frontend query adds to that query; anything else is its own reader:
-	// a query that bypassed the frontend is still a query.
-	byQuery := map[string]*ExecutedQuery{}
-	canon := map[string]string{} // canonical form -> key in byQuery
-	merge := func(k string, eq *ExecutedQuery) {
-		c := logql.Canonical(k)
-		if key, ok := canon[c]; ok {
-			prev := byQuery[key]
-			prev.Count += eq.Count
-			if eq.First.Before(prev.First) {
-				prev.First = eq.First
-			}
-			if eq.Last.After(prev.Last) {
-				prev.Last = eq.Last
-			}
-			return
-		}
-		canon[c] = k
-		byQuery[k] = eq
+	return r.result(), nil
+}
+
+// executions are the executions of each distinct query text.
+type executions map[string]*ExecutedQuery
+
+// add records one execution of query at ts.
+func (x executions) add(query, typ, component string, ts time.Time) *ExecutedQuery {
+	eq := x[query]
+	if eq == nil {
+		eq = &ExecutedQuery{Query: query, Type: typ, First: ts, Last: ts, Component: component}
+		x[query] = eq
 	}
+	eq.Count++
+	eq.absorbTime(ts, ts)
+	return eq
+}
+
+func (eq *ExecutedQuery) absorbTime(first, last time.Time) {
+	if first.Before(eq.First) {
+		eq.First = first
+	}
+	if last.After(eq.Last) {
+		eq.Last = last
+	}
+}
+
+// logReader classifies query-log lines as they stream in.
+type logReader struct {
+	res         Result
+	byComponent map[string]executions // range and instant queries, by the component that logged them
+	other       executions            // tails and pattern requests: logged once each, by one component
+}
+
+func (r *logReader) line(e Entry) error {
+	r.res.Lines++
+	m, err := logfmt.Parse(e.Line)
+	if err != nil {
+		r.res.Unparsed++
+		return nil
+	}
+	switch {
+	case m["msg"] == "starting to tail logs" && m["selectors"] != "":
+		r.seen(e.TS)
+		if !strings.Contains(m["selectors"], probePrefix) {
+			r.res.Tails++
+			r.other.add(m["selectors"], "tail", "tail", e.TS) // a person watching lines arrive
+		}
+	case m["path"] == "/loki/api/v1/patterns" && m["param_query"] != "":
+		r.seen(e.TS)
+		if !strings.Contains(m["param_query"], probePrefix) {
+			r.res.Patterns++
+			r.other.add(m["param_query"], "patterns", "patterns", e.TS) // pattern counts change with the lines
+		}
+	case strings.HasPrefix(m["caller"], "metrics.go") && m["query"] != "":
+		r.seen(e.TS)
+		r.query(m, e.TS)
+	}
+	return nil
+}
+
+// seen extends how far back the query log is known to reach.
+func (r *logReader) seen(ts time.Time) {
+	if r.res.Oldest.IsZero() || ts.Before(r.res.Oldest) {
+		r.res.Oldest = ts
+	}
+}
+
+// query records one range or instant query line.
+func (r *logReader) query(m map[string]string, ts time.Time) {
+	if isOwnQuery(m["source"]) || strings.Contains(m["query"], probePrefix) {
+		return // the analyzer's own reads and liveness markers are not usage
+	}
+	switch m["query_type"] {
+	case "labels", "series", "stats":
+		// These read the index, never a line: label names and values, series label sets and size
+		// estimates. Removal changes them only by emptying a stream, which analysis checks
+		// directly. They carry no query tags, so the analyzer's own cannot be told apart anyway.
+		r.res.Metadata++
+		return
+	}
+	comp := m["component"]
+	if r.byComponent[comp] == nil {
+		r.byComponent[comp] = executions{}
+	}
+	eq := r.byComponent[comp].add(m["query"], m["query_type"], comp, ts)
+	if src := m["source"]; src != "" && !slices.Contains(eq.Sources, src) {
+		eq.Sources = append(eq.Sources, src)
+	}
+}
+
+// result folds every component's executions into distinct queries. The frontend logs each query
+// once, as sent; queriers log it again split by time (with an offset) and the ruler logs its own
+// evaluations re-formatted. A line whose canonical form matches a frontend query adds to that
+// query, and so does a leg of one; anything else is its own reader: a query that bypassed the
+// frontend is still a query.
+func (r *logReader) result() Result {
+	res := r.res
 	res.Component = "querier"
-	if fe, ok := byComponent["frontend"]; ok {
-		res.Component = "frontend"
-		for k, eq := range fe {
-			merge(k, eq)
-		}
-	}
-	var comps []string
-	for comp := range byComponent {
-		if comp != "frontend" {
-			comps = append(comps, comp)
-		}
-	}
-	sort.Strings(comps)
-	// The frontend splits a query into legs (each side of a binary operation, each time range) and
-	// queriers log every leg. A leg of a frontend query executed around the same time is part of that
-	// execution, not a query of its own: someone who ran it alone went through the frontend too.
-	type fq struct {
-		canon       string
-		first, last time.Time
-		key         string
-	}
-	var fronts []fq
-	for k, eq := range byComponent["frontend"] {
-		fronts = append(fronts, fq{" " + logql.Canonical(k) + " ", eq.First, eq.Last, k})
-	}
-	const near = 2 * time.Minute
-	legOf := func(k string, eq *ExecutedQuery) string {
-		c := " " + logql.Canonical(k) + " "
-		for _, f := range fronts {
-			if strings.Contains(f.canon, c) && !eq.First.Before(f.first.Add(-near)) && !eq.Last.After(f.last.Add(near)) {
-				return f.key
-			}
-		}
-		return ""
-	}
-	for _, comp := range comps {
-		for k, eq := range byComponent[comp] {
-			if parent := legOf(k, eq); parent != "" {
-				byQuery[canon[logql.Canonical(parent)]].Count += eq.Count
+	distinct := map[string]*ExecutedQuery{} // by canonical form
+	merge := func(x executions) {
+		for _, k := range slices.Sorted(maps.Keys(x)) {
+			c := logql.Canonical(k)
+			if prev, ok := distinct[c]; ok {
+				prev.Count += x[k].Count
+				prev.absorbTime(x[k].First, x[k].Last)
 				continue
 			}
-			merge(k, eq)
+			distinct[c] = x[k]
 		}
 	}
-	for k, eq := range other {
-		merge(k, eq)
+	frontend, hasFrontend := r.byComponent["frontend"]
+	if hasFrontend {
+		res.Component = "frontend"
+		merge(frontend)
 	}
-	for _, eq := range byQuery {
+	fronts := frontendQueries(frontend)
+	for _, comp := range slices.Sorted(maps.Keys(r.byComponent)) {
+		if comp == "frontend" {
+			continue
+		}
+		own := executions{}
+		for k, eq := range r.byComponent[comp] {
+			if parent, ok := legOf(fronts, k, eq); ok {
+				distinct[parent].Count += eq.Count
+				continue
+			}
+			own[k] = eq
+		}
+		merge(own)
+	}
+	merge(r.other)
+	for _, eq := range distinct {
 		res.Queries = append(res.Queries, *eq)
 	}
 	sort.Slice(res.Queries, func(i, j int) bool { return res.Queries[i].Query < res.Queries[j].Query })
-	return res, nil
+	return res
+}
+
+// frontendQuery is a query as the frontend logged it, kept to recognise its legs.
+type frontendQuery struct {
+	canonical   string
+	padded      string // canonical form with a space at each end, so only whole tokens match
+	selections  []logql.Selection
+	first, last time.Time
+}
+
+func frontendQueries(x executions) []frontendQuery {
+	var out []frontendQuery
+	for _, k := range slices.Sorted(maps.Keys(x)) {
+		q, err := logql.Parse(k)
+		if err != nil {
+			continue // it cannot be shown to contain any leg
+		}
+		c := logql.Canonical(k)
+		out = append(out, frontendQuery{canonical: c, padded: " " + c + " ", selections: q.Selections, first: x[k].First, last: x[k].Last})
+	}
+	return out
+}
+
+// legWindow is how far from its frontend query a leg can be logged: legs run while the query runs.
+const legWindow = 2 * time.Minute
+
+// legOf returns the canonical form of the frontend query that query k is a leg of. The frontend
+// splits a query into legs (each side of a binary operation, each time range) and queriers log
+// every leg; a leg executed around the same time is part of that execution, not a query of its
+// own: someone who ran it alone went through the frontend too. A leg must appear in the query's
+// text and read nothing the query does not read (each of its selections is one of the query's),
+// so folding it can never hide a reader.
+func legOf(fronts []frontendQuery, k string, eq *ExecutedQuery) (string, bool) {
+	leg, err := logql.Parse(k)
+	if err != nil || len(leg.Selections) == 0 {
+		return "", false
+	}
+	padded := " " + logql.Canonical(k) + " "
+	for _, f := range fronts {
+		if strings.Contains(f.padded, padded) && !eq.First.Before(f.first.Add(-legWindow)) && !eq.Last.After(f.last.Add(legWindow)) &&
+			selectionsWithin(leg.Selections, f.selections) {
+			return f.canonical, true
+		}
+	}
+	return "", false
+}
+
+// selectionsWithin reports whether every selection in leg is one of query's.
+func selectionsWithin(leg, query []logql.Selection) bool {
+	for _, l := range leg {
+		if !slices.ContainsFunc(query, l.Same) {
+			return false
+		}
+	}
+	return true
 }
 
 // probePrefix starts every liveness marker. The marker selects a label no stream carries, so it
@@ -237,15 +272,6 @@ const probePrefix = "sievelog_probe_"
 
 // isOwnQuery recognises the analyzer's tag. Loki lower-cases query-tag values in its log line.
 func isOwnQuery(source string) bool { return strings.EqualFold(source, "sievelog") }
-
-func contains(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
-}
 
 // ProveLive sends a unique marker query to target and waits until it shows up in the query log.
 // It proves the query log is being written and is readable, end to end. The marker is sent without

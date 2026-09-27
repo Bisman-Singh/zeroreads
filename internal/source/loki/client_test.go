@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
@@ -334,5 +335,40 @@ func TestRulesOnlyTrustTheRulersOwn404(t *testing.T) {
 		if !empty && err == nil {
 			t.Fatalf("%q: read as no rules", body)
 		}
+	}
+}
+
+// A querier line is folded into a frontend query only when the frontend query reads everything it
+// reads. Found by the v1 audit: {a="b"} |= "x" appears, token for token, inside
+// {a="b"} |= "x" |= "y", so it was folded into it and disappeared as a reader, although it reads
+// lines without "y".
+func TestQueryLogKeepsQueriesThatReadMoreThanTheirHost(t *testing.T) {
+	now := time.Now().Add(-10 * time.Minute)
+	at := func(d time.Duration) int64 { return now.Add(d).UnixNano() }
+	line := func(comp, typ, query string) string {
+		return `level=info caller=metrics.go:237 component=` + comp + ` org_id=fake query_type=` + typ + ` query=` + strconv.Quote(query)
+	}
+	host := `{a="b"} |= "x" |= "y"`
+	lines := []fakeLine{
+		{"loki", at(0), line("frontend", "filter", host)},
+		{"loki", at(time.Second), line("querier", "filter", `{a="b"} |= "x"`)},
+		{"loki", at(2 * time.Second), line("querier", "filter", `{a="b"}`)},
+		{"loki", at(3 * time.Second), line("querier", "filter", host+` offset 1m0s`)},
+		{"loki", at(4 * time.Second), line("querier", "metric", `sum(count_over_time({a="b"} |= "x" |= "y" [5m]))`)},
+	}
+	calls := 0
+	srv := fakeLoki(t, lines, &calls)
+	defer srv.Close()
+	res, err := (&QueryLog{Logs: &Client{Base: srv.URL}, Selector: `{s="loki"}`}).Read(context.Background(), now.Add(-time.Minute), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, q := range res.Queries {
+		got[q.Query] = q.Count
+	}
+	want := map[string]int{host: 2, `{a="b"} |= "x"`: 1, `{a="b"}`: 1, `sum(count_over_time({a="b"} |= "x" |= "y" [5m]))`: 1}
+	if !maps.Equal(got, want) {
+		t.Fatalf("got %v\nwant %v", got, want)
 	}
 }
