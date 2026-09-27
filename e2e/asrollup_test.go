@@ -159,6 +159,37 @@ policy:
 	}
 	t.Logf("before enforcement: every rewritten query returns the original result")
 
+	// One query rewritten for every rolled-up rule at once, and two rules in different services with
+	// the same language under one selector spanning both: each line is still counted exactly once.
+	var rolledUp []rewrite.Rule
+	for _, r := range rf.Rules {
+		if r.Action == "rollup" {
+			rolledUp = append(rolledUp, rewrite.Rule{ID: r.ID, Language: r.Language, Scope: map[string]string{"service_name": r.Service}})
+		}
+	}
+	twins := []rewrite.Rule{
+		{ID: cacheRule.ID, Language: cacheRule.Language, Scope: map[string]string{"service_name": "checkout"}},
+		{ID: "r-000000000000", Language: cacheRule.Language, Scope: map[string]string{"service_name": "auth"}},
+	}
+	nsSel := `{k8s_namespace_name="` + nsA + `"}`
+	for _, c := range []struct {
+		expr  string
+		rules []rewrite.Rule
+	}{
+		{`sum(count_over_time({service_name="checkout", k8s_namespace_name="` + nsA + `"} != "/healthz" [30m]))`, rolledUp},
+		{`sum(count_over_time(` + nsSel + ` |= "DEBUG cache" [30m]))`, twins},
+		{`sum by (service_name) (count_over_time(` + nsSel + ` [30m]))`, twins},
+	} {
+		res, err := rewrite.Query(c.expr, c.rules, map[string]bool{"service_name": true, "k8s_namespace_name": true})
+		if err != nil || !res.Changed || len(res.Rules) != len(c.rules) {
+			t.Fatalf("rewrite %s: %v %+v", c.expr, err, res)
+		}
+		if a, b := instant(t, lc, c.expr, now), instant(t, lc, res.Expr, now); a != b || a == "" {
+			t.Fatalf("before enforcement, %d rules:\n  original %s = %s\n  rewritten %s = %s", len(c.rules), c.expr, a, res.Expr, b)
+		}
+	}
+	t.Logf("before enforcement: a query rewritten for %d rolled-up rules, and for two services sharing a language, returns the original result", len(rolledUp))
+
 	// 3. Apply the rewrites; the stored objects now hold the rewritten queries.
 	rwDir := filepath.Join(e.work, "rollup-rewrites")
 	out, code = e.run(e.root, e.bin, "rewrite", "-c", cfgPath, "-rules", rulesPath, "-o", rwDir, "-apply")

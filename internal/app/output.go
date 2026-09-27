@@ -304,6 +304,10 @@ func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time, opt Ve
 		}
 		res.Drift = d
 	}
+	languages := make(map[string]string, len(rf.Rules))
+	for _, r := range rf.Rules {
+		languages[r.ID] = r.Language
+	}
 	for _, r := range rf.Rules {
 		reasons := append([]string(nil), global...)
 		lang, err := automaton.Compile(r.Language)
@@ -325,7 +329,7 @@ func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time, opt Ve
 				continue
 			}
 			for _, sel := range p.sel {
-				if r.Action == "rollup" && rewrite.Compensated(p.parsed, sel, r.ID, r.Language) {
+				if r.Action == "rollup" && rewrite.Compensated(p.parsed, sel, r.ID, languages) {
 					continue
 				}
 				if r.Action == "rollup" && rewrite.ReadsRollups(sel, r.ID, ur.Scope) {

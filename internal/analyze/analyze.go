@@ -195,6 +195,10 @@ func Decide(cands []Candidate, queries []UsageQuery, scoped []ScopedReader, gaps
 			rollup = true
 		}
 	}
+	languages := make(map[string]string, len(cands))
+	for _, c := range cands {
+		languages[c.ID()] = c.Language
+	}
 	var out []Recommendation
 	for _, c := range cands {
 		rec := Recommendation{ID: c.ID(), Candidate: c, Action: "none"}
@@ -210,7 +214,7 @@ func Decide(cands []Candidate, queries []UsageQuery, scoped []ScopedReader, gaps
 				continue
 			}
 			for _, sel := range p.sel {
-				if rewrite.Compensated(p.parsed, sel, rec.ID, c.Language) {
+				if rewrite.Compensated(p.parsed, sel, rec.ID, languages) {
 					// A sievelog rewrite's raw-line term: summed with the rollup counts, it keeps the
 					// query's numbers only if this rule is rolled up.
 					rec.Readers = append(rec.Readers, Reader{Source: p.q.Source, Origin: p.q.Origin, Expr: p.q.Expr, Counting: true, Compensated: true,
@@ -371,67 +375,113 @@ func Decide(cands []Candidate, queries []UsageQuery, scoped []ScopedReader, gaps
 // combined result for each of them. A rule whose proof fails loses its rollup, which can change
 // the set for other queries, so it repeats until nothing changes.
 func combineRewrites(recs []Recommendation) {
+	languages := make(map[string]string, len(recs))
+	for _, r := range recs {
+		languages[r.ID] = r.Candidate.Language
+	}
 	for changed := true; changed; {
 		changed = false
-		type key struct {
-			store, url, path, old string
-			org                   int64
-		}
-		users := map[key][]int{}
-		var keys []key
-		for i, r := range recs {
-			if r.Action != "rollup" {
-				continue
-			}
-			for _, rw := range r.Rewrites {
-				if rw.Store == "" {
-					continue // an executed query covered by a stored one
-				}
-				k := key{rw.Store, rw.StoreURL, rw.Path, rw.Old, rw.Org}
-				if _, ok := users[k]; !ok {
-					keys = append(keys, k)
-				}
-				users[k] = append(users[k], i)
-			}
-		}
-		for _, k := range keys {
-			idx := users[k]
-			var rules []rewrite.Rule
-			for _, i := range idx {
-				c := recs[i].Candidate
-				rules = append(rules, rewrite.Rule{ID: recs[i].ID, Language: c.Language, Scope: c.Scope})
-			}
-			res, err := rewrite.Query(k.old, rules, recs[idx[0]].Candidate.StreamLabels)
-			var nq *logql.Query
-			if err == nil {
-				nq, err = logql.Parse(res.Expr)
-			}
-			for _, i := range idx {
-				ok := err == nil && res.Changed
-				if ok {
-					lang, _ := automaton.Compile(recs[i].Candidate.Language)
-					ur := usage.Rule{ID: recs[i].ID, Scope: recs[i].Candidate.Scope, Language: lang}
-					for _, sel := range nq.Selections {
-						if usage.Evaluate(sel, ur).Used && !rewrite.Compensated(nq, sel, recs[i].ID, recs[i].Candidate.Language) {
-							ok = false
-						}
-					}
-				}
-				if !ok {
-					recs[i].Action, recs[i].RemovedBytesPerDay, recs[i].Rewrites = "none", 0, nil
-					recs[i].Blockers = append(recs[i].Blockers, "a stored query reading these lines also reads another rolled-up rule, and the combined rewrite could not be proven")
-					changed = true
-					continue
-				}
-				for j := range recs[i].Rewrites {
-					rw := &recs[i].Rewrites[j]
-					if logql.Canonical(rw.Old) == logql.Canonical(k.old) {
-						rw.New = res.Expr // the same combined text for every rule, and for executions of it
-					}
-				}
+		readers, order := rollupReaders(recs)
+		for _, sq := range order {
+			if combineRewrite(recs, sq, readers[sq], languages) {
+				changed = true
 			}
 		}
 	}
+}
+
+// storedQuery identifies one stored query that rollups rewrite.
+type storedQuery struct {
+	store, url, path, old string
+	org                   int64
+}
+
+// rollupReaders maps each stored query to the rolled-up rules that rewrite it, with the queries in
+// first-seen order so the result is deterministic.
+func rollupReaders(recs []Recommendation) (map[storedQuery][]int, []storedQuery) {
+	readers := map[storedQuery][]int{}
+	var order []storedQuery
+	for i, r := range recs {
+		if r.Action != "rollup" {
+			continue
+		}
+		for _, rw := range r.Rewrites {
+			if rw.Store == "" {
+				continue // an executed query covered by a stored one
+			}
+			sq := storedQuery{rw.Store, rw.StoreURL, rw.Path, rw.Old, rw.Org}
+			if _, ok := readers[sq]; !ok {
+				order = append(order, sq)
+			}
+			readers[sq] = append(readers[sq], i)
+		}
+	}
+	return readers, order
+}
+
+// combineRewrite rewrites sq for all the rules in idx at once and proves it for each. A rule whose
+// proof fails loses its rollup; it reports whether any did.
+func combineRewrite(recs []Recommendation, sq storedQuery, idx []int, languages map[string]string) bool {
+	rules := make([]rewrite.Rule, len(idx))
+	candidates := make([]Candidate, len(idx))
+	for j, i := range idx {
+		c := recs[i].Candidate
+		rules[j] = rewrite.Rule{ID: recs[i].ID, Language: c.Language, Scope: c.Scope}
+		candidates[j] = c
+	}
+	res, err := rewrite.Query(sq.old, rules, sharedStreamLabels(candidates))
+	var nq *logql.Query
+	if err == nil && res.Changed {
+		nq, err = logql.Parse(res.Expr)
+	}
+	lost := false
+	for _, i := range idx {
+		if err != nil || !res.Changed || !proven(nq, recs[i].ID, recs[i].Candidate, languages) {
+			recs[i].Action, recs[i].RemovedBytesPerDay, recs[i].Rewrites = "none", 0, nil
+			recs[i].Blockers = append(recs[i].Blockers, "a stored query reading these lines also reads another rolled-up rule, and the combined rewrite could not be proven")
+			lost = true
+			continue
+		}
+		for j := range recs[i].Rewrites {
+			if rw := &recs[i].Rewrites[j]; logql.Canonical(rw.Old) == logql.Canonical(sq.old) {
+				rw.New = res.Expr // the same combined text for every rule, and for executions of it
+			}
+		}
+	}
+	return lost
+}
+
+// sharedStreamLabels are the labels that are index labels for every candidate's streams: a rollup
+// record carries only its stream's labels, so a sum by any other label would move its count.
+func sharedStreamLabels(cands []Candidate) map[string]bool {
+	shared := map[string]bool{}
+	for l := range cands[0].StreamLabels {
+		shared[l] = true
+	}
+	for _, c := range cands[1:] {
+		for l := range shared {
+			if !c.StreamLabels[l] {
+				delete(shared, l)
+			}
+		}
+	}
+	return shared
+}
+
+// proven reports whether the rewritten query nq reads rule id's lines only through a compensated
+// raw-line term. A language that does not compile proves nothing.
+func proven(nq *logql.Query, id string, c Candidate, languages map[string]string) bool {
+	lang, err := automaton.Compile(c.Language)
+	if err != nil {
+		return false
+	}
+	ur := usage.Rule{ID: id, Scope: c.Scope, Language: lang}
+	for _, sel := range nq.Selections {
+		if usage.Evaluate(sel, ur).Used && !rewrite.Compensated(nq, sel, id, languages) {
+			return false
+		}
+	}
+	return true
 }
 
 // rewritable stores are the stored queries sievelog can rewrite in place.
@@ -461,18 +511,8 @@ func rewriteFor(q UsageQuery, id string, c Candidate) *Rewrite {
 		return nil
 	}
 	nq, err := logql.Parse(res.Expr)
-	if err != nil {
+	if err != nil || !proven(nq, id, c, map[string]string{id: c.Language}) {
 		return nil
-	}
-	lang, err := automaton.Compile(c.Language)
-	if err != nil {
-		return nil
-	}
-	ur := usage.Rule{ID: id, Scope: c.Scope, Language: lang}
-	for _, sel := range nq.Selections {
-		if usage.Evaluate(sel, ur).Used && !rewrite.Compensated(nq, sel, id, c.Language) {
-			return nil
-		}
 	}
 	return &Rewrite{Source: q.Source, Origin: q.Origin, Store: q.Store, StoreURL: q.StoreURL, Path: q.Path, Org: q.Org, Old: q.Expr, New: res.Expr}
 }
