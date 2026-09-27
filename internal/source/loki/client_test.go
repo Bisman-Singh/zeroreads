@@ -424,3 +424,35 @@ func TestTransientFailuresAreRetried(t *testing.T) {
 		t.Fatalf("%v, %d lines after %d calls", err, len(got), calls)
 	}
 }
+
+// A live tail over TLS uses the HTTP client's TLS settings (its CA), and stops when the context does.
+// Found by the v1 audit: the dial ignored both.
+func TestOpenTailOverTLS(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Scope-OrgID") != "t1" || r.Header.Get("Upgrade") != "websocket" {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		conn, buf, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		buf.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+		buf.Flush()
+		time.Sleep(3 * time.Second)
+	}))
+	defer srv.Close()
+	c := &Client{Base: srv.URL, OrgID: "t1", HTTP: srv.Client()}
+	if err := c.OpenTail(context.Background(), `{a="b"}`); err != nil {
+		t.Fatalf("tail with the client's CA: %v", err)
+	}
+	if err := (&Client{Base: srv.URL, OrgID: "t1"}).OpenTail(context.Background(), `{a="b"}`); err == nil {
+		t.Fatal("tail to an untrusted certificate succeeded")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := c.OpenTail(ctx, `{a="b"}`); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled tail: %v", err)
+	}
+}

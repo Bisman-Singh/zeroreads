@@ -84,15 +84,7 @@ func (c *Client) send(ctx context.Context, method, path, contentType string, bod
 	if !c.untagged {
 		req.Header.Set("X-Query-Tags", Tag)
 	}
-	if c.OrgID != "" {
-		req.Header.Set("X-Scope-OrgID", c.OrgID)
-	}
-	switch {
-	case c.BearerToken != "":
-		req.Header.Set("Authorization", "Bearer "+c.BearerToken)
-	case c.Username != "":
-		req.SetBasicAuth(c.Username, c.Password)
-	}
+	c.authorize(req)
 	res, err := fetch.Do(ctx, c.http(), req)
 	if err != nil {
 		return nil, err
@@ -389,6 +381,32 @@ func (c *Client) Sample(ctx context.Context, query string, start, end time.Time,
 	return c.page(ctx, query, start, end, limit)
 }
 
+// authorize adds the tenant and credentials to req.
+func (c *Client) authorize(req *http.Request) {
+	if c.OrgID != "" {
+		req.Header.Set("X-Scope-OrgID", c.OrgID)
+	}
+	switch {
+	case c.BearerToken != "":
+		req.Header.Set("Authorization", "Bearer "+c.BearerToken)
+	case c.Username != "":
+		req.SetBasicAuth(c.Username, c.Password)
+	}
+}
+
+// tlsConfig is the TLS configuration of the client's HTTP transport (its CA, for example), for
+// connections made outside it.
+func (c *Client) tlsConfig(server string) *tls.Config {
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if c.HTTP != nil {
+		if tr, ok := c.HTTP.Transport.(*http.Transport); ok && tr.TLSClientConfig != nil {
+			cfg = tr.TLSClientConfig.Clone()
+		}
+	}
+	cfg.ServerName = server
+	return cfg
+}
+
 // OpenTail opens a live tail over a websocket, reads the handshake answer and closes it. Loki logs
 // the tail when it starts.
 func (c *Client) OpenTail(ctx context.Context, query string) error {
@@ -407,7 +425,7 @@ func (c *Client) OpenTail(ctx context.Context, query string) error {
 	d := &net.Dialer{Timeout: 10 * time.Second}
 	var conn net.Conn
 	if u.Scheme == "https" {
-		conn, err = tls.DialWithDialer(d, "tcp", host, &tls.Config{ServerName: u.Hostname(), MinVersion: tls.VersionTLS12})
+		conn, err = (&tls.Dialer{NetDialer: d, Config: c.tlsConfig(u.Hostname())}).DialContext(ctx, "tcp", host)
 	} else {
 		conn, err = d.DialContext(ctx, "tcp", host)
 	}
@@ -424,15 +442,7 @@ func (c *Client) OpenTail(ctx context.Context, query string) error {
 	req.Header.Set("Upgrade", "websocket")
 	req.Header.Set("Sec-WebSocket-Version", "13")
 	req.Header.Set("Sec-WebSocket-Key", base64.StdEncoding.EncodeToString(key))
-	if c.OrgID != "" {
-		req.Header.Set("X-Scope-OrgID", c.OrgID)
-	}
-	switch {
-	case c.BearerToken != "":
-		req.Header.Set("Authorization", "Bearer "+c.BearerToken)
-	case c.Username != "":
-		req.SetBasicAuth(c.Username, c.Password)
-	}
+	c.authorize(req)
 	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
 	if err := req.Write(conn); err != nil {
 		return err
@@ -444,8 +454,12 @@ func (c *Client) OpenTail(ctx context.Context, query string) error {
 	resp.Body.Close()
 	switch {
 	case resp.StatusCode == http.StatusSwitchingProtocols:
-		time.Sleep(time.Second) // let the querier register the tail before closing
-		return nil
+		select { // let the querier register the tail before closing
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+			return nil
+		}
 	case resp.StatusCode == 404 || resp.StatusCode == 501:
 		return ErrNotServed
 	}
