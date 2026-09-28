@@ -40,16 +40,32 @@ func pushLoki(t *testing.T, base string, streams map[string]map[string]string, l
 		for i := 0; i < len(vals); i += 20000 {
 			j := min(i+20000, len(vals))
 			b, _ := json.Marshal(map[string]any{"streams": []any{map[string]any{"stream": labels, "values": vals[i:j]}}})
-			resp, err := http.Post(base+"/loki/api/v1/push", "application/json", bytes.NewReader(b))
-			if err != nil {
-				t.Fatal(err)
-			}
-			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if resp.StatusCode != http.StatusNoContent {
-				t.Fatalf("loki push: %d %s", resp.StatusCode, body)
-			}
+			pushBatch(t, base, b)
 		}
+	}
+}
+
+// pushBatch sends one push, retrying when a busy Loki times out. A retry is safe: Loki drops an entry
+// identical to one it stored (same stream, timestamp and line), and every count is checked exactly.
+func pushBatch(t *testing.T, base string, body []byte) {
+	t.Helper()
+	for attempt := 1; ; attempt++ {
+		resp, err := http.Post(base+"/loki/api/v1/push", "application/json", bytes.NewReader(body))
+		status, msg := 0, ""
+		if err == nil {
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			status, msg = resp.StatusCode, string(b)
+			if status == http.StatusNoContent {
+				return
+			}
+		} else {
+			msg = err.Error()
+		}
+		if attempt == 5 || (status != 0 && status < 500) {
+			t.Fatalf("loki push: %d %s", status, msg)
+		}
+		time.Sleep(time.Duration(attempt) * 5 * time.Second)
 	}
 }
 
