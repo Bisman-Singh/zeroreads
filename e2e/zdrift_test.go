@@ -15,8 +15,8 @@ import (
 )
 
 // TestZDriftReportedExactly pushes lines of an enforced rule's template that the rule does not
-// cover and checks verify reports exactly them. It runs last: the pushed lines are real lines of the
-// service and would change any later analysis of it.
+// cover and checks verify reports exactly them. It runs after every test that analyses the loop's
+// services: the pushed lines are real lines of those services and would change any later analysis.
 func TestZDriftReportedExactly(t *testing.T) {
 	e := &loopEnv{t: t, work: env(t, "E2E_WORK"), loki: env(t, "LOKI_URL")}
 	e.root, _ = filepath.Abs("..")

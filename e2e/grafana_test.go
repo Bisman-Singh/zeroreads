@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Bisman-Singh/sievelog/internal/source/grafana"
 )
@@ -22,6 +24,15 @@ const grafanaUser, grafanaPass = "admin", "e2e-only-password"
 // fixtures in the throwaway kind cluster.
 func grafanaCall(t *testing.T, base, method, path string, org int64, body any) (int, []byte) {
 	t.Helper()
+	s, out, err := grafanaDo(base, method, path, org, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, out
+}
+
+// grafanaDo is grafanaCall for goroutines, which must not stop the test themselves.
+func grafanaDo(base, method, path string, org int64, body any) (int, []byte, error) {
 	var r io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
@@ -35,11 +46,94 @@ func grafanaCall(t *testing.T, base, method, path string, org int64, body any) (
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatal(err)
+		return 0, nil, err
 	}
 	defer resp.Body.Close()
 	out, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, out
+	return resp.StatusCode, out, nil
+}
+
+// dropOrg empties an organisation the test created and deletes it. Grafana 13.2.2 refuses to delete
+// an org at all ("failed to delete dashboards ... does not allow this method", even when it has
+// none), so everything in it goes first; when the org itself is refused, it stays behind empty and
+// renamed. Tests that create orgs run last (zz*_test.go), and every full run starts a new Grafana.
+func dropOrg(t *testing.T, base string, org int64) {
+	t.Helper()
+	for {
+		s, b := grafanaCall(t, base, "GET", "/api/search?type=dash-db&limit=1000", org, nil)
+		must(t, s, b, http.StatusOK)
+		var hits []struct {
+			UID string `json:"uid"`
+		}
+		json.Unmarshal(b, &hits)
+		if len(hits) == 0 {
+			break
+		}
+		uids := make(chan string)
+		var wg sync.WaitGroup
+		for w := 0; w < 4; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for uid := range uids {
+					for attempt := 0; attempt < 5; attempt++ {
+						if s, _, err := grafanaDo(base, "DELETE", "/api/dashboards/uid/"+uid, org, nil); err == nil && (s == http.StatusOK || s == http.StatusNotFound) {
+							break
+						}
+						time.Sleep(time.Duration(attempt+1) * time.Second) // SQLite can be briefly locked
+					}
+				}
+			}()
+		}
+		for _, h := range hits {
+			uids <- h.UID
+		}
+		close(uids)
+		wg.Wait()
+	}
+	s, b := grafanaCall(t, base, "GET", "/api/library-elements?perPage=1000", org, nil)
+	must(t, s, b, http.StatusOK)
+	var libs struct {
+		Result struct {
+			Elements []struct {
+				UID string `json:"uid"`
+			} `json:"elements"`
+		} `json:"result"`
+	}
+	json.Unmarshal(b, &libs)
+	for _, l := range libs.Result.Elements {
+		grafanaCall(t, base, "DELETE", "/api/library-elements/"+l.UID, org, nil)
+	}
+	s, b = grafanaCall(t, base, "GET", "/api/datasources", org, nil)
+	must(t, s, b, http.StatusOK)
+	var dss []struct {
+		UID string `json:"uid"`
+	}
+	json.Unmarshal(b, &dss)
+	for _, d := range dss {
+		grafanaCall(t, base, "DELETE", "/api/datasources/uid/"+d.UID, org, nil)
+	}
+	s, b = grafanaCall(t, base, "GET", "/api/serviceaccounts/search?perpage=100", org, nil)
+	must(t, s, b, http.StatusOK)
+	var sas struct {
+		ServiceAccounts []struct {
+			ID int64 `json:"id"`
+		} `json:"serviceAccounts"`
+	}
+	json.Unmarshal(b, &sas)
+	for _, sa := range sas.ServiceAccounts {
+		grafanaCall(t, base, "DELETE", fmt.Sprintf("/api/serviceaccounts/%d", sa.ID), org, nil)
+	}
+	s, b = grafanaCall(t, base, "DELETE", fmt.Sprintf("/api/orgs/%d", org), 0, nil)
+	switch {
+	case s == http.StatusOK:
+	case s == http.StatusInternalServerError && strings.Contains(string(b), "Failed to delete organization"):
+		s, b = grafanaCall(t, base, "PUT", fmt.Sprintf("/api/orgs/%d", org), 0, map[string]any{"name": fmt.Sprintf("sievelog-emptied-%d", org)})
+		must(t, s, b, http.StatusOK)
+		t.Logf("grafana refused to delete org %d; it is empty and renamed", org)
+	default:
+		t.Fatalf("delete org %d: %d %s", org, s, b)
+	}
 }
 
 func must(t *testing.T, status int, body []byte, ok ...int) {
@@ -102,9 +196,16 @@ func setupGrafanaFixtures(t *testing.T, base string) {
 	// A second org with its own Loki datasource and dashboard.
 	s, b = grafanaCall(t, base, "POST", "/api/orgs", 0, map[string]any{"name": "Second"})
 	must(t, s, b, 200, 409)
-	s, b = grafanaCall(t, base, "POST", "/api/datasources", 2, map[string]any{"name": "Loki2", "uid": "loki2", "type": "loki", "access": "proxy", "url": "http://loki.sievelog-system.svc:3100", "isDefault": true})
+	// Its ID depends on how many orgs other tests created before it, so look it up by name.
+	s, b = grafanaCall(t, base, "GET", "/api/orgs/name/Second", 0, nil)
+	must(t, s, b, 200)
+	var second struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(b, &second)
+	s, b = grafanaCall(t, base, "POST", "/api/datasources", second.ID, map[string]any{"name": "Loki2", "uid": "loki2", "type": "loki", "access": "proxy", "url": "http://loki.sievelog-system.svc:3100", "isDefault": true})
 	must(t, s, b, 200, 409)
-	s, b = grafanaCall(t, base, "POST", "/api/dashboards/db", 2, map[string]any{"overwrite": true, "dashboard": map[string]any{
+	s, b = grafanaCall(t, base, "POST", "/api/dashboards/db", second.ID, map[string]any{"overwrite": true, "dashboard": map[string]any{
 		"uid": "org2-dash", "title": "Org 2", "schemaVersion": 41,
 		"panels": []any{map[string]any{"id": 1, "type": "logs", "datasource": map[string]any{"type": "loki", "uid": "loki2"},
 			"targets": []any{map[string]any{"refId": "A", "expr": `{service_name="orders"} |= "handled route"`}}}}}})
