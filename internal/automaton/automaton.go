@@ -349,48 +349,16 @@ func (n *node) key() string {
 var classCuts = []rune{'\n', '\n' + 1, '0', '9' + 1, 'A', 'Z' + 1, '_', '_' + 1, 'a', 'z' + 1, utf8.RuneSelf}
 
 func (s *search) run(limit int) (string, bool, error) {
-	n0 := &node{prev: ctxStart, parent: -1}
-	for _, m := range s.machines {
-		n0.pcs = append(n0.pcs, m.start())
-		n0.matched = append(n0.matched, false)
-	}
-	nodes := []*node{n0}
-	seen := map[string]bool{n0.key(): true}
+	nodes := []*node{s.start()}
+	seen := map[string]bool{nodes[0].key(): true}
 	work, maxWork := 0, limit*workPerState
 	for qi := 0; qi < len(nodes); qi++ {
 		n := nodes[qi]
 		if s.acceptsAtEnd(n) {
 			return s.witness(nodes, qi), true, nil
 		}
-		// Closures depend on the class of the next rune; compute them for each class.
-		type cl struct {
-			pcs     []uint32
-			matched bool
-		}
-		closures := map[ctx][]cl{}
-		for _, c := range []ctx{ctxWord, ctxNewline, ctxOther} {
-			var row []cl
-			for i, m := range s.machines {
-				if n.matched[i] {
-					row = append(row, cl{matched: true})
-					continue
-				}
-				pcs, matched := m.closure(n.pcs[i], n.prev, c)
-				row = append(row, cl{pcs: pcs, matched: matched})
-			}
-			closures[c] = row
-		}
-		cuts := append([]rune(nil), classCuts...)
-		for _, row := range closures {
-			for i, c := range row {
-				for _, pc := range c.pcs {
-					for _, r := range s.machines[i].ranges(pc) {
-						cuts = append(cuts, r[0], r[1]+1)
-					}
-				}
-			}
-		}
-		cs := cells(cuts)
+		closures := s.closures(n)
+		cs := cells(s.cuts(closures))
 		if work += len(cs) * len(s.machines); work > maxWork {
 			return "", false, ErrLimit
 		}
@@ -399,23 +367,8 @@ func (s *search) run(limit int) (string, bool, error) {
 			if !ok {
 				continue
 			}
-			row := closures[classOf(rep)]
-			child := &node{prev: classOf(rep), parent: qi, via: rep}
-			dead := false
-			for i, c := range row {
-				matched := c.matched
-				if matched && s.terms[i].Negate {
-					dead = true // a negated pattern matched; no extension can undo it
-					break
-				}
-				child.matched = append(child.matched, matched)
-				if matched {
-					child.pcs = append(child.pcs, nil)
-					continue
-				}
-				child.pcs = append(child.pcs, s.machines[i].step(c.pcs, rep))
-			}
-			if dead {
+			child, alive := s.child(qi, rep, closures[classOf(rep)])
+			if !alive {
 				continue
 			}
 			k := child.key()
@@ -430,6 +383,74 @@ func (s *search) run(limit int) (string, bool, error) {
 		}
 	}
 	return "", false, nil
+}
+
+// start is the search's first state: every machine at its start, before any rune.
+func (s *search) start() *node {
+	n := &node{prev: ctxStart, parent: -1}
+	for _, m := range s.machines {
+		n.pcs = append(n.pcs, m.start())
+		n.matched = append(n.matched, false)
+	}
+	return n
+}
+
+// closure is one machine's states after the empty-width steps before the next rune.
+type closure struct {
+	pcs     []uint32
+	matched bool
+}
+
+// closures are every machine's closures for each class the next rune can have: empty-width
+// assertions (word boundaries, line anchors) depend on it.
+func (s *search) closures(n *node) map[ctx][]closure {
+	out := map[ctx][]closure{}
+	for _, c := range []ctx{ctxWord, ctxNewline, ctxOther} {
+		row := make([]closure, len(s.machines))
+		for i, m := range s.machines {
+			if n.matched[i] {
+				row[i] = closure{matched: true}
+				continue
+			}
+			row[i].pcs, row[i].matched = m.closure(n.pcs[i], n.prev, c)
+		}
+		out[c] = row
+	}
+	return out
+}
+
+// cuts are the rune boundaries where some machine's next step can change: every rune between two
+// cuts leads to the same states, so one representative per cell covers them all.
+func (s *search) cuts(closures map[ctx][]closure) []rune {
+	cuts := append([]rune(nil), classCuts...)
+	for _, row := range closures {
+		for i, c := range row {
+			for _, pc := range c.pcs {
+				for _, r := range s.machines[i].ranges(pc) {
+					cuts = append(cuts, r[0], r[1]+1)
+				}
+			}
+		}
+	}
+	return cuts
+}
+
+// child is the state after rune rep; alive is false when a negated pattern has matched, which no
+// extension can undo.
+func (s *search) child(parent int, rep rune, row []closure) (*node, bool) {
+	child := &node{prev: classOf(rep), parent: parent, via: rep}
+	for i, c := range row {
+		if c.matched && s.terms[i].Negate {
+			return nil, false
+		}
+		child.matched = append(child.matched, c.matched)
+		if c.matched {
+			child.pcs = append(child.pcs, nil)
+			continue
+		}
+		child.pcs = append(child.pcs, s.machines[i].step(c.pcs, rep))
+	}
+	return child, true
 }
 
 func (s *search) acceptsAtEnd(n *node) bool {
