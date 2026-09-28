@@ -166,19 +166,9 @@ func markRead(t *testing.T, rules []usage.Rule, l lokiLine, read map[string]bool
 	}
 }
 
-// predicted returns the rules the analyzer says the query reads. A query it cannot parse reads
-// everything, which is how the product treats it.
-func predicted(q string, rules []usage.Rule) (map[string]bool, bool) {
-	vs, parsed := readVerdicts(q, rules)
-	out := map[string]bool{}
-	for id := range vs {
-		out[id] = true
-	}
-	return out, parsed
-}
-
 // readVerdicts is the analyzer's "reads" verdict for each rule the query reads, the exact one when
-// any selection reads the rule's lines exactly.
+// any selection reads the rule's lines exactly. A query it cannot parse reads everything, which is
+// how the product treats it.
 func readVerdicts(q string, rules []usage.Rule) (map[string]usage.Verdict, bool) {
 	out := map[string]usage.Verdict{}
 	pq, err := logql.Parse(q)
