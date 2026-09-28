@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"github.com/Bisman-Singh/sievelog/internal/pricing"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -388,5 +389,18 @@ func TestRulerExecutionsCoveredByItsRules(t *testing.T) {
 	c.Evidence.Ruler = false
 	if got = exprs(); got[`sum(rate({service_name="checkout"} |= "old"[1m]))`] != "loki-querylog" {
 		t.Fatalf("without the ruler read, its executions are the only evidence of it: %v", got)
+	}
+}
+
+// The report states money only at the operator's own prices, in their currency.
+func TestReportMoneyAtOwnPrices(t *testing.T) {
+	rep := &Report{GeneratedAt: time.Unix(0, 0), RemovedPerDay: 2e9}
+	if md := Markdown(rep); strings.Contains(md, "a month at your prices") {
+		t.Fatalf("money without a price:\n%s", md)
+	}
+	rep.Pricing = pricing.Price{PerGB: 0.67, Currency: "INR"}
+	rep.MonthlyCost = rep.Pricing.Monthly(rep.RemovedPerDay, 0)
+	if md := Markdown(rep); !strings.Contains(md, "about 40.20 INR a month at your prices (0.67 INR per GB") {
+		t.Fatalf("report:\n%s", md)
 	}
 }

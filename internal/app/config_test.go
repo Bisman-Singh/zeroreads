@@ -66,6 +66,12 @@ func TestConfigValidation(t *testing.T) {
 		{"vector quoted path", "loki: {url: http://l}\nruntime: vector\nvector: {config_files: [v.yaml], after: prep, scope_path: '.\"k8s.pod\"', text_path: .message, measure_sink: {type: blackhole}}\n", ""},
 		{"fluent bit key", "loki: {url: http://l}\nruntime: fluentbit\nfluentbit: {config_files: [f.yaml], match: kube.*, scope_key: service, text_key: [\"lo'g\"], metrics_tag: m}\n", "record key"},
 		{"fluent bit accessor", "loki: {url: http://l}\nruntime: fluentbit\nfluentbit: {config_files: [f.yaml], match: kube.*, scope_key: \"$kubernetes['container_name']\", text_key: [log], metrics_tag: m}\n", ""},
+		// Prices are the operator's own: no vendor table, no negative or unprintable values.
+		{"own prices", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\npricing: {per_gb: 0.67, per_million_lines: 1.7, currency: INR}\n", ""},
+		{"negative price", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\npricing: {per_gb: -1}\n", "pricing.per_gb"},
+		{"infinite price", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\npricing: {per_million_lines: .inf}\n", "pricing.per_million_lines"},
+		{"bad currency", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\npricing: {per_gb: 1, currency: rupees}\n", "currency"},
+		{"no built-in price lists", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\npricing: {backend: some-service}\n", "backend"},
 		{"fluent bit bad accessor", "loki: {url: http://l}\nruntime: fluentbit\nfluentbit: {config_files: [f.yaml], match: kube.*, scope_key: \"${HOME}\", text_key: [log], metrics_tag: m}\n", "scope_key"},
 	}
 	for _, c := range cases {
@@ -128,5 +134,12 @@ func TestScopeSeverityKeysKeepDefaults(t *testing.T) {
 	cfg, err = LoadConfig(write(t, "loki: {url: http://l}\nscope: {severity_keys: [sev]}\ncollector: {config_files: [c.yaml], pipeline: logs}\n"))
 	if err != nil || !slices.Contains(cfg.Scope.SeverityKeys, "sev") || !slices.Contains(cfg.Scope.SeverityKeys, "level") {
 		t.Fatalf("%v %v", err, cfg.Scope.SeverityKeys)
+	}
+}
+
+func TestPricingDefaultsToVolumeOnly(t *testing.T) {
+	cfg, err := LoadConfig(write(t, "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\n"))
+	if err != nil || cfg.Pricing.PerGB != 0 || cfg.Pricing.PerMillionLines != 0 || cfg.Pricing.Currency != "USD" {
+		t.Fatalf("%v %+v", err, cfg.Pricing)
 	}
 }

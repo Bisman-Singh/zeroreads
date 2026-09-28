@@ -120,8 +120,9 @@ under, and, given `-deployed`, when the deployed pipeline config is not exactly 
   policy wins), so `emit -format policy` refuses unless `-allow-no-severity-guard` is passed.
 - **OpenSearch evidence is beta.** It is tested against OpenSearch and Dashboards 3.8.0 in kind, not yet
   across real clusters of other versions and layouts.
-- **Measured bytes are not billed bytes.** Vendors bill on their own encoding. Compare the measured
-  removal with the backend's own usage meters before and after enforcing.
+- **Measured bytes are not billed bytes.** Log services bill on their own encoding, and a money figure
+  is only as right as the prices you give. Compare the measured removal with your service's own usage
+  meters before and after enforcing.
 - **OpenSearch evidence depends on the audit log.** The security plugin does not log successful
   requests by default, ignores `kibanaserver` by default, and keeps audit indices only as long as its
   retention allows. Each of these is reported as a gap. Queries stored by notebooks, reporting,
@@ -130,5 +131,5 @@ under, and, given `-deployed`, when the deployed pipeline config is not exactly 
   the transport layer and are not in the REST audit log, which is a gap as well. OpenSearch keeps no
   alias history, so a wildcard request that matched an alias removed since is judged against today's
   names.
-- **Not yet connected as evidence sources:** other log services. A pipeline that also sends logs
-  there reports those destinations as gaps until they are exempted.
+- **Other log services are not evidence sources:** only Loki and OpenSearch are read. A pipeline that
+  also sends logs to another service reports it as a gap until it is exempted.

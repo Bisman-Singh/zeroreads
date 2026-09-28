@@ -122,9 +122,15 @@ policy:
   error_pattern: ""              # default: a case-insensitive list of error-like words
   min_daily_bytes: 0
 
-pricing:
-  backend: none                  # none, or a built-in list price
+pricing:                         # what you pay your log service; the report shows volume only without it
+  per_gb: 0                      # per gigabyte ingested, from your own invoice or contract
+  per_million_lines: 0           # per million lines (events) indexed, if you are billed for that
+  currency: USD                  # printed beside every amount
 ```
+
+The saving is reported in money only at prices you give. List prices differ by region, plan,
+retention and discount, so no price is built in: take the per-gigabyte (and, if billed, per-event)
+price from your own invoice.
 
 ## Evidence gap keys
 

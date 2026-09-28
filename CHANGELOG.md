@@ -54,6 +54,8 @@ First release candidate. Everything below is new.
   work as well as states.
 - `sievelog version`, documented exit codes, CI with lint and vulnerability scans, actions and base
   images pinned to digests.
+- Money is reported only at your own prices (`pricing.per_gb`, `pricing.per_million_lines`,
+  `pricing.currency`); no list prices are built in, since region, plan and discounts change them.
 
 ### Supported versions
 

@@ -5,6 +5,7 @@ package app
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"regexp"
@@ -192,9 +193,12 @@ type PolicyConfig struct {
 	ExperimentalRollup bool `yaml:"experimental_rollup"`
 }
 
-// PricingConfig selects the price table.
+// PricingConfig is what the operator pays their log service, to express the saving in money. The
+// report shows volume only when no price is given.
 type PricingConfig struct {
-	Backend string `yaml:"backend"`
+	PerGB           float64 `yaml:"per_gb"`            // per gigabyte ingested
+	PerMillionLines float64 `yaml:"per_million_lines"` // per million lines (events) indexed
+	Currency        string  `yaml:"currency"`          // ISO 4217 code, default USD
 }
 
 // Duration parses Go and day-suffixed durations ("720h", "30d").
@@ -298,7 +302,13 @@ func (c *Config) defaults() {
 	if c.Policy.SamplePercent == 0 {
 		c.Policy.SamplePercent = 10
 	}
+	if c.Pricing.Currency == "" {
+		c.Pricing.Currency = "USD"
+	}
 }
+
+// currencyCode matches an ISO 4217 code, printed beside every amount.
+var currencyCode = regexp.MustCompile(`\A[A-Z]{3}\z`)
 
 // labelName matches a Loki label name, which sievelog writes into LogQL unquoted.
 var labelName = regexp.MustCompile(`\A[a-zA-Z_][a-zA-Z0-9_]*\z`)
@@ -410,6 +420,14 @@ func (c *Config) validateBounds() error {
 	}
 	if c.Policy.MinDailyBytes < 0 {
 		return fmt.Errorf("policy.min_daily_bytes must not be negative")
+	}
+	for name, v := range map[string]float64{"pricing.per_gb": c.Pricing.PerGB, "pricing.per_million_lines": c.Pricing.PerMillionLines} {
+		if v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+			return fmt.Errorf("%s must be a price of zero or more", name)
+		}
+	}
+	if !currencyCode.MatchString(c.Pricing.Currency) {
+		return fmt.Errorf("pricing.currency %q is not a three-letter currency code such as USD or INR", c.Pricing.Currency)
 	}
 	if c.Discovery.Slices > 10000 {
 		return fmt.Errorf("discovery.slices must be at most 10000")

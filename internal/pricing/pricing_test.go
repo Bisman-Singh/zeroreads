@@ -3,19 +3,20 @@ package pricing
 import "testing"
 
 func TestMonthly(t *testing.T) {
-	a, _ := Lookup("example-a")
-	if got := a.Monthly(10*GB, 0); got != 300 {
-		t.Fatalf("example-a: %v", got)
+	for _, c := range []struct {
+		p           Price
+		bytes, rows float64
+		want        float64
+	}{
+		{Price{PerGB: 0.5}, 10 * GB, 0, 150},
+		{Price{PerGB: 0.1, PerMillionLines: 1.7}, 1 * GB, 1e6, 30 * (0.1 + 1.7)},
+		{Price{}, 1e12, 1e9, 0},
+	} {
+		if got := c.p.Monthly(c.bytes, c.rows); got != c.want {
+			t.Fatalf("%+v: %v, want %v", c.p, got, c.want)
+		}
 	}
-	c, _ := Lookup("example-c")
-	if got := c.Monthly(1*GB, 1e6); got != 30*(0.20+2.00) {
-		t.Fatalf("example-c: %v", got)
-	}
-	none, _ := Lookup("")
-	if got := none.Monthly(1e12, 1e9); got != 0 {
-		t.Fatalf("none: %v", got)
-	}
-	if _, err := Lookup("example-z"); err == nil {
-		t.Fatal("unknown backend accepted")
+	if (Price{}).Set() || !(Price{PerMillionLines: 1}).Set() {
+		t.Fatal("Set")
 	}
 }

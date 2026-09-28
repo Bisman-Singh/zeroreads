@@ -162,8 +162,9 @@ func Markdown(rep *Report) string {
 		}
 	}
 	fmt.Fprintf(&b, "%d rules decided, %d act. Removes %s/day", len(rep.Recommendations), acted, humanBytes(rep.RemovedPerDay))
-	if rep.Pricing.PerGB > 0 || rep.Pricing.PerMillion > 0 {
-		fmt.Fprintf(&b, ", about $%.2f/month at %s prices (%s, %s)", rep.MonthlyUSD, rep.Pricing.Backend, rep.Pricing.Source, rep.Pricing.AsOf)
+	if p := rep.Pricing; p.Set() {
+		fmt.Fprintf(&b, ", about %.2f %s a month at your prices (%g %s per GB, %g %s per million lines)",
+			rep.MonthlyCost, p.Currency, p.PerGB, p.Currency, p.PerMillionLines, p.Currency)
 	}
 	b.WriteString(".\n\n## Evidence\n\n")
 	fmt.Fprintf(&b, "- Query log: %s; %d distinct queries from %d lines, oldest %s\n", rep.Evidence.QueryLogLive, rep.Evidence.QueryLogQueries, rep.Evidence.QueryLogLines, rep.Evidence.QueryLogOldest.Format(time.RFC3339))

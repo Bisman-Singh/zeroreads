@@ -36,9 +36,10 @@ type Report struct {
 	Gaps            []analyze.Gap            `json:"gaps"`
 	Notes           []string                 `json:"notes"`
 	Evidence        EvidenceSummary          `json:"evidence"`
-	Pricing         pricing.Table            `json:"pricing"`
+	Pricing         pricing.Price            `json:"pricing"`
 	RemovedPerDay   float64                  `json:"removed_bytes_per_day"`
-	MonthlyUSD      float64                  `json:"monthly_usd"`
+	// MonthlyCost is the saving per month at the operator's prices, 0 when none were given.
+	MonthlyCost float64 `json:"monthly_cost"`
 }
 
 // Skipped is a template that got no rule, and why.
@@ -196,11 +197,7 @@ func Analyze(ctx context.Context, c *Config, now time.Time) (*Report, error) {
 		return nil, err
 	}
 	rep.Recommendations = recs
-	tbl, err := pricing.Lookup(c.Pricing.Backend)
-	if err != nil {
-		return nil, err
-	}
-	rep.Pricing = tbl
+	rep.Pricing = pricing.Price{PerGB: c.Pricing.PerGB, PerMillionLines: c.Pricing.PerMillionLines, Currency: c.Pricing.Currency}
 	for _, r := range recs {
 		if r.Action == "none" {
 			continue
@@ -211,7 +208,7 @@ func Analyze(ctx context.Context, c *Config, now time.Time) (*Report, error) {
 		if r.Action == "sample" {
 			frac = float64(100-r.Keep) / 100
 		}
-		rep.MonthlyUSD += tbl.Monthly(r.RemovedBytesPerDay, linesPerDay*frac)
+		rep.MonthlyCost += rep.Pricing.Monthly(r.RemovedBytesPerDay, linesPerDay*frac)
 	}
 	return rep, nil
 }
