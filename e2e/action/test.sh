@@ -23,6 +23,7 @@ echo "${out}" | grep -q "Job succeeded" || { echo "${out}"; echo "FAIL: expected
 curl -sf -X POST "http://admin:e2e-only-password@localhost:13000/api/dashboards/db" -H 'Content-Type: application/json' \
   -d '{"overwrite":true,"dashboard":{"uid":"act-cache","title":"act cache","schemaVersion":41,"panels":[{"id":1,"type":"logs","datasource":{"type":"loki","uid":"loki"},"targets":[{"refId":"A","expr":"{service_name=\"checkout\"} |= \"cache hit\""}]}]}}' >/dev/null
 out=$(run) || true
+# shellcheck disable=SC2016 # the backquotes are act's own output, matched literally
 echo "${out}" | grep -q 'exit with `FAILURE`: 3' || { echo "${out}"; echo "FAIL: expected exit code 3"; exit 1; }
 echo "${out}" | grep -q 'dashboard:act-cache' || { echo "${out}"; echo "FAIL: expected the dashboard in the reasons"; exit 1; }
 echo "PASS: the action passes on clean evidence and fails with exit code 3 on a new reader"

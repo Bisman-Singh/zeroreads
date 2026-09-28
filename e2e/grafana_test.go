@@ -152,8 +152,13 @@ func TestGrafanaReadsEveryStoredQuery(t *testing.T) {
 		gaps[g.Reason] = true
 		t.Logf("gap: org%d %s: %s", g.Org, g.Origin, g.Reason)
 	}
-	if !anyContains(gaps, `library panel "lib-missing" does not exist`) {
-		t.Error("the deleted library panel was not reported")
+	// A panel whose library panel was deleted reads nothing: a note, never a gap that blocks rules.
+	notes := map[string]bool{}
+	for _, n := range res.Notes {
+		notes[n.Reason] = true
+	}
+	if !anyContains(notes, `library panel "lib-missing" does not exist`) || anyContains(gaps, "lib-missing") {
+		t.Errorf("the deleted library panel must be a note, not a gap: notes %v", notes)
 	}
 	if !anyContains(gaps, "only the history of the user") {
 		t.Error("the query-history limitation was not reported")

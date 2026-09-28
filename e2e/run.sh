@@ -122,7 +122,7 @@ spec:
 EOF
 done
 for s in "${SERVICES[@]}"; do
-  ${K} wait --for=condition=complete job/gen-${s} -n "${RUN_NS}" --timeout=120s >/dev/null
+  ${K} wait --for=condition=complete "job/gen-${s}" -n "${RUN_NS}" --timeout=120s >/dev/null
 done
 
 want=$(( COUNT * ${#SERVICES[@]} ))
@@ -151,21 +151,30 @@ sleep 3 # let the metrics file flush the last payloads
 printf 'SEED=%s\nCOUNT=%s\nRUN_NS=%s\n' "${SEED}" "${COUNT}" "${RUN_NS}" > "${WORK}/last-run.env"
 fi
 
-log "port-forwarding loki"
-${K} -n sievelog-system port-forward svc/loki 13100:3100 >/dev/null 2>&1 &
-PF=$!
-${K} -n sievelog-system port-forward svc/grafana 13000:3000 >/dev/null 2>&1 &
-PF2=$!
-${K} -n sievelog-system port-forward svc/opensearch 19200:9200 >/dev/null 2>&1 &
-PF3=$!
-${K} -n sievelog-system port-forward svc/opensearch-dashboards 15601:5601 >/dev/null 2>&1 &
-PF4=$!
-trap 'kill ${PF} ${PF2} ${PF3} ${PF4} 2>/dev/null || true' EXIT
-for _ in $(seq 1 30); do curl -sf localhost:13100/ready >/dev/null && break; sleep 1; done
-for _ in $(seq 1 30); do curl -sf localhost:13000/api/health >/dev/null && break; sleep 1; done
-for _ in $(seq 1 30); do curl -skf -u 'admin:E2e-only-Passw0rd!' https://localhost:19200/ >/dev/null && break; sleep 1; done
-for _ in $(seq 1 60); do curl -sf -u 'admin:E2e-only-Passw0rd!' localhost:15601/api/status >/dev/null && break; sleep 1; done
+log "port-forwarding loki, grafana, opensearch and dashboards"
+# Each port-forward restarts when it drops (a busy node can reset them), and every service must answer
+# before the assertions start, so a slow start fails here, with its name, instead of as test failures.
+PFS=()
+forward() {
+  while true; do ${K} -n sievelog-system port-forward "svc/$1" "$2" >/dev/null 2>&1; sleep 1; done &
+  PFS+=($!)
+}
+stop_forwards() { for p in "${PFS[@]}"; do pkill -P "${p}" 2>/dev/null || true; kill "${p}" 2>/dev/null || true; done; }
+trap stop_forwards EXIT
+forward loki 13100:3100
+forward grafana 13000:3000
+forward opensearch 19200:9200
+forward opensearch-dashboards 15601:5601
+wait_for() { # name, seconds, curl arguments
+  local name=$1 secs=$2; shift 2
+  for _ in $(seq 1 "${secs}"); do curl -sf "$@" >/dev/null 2>&1 && return 0; sleep 1; done
+  log "${name} did not answer within ${secs}s"; exit 1
+}
+wait_for loki 120 localhost:13100/ready
+wait_for grafana 120 localhost:13000/api/health
+wait_for opensearch 300 -k -u 'admin:E2e-only-Passw0rd!' https://localhost:19200/
+wait_for dashboards 300 -u 'admin:E2e-only-Passw0rd!' localhost:15601/api/status
 
 log "running assertions"
 ( cd "${ROOT}" && E2E_OUT="${WORK}/out" E2E_SEED="${SEED}" E2E_COUNT="${COUNT}" LOKI_URL="http://localhost:13100" GRAFANA_URL="http://localhost:13000" OPENSEARCH_URL="https://localhost:19200" DASHBOARDS_URL="http://localhost:15601" OPENSEARCH_PASSWORD='E2e-only-Passw0rd!' E2E_WORK="${WORK}" E2E_NS="${RUN_NS}" \
-  go test -tags e2e ./e2e/ -count=1 -v -timeout 30m ${E2E_RUN:+-run "${E2E_RUN}"} )
+  go test -tags e2e ./e2e/ -count=1 -v -timeout 60m ${E2E_RUN:+-run "${E2E_RUN}"} )

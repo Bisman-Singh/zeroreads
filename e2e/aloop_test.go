@@ -292,8 +292,18 @@ policy:
 		"--kubeconfig", e.kube, "--kube-context", "kind-sievelog", "-f", vf, "--wait"); code != 0 {
 		e.t.Fatalf("helm install: %s", out)
 	}
+	// The release and its jobs go when the test does: a CronJob left behind keeps running verify
+	// against the shared stack during every later test.
+	var jobs []string
+	e.t.Cleanup(func() {
+		for _, j := range jobs {
+			e.kubectl("delete", "job", j, "-n", "sievelog-system", "--ignore-not-found")
+		}
+		e.run(e.root, "helm", "uninstall", "sievelog", "-n", "sievelog-system", "--kubeconfig", e.kube, "--kube-context", "kind-sievelog")
+	})
 	return func(name string) (int, string) {
 		job := "verify-" + name + "-" + strconv.FormatInt(time.Now().Unix(), 10)
+		jobs = append(jobs, job)
 		e.kubectl("create", "job", "--from=cronjob/sievelog-verify", job, "-n", "sievelog-system")
 		for deadline := time.Now().Add(4 * time.Minute); time.Now().Before(deadline); time.Sleep(3 * time.Second) {
 			st := e.kubectl("get", "job", job, "-n", "sievelog-system", "-o", "jsonpath={.status.succeeded}/{.status.failed}")
