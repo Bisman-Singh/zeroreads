@@ -28,6 +28,9 @@ type FluentBitTarget struct {
 	// never matches a rule. They are checked in addition to the default level fields at the top level
 	// and beside every structured field.
 	SeverityKeys [][]string
+	// ArchiveOutputs are the IDs (alias, else name#index) of the outputs that receive archived
+	// records, tagged ArchiveTag. Required when any rule archives.
+	ArchiveOutputs []string
 }
 
 func (t FluentBitTarget) severityKeys() [][]string {
@@ -67,6 +70,10 @@ func accessor(path []string) string {
 	return b.String()
 }
 
+// ArchiveTag is the tag archived records carry once rewrite_tag moves them off their stream. Only the
+// archive outputs may match it.
+const ArchiveTag = "sievelog.archive"
+
 func metricName(prefix, id string) string {
 	return prefix + "_" + strings.NewReplacer("-", "_").Replace(id)
 }
@@ -81,6 +88,9 @@ func FluentBit(files [][]byte, t FluentBitTarget, rules []Rule, mode Mode) ([]by
 	}
 	cfg, err := topology.MergeFiles("fluent bit", files)
 	if err != nil {
+		return nil, err
+	}
+	if err := t.checkArchive(files, rules, mode); err != nil {
 		return nil, err
 	}
 	pipeline := child(cfg, "pipeline")
@@ -213,16 +223,44 @@ func (t FluentBitTarget) measureFilters(rules []Rule, mode Mode) ([]any, error) 
 	return out, nil
 }
 
-// enforceFilters remove drop and aggregate rules' records and sample the sample rules' records.
+// checkArchive requires, when a rule archives, that the archived records reach exactly the archive
+// outputs: they match ArchiveTag, no other output does (the analysed Loki would otherwise keep
+// receiving them), and the rules' own Match does not, or archived records would be tagged, counted
+// and archived again.
+func (t FluentBitTarget) checkArchive(files [][]byte, rules []Rule, mode Mode) error {
+	if mode != Enforce || !slices.ContainsFunc(rules, func(r Rule) bool { return r.Action == "archive" }) {
+		return nil
+	}
+	if len(t.ArchiveOutputs) == 0 {
+		return fmt.Errorf("emit: rules archive but no fluent bit archive output is configured")
+	}
+	if topology.GlobMatches(t.Match, ArchiveTag) {
+		return fmt.Errorf("emit: match %q also matches the archive tag %s; archived records would be counted and archived again", t.Match, ArchiveTag)
+	}
+	topo, err := topology.LoadFluentBit(files...)
+	if err != nil {
+		return err
+	}
+	want := slices.Sorted(slices.Values(t.ArchiveOutputs))
+	if got := topo.OutputsReceiving(ArchiveTag); !slices.Equal(got, want) {
+		return fmt.Errorf("emit: outputs matching the archive tag %s are %v; they must be exactly the archive outputs %v", ArchiveTag, got, want)
+	}
+	return nil
+}
+
+// enforceFilters move archive rules' records to ArchiveTag, remove drop and aggregate rules'
+// records and sample the sample rules' records.
 func (t FluentBitTarget) enforceFilters(rules []Rule, mode Mode) ([]any, error) {
 	if mode != Enforce {
 		return nil, nil
 	}
-	var dropIDs []string
+	var dropIDs, archiveIDs []string
 	thresholds := map[string]int64{}
 	paths := map[string][]string{}
 	for _, r := range rules {
 		switch r.Action {
+		case "archive":
+			archiveIDs = append(archiveIDs, regexp.QuoteMeta(r.ID))
 		case "drop", "aggregate":
 			dropIDs = append(dropIDs, regexp.QuoteMeta(r.ID))
 		case "sample":
@@ -231,6 +269,18 @@ func (t FluentBitTarget) enforceFilters(rules []Rule, mode Mode) ([]any, error) 
 		}
 	}
 	var out []any
+	if len(archiveIDs) > 0 {
+		ids, err := dialect.Onigmo(`\A(?:` + strings.Join(archiveIDs, "|") + `)\z`)
+		if err != nil {
+			return nil, err
+		}
+		// keep=false: the record leaves this stream and re-enters the pipeline tagged ArchiveTag,
+		// where it keeps the rule that archived it as sievelog_archive, as in the other runtimes.
+		out = append(out,
+			map[string]any{"name": "rewrite_tag", "alias": "sievelog_archive", "match": t.Match,
+				"rule": "$sievelog_rule " + ids + " " + ArchiveTag + " false", "emitter_name": "sievelog_archive_emitter"},
+			map[string]any{"name": "modify", "alias": "sievelog_archive_rule", "match": ArchiveTag, "rename": "sievelog_rule sievelog_archive"})
+	}
 	if len(dropIDs) > 0 {
 		ids, err := dialect.Onigmo(`\A(?:` + strings.Join(dropIDs, "|") + `)\z`)
 		if err != nil {

@@ -27,18 +27,23 @@ type VectorTarget struct {
 	// MeasureSink is a complete sink definition (type and options) that receives the per-rule metrics.
 	MeasureSink map[string]any
 	DedupeMS    int
+	// ArchiveSinks are the user's sinks that receive archived rules' events, in addition to whatever
+	// they read already. Required when any rule archives.
+	ArchiveSinks []string
 }
 
 // Vector component names this package adds.
 const (
-	vTag        = "sievelog_tag"
-	vMeasure    = "sievelog_measure"
-	vMeasureAgg = "sievelog_measure_aggregate"
-	vSink       = "sievelog_metrics"
-	vEnforce    = "sievelog_enforce"
-	vRoute      = "sievelog_route"
-	vReduce     = "sievelog_dedupe"
-	vClean      = "sievelog_clean"
+	vTag          = "sievelog_tag"
+	vMeasure      = "sievelog_measure"
+	vMeasureAgg   = "sievelog_measure_aggregate"
+	vSink         = "sievelog_metrics"
+	vEnforce      = "sievelog_enforce"
+	vRoute        = "sievelog_route"
+	vReduce       = "sievelog_dedupe"
+	vClean        = "sievelog_clean"
+	vArchive      = "sievelog_archive"
+	vArchiveClean = "sievelog_archive_clean"
 )
 
 // VectorSampleThreshold is the integer below which the first 15 hex digits of the SHA-256 of a
@@ -145,14 +150,21 @@ func Vector(files [][]byte, t VectorTarget, rules []Rule, mode Mode) ([]byte, er
 	if mode != Enforce {
 		return yaml.Marshal(cfg)
 	}
-	enforce, dedupe, err := t.enforceProgram(rules)
+	enforce, dedupe, archive, err := t.enforceProgram(rules)
 	if err != nil {
 		return nil, err
 	}
 	transforms[vEnforce] = map[string]any{"type": "remap", "inputs": []any{vTag}, "source": enforce, "drop_on_abort": true}
-	cleanInputs := []any{vEnforce}
+	main := any(vEnforce)
+	if len(archive) > 0 {
+		if err := t.addArchive(transforms, sinks, archive); err != nil {
+			return nil, err
+		}
+		main = vArchive + "._unmatched"
+	}
+	cleanInputs := []any{main}
 	if len(dedupe) > 0 {
-		cleanInputs = t.addDedupe(transforms, dedupe)
+		cleanInputs = t.addDedupe(transforms, dedupe, main)
 	}
 	transforms[vClean] = map[string]any{"type": "remap", "inputs": cleanInputs, "source": "del(.sievelog_rule)\ndel(.sievelog_bytes)\ndel(.sievelog_aggregate)\n"}
 	// Rewire every original consumer of t.After to read from the enforcement chain.
@@ -165,7 +177,8 @@ func Vector(files [][]byte, t VectorTarget, rules []Rule, mode Mode) ([]byte, er
 }
 
 // vectorOwn are the components Vector adds; the user's configuration must not have them already.
-var vectorOwn = map[string]bool{vTag: true, vMeasure: true, vMeasureAgg: true, vEnforce: true, vRoute: true, vReduce: true, vClean: true, vSink: true}
+var vectorOwn = map[string]bool{vTag: true, vMeasure: true, vMeasureAgg: true, vEnforce: true, vRoute: true, vReduce: true, vClean: true, vSink: true,
+	vArchive: true, vArchiveClean: true}
 
 func vectorNamesFree(transforms, sinks map[string]any) error {
 	for _, n := range []string{vTag, vMeasure, vMeasureAgg, vEnforce, vRoute, vReduce, vClean} {
@@ -243,12 +256,14 @@ func (t VectorTarget) addMeasurement(transforms, sinks map[string]any, mode Mode
 }
 
 // enforceProgram is the VRL that drops and samples by rule and marks dedupe rules for the reduce
-// transform; dedupe lists those rules.
-func (t VectorTarget) enforceProgram(rules []Rule) (program string, dedupe []string, err error) {
+// transform; dedupe and archive list the rules the later transforms handle.
+func (t VectorTarget) enforceProgram(rules []Rule) (program string, dedupe, archive []string, err error) {
 	var enf strings.Builder
 	for _, r := range rules {
 		path, _ := t.textPath(r) // resolved without error by tagProgram
 		switch r.Action {
+		case "archive":
+			archive = append(archive, r.ID)
 		case "drop", "aggregate":
 			fmt.Fprintf(&enf, "if .sievelog_rule == %s { abort }\n", vrlString(r.ID))
 		case "sample":
@@ -258,20 +273,44 @@ func (t VectorTarget) enforceProgram(rules []Rule) (program string, dedupe []str
 			fmt.Fprintf(&enf, "if .sievelog_rule == %s { .sievelog_count = 1 }\n", vrlString(r.ID))
 			dedupe = append(dedupe, r.ID)
 		default:
-			return "", nil, fmt.Errorf("emit: rule %s: Vector cannot enforce %s; re-run analyze for runtime vector", r.ID, r.Action)
+			return "", nil, nil, fmt.Errorf("emit: rule %s: Vector cannot enforce %s; re-run analyze for runtime vector", r.ID, r.Action)
 		}
 	}
-	return enf.String(), dedupe, nil
+	return enf.String(), dedupe, archive, nil
 }
 
-// addDedupe routes dedupe rules' events through a reduce that collapses identical lines with a
-// count, and returns the inputs of the clean-up step.
-func (t VectorTarget) addDedupe(transforms map[string]any, dedupe []string) []any {
+// addArchive routes archived rules' events away from the enforcement chain into every archive sink.
+// Each archived event keeps the rule that archived it in .sievelog_archive.
+func (t VectorTarget) addArchive(transforms, sinks map[string]any, archive []string) error {
+	if len(t.ArchiveSinks) == 0 {
+		return fmt.Errorf("emit: rules archive but no vector archive sink is configured")
+	}
+	var conds []string
+	for _, id := range archive {
+		conds = append(conds, ".sievelog_rule == "+vrlString(id))
+	}
+	transforms[vArchive] = map[string]any{"type": "route", "inputs": []any{vEnforce}, "route": map[string]any{"archive": strings.Join(conds, " || ")}}
+	transforms[vArchiveClean] = map[string]any{"type": "remap", "inputs": []any{vArchive + ".archive"},
+		"source": ".sievelog_archive = del(.sievelog_rule)\ndel(.sievelog_bytes)\ndel(.sievelog_aggregate)\n"}
+	for _, id := range t.ArchiveSinks {
+		sink, ok := sinks[id].(map[string]any)
+		if !ok {
+			return fmt.Errorf("emit: vector archive sink %s not found", id)
+		}
+		in, _ := sink["inputs"].([]any)
+		sink["inputs"] = append(append([]any(nil), in...), vArchiveClean)
+	}
+	return nil
+}
+
+// addDedupe routes dedupe rules' events from input through a reduce that collapses identical lines
+// with a count, and returns the inputs of the clean-up step.
+func (t VectorTarget) addDedupe(transforms map[string]any, dedupe []string, input any) []any {
 	var conds []string
 	for _, id := range dedupe {
 		conds = append(conds, ".sievelog_rule == "+vrlString(id))
 	}
-	transforms[vRoute] = map[string]any{"type": "route", "inputs": []any{vEnforce}, "route": map[string]any{"dedupe": strings.Join(conds, " || ")}}
+	transforms[vRoute] = map[string]any{"type": "route", "inputs": []any{input}, "route": map[string]any{"dedupe": strings.Join(conds, " || ")}}
 	groupBy := []any{"sievelog_rule", strings.TrimPrefix(t.ScopePath, ".")}
 	for _, g := range t.GroupBy {
 		groupBy = append(groupBy, g)

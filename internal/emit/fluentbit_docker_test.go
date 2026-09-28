@@ -58,6 +58,7 @@ type fbRecord struct {
 	stream, service, text string
 	structured            bool
 	ts                    int64
+	archive               string // the rule that archived the record, if any
 }
 
 func runFluentBit(t *testing.T, cfg []byte, recs []record) ([]fbRecord, string) {
@@ -166,7 +167,7 @@ func runFluentBitEnv(t *testing.T, cfg []byte, recs []record, env []string) ([]f
 				for _, lr := range sl.LogRecords {
 					fields := kvlist(t, lr.Body)
 					ts, _ := strconv.ParseInt(lr.TimeUnixNano, 10, 64)
-					r := fbRecord{stream: str(fields["stream"]), service: str(fields["service"]), ts: ts}
+					r := fbRecord{stream: str(fields["stream"]), service: str(fields["service"]), ts: ts, archive: str(fields["sievelog_archive"])}
 					if b, ok := fields["body"].(map[string]any); ok {
 						r.text, r.structured = str(b["msg"]), true
 					} else {

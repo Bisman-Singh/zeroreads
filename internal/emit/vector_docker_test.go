@@ -51,6 +51,11 @@ func runVector(t *testing.T, cfg []byte, recs []record) (events []map[string]any
 	t.Helper()
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "vector.yaml"), cfg, 0o644)
+	return runVectorInput(t, dir, vectorInput(recs))
+}
+
+// vectorInput is the JSON lines Vector reads for recs.
+func vectorInput(recs []record) string {
 	var in strings.Builder
 	for _, r := range recs {
 		ev := map[string]any{"service": r.service, "tsn": r.ts}
@@ -64,7 +69,7 @@ func runVector(t *testing.T, cfg []byte, recs []record) (events []map[string]any
 		in.Write(b)
 		in.WriteByte('\n')
 	}
-	return runVectorInput(t, dir, in.String())
+	return in.String()
 }
 
 // runVectorInput runs Vector over raw JSON lines with the config already written to dir.

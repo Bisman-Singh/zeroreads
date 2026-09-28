@@ -22,7 +22,7 @@ type Rule struct {
 	ScopeValue string // e.g. checkout
 	Language   string // anchored RE2 over the body, or over Field of a map body
 	Field      string // "" for plain bodies
-	Action     string // aggregate | dedupe | sample | drop
+	Action     string // archive | aggregate | dedupe | sample | drop | rollup
 	Keep       int    // percent kept, for sample
 }
 
@@ -35,6 +35,9 @@ type Target struct {
 	// AggregateExporters receive the counters that replace aggregated lines. Required when any
 	// rule aggregates; they must exist in the config.
 	AggregateExporters []string
+	// ArchiveExporters receive archived rules' lines instead of the pipeline's exporters. Required
+	// when any rule archives; they must exist in the config and not be the pipeline's own exporters.
+	ArchiveExporters []string
 	// DedupeInterval is the logdedup interval, e.g. 10s.
 	DedupeInterval string
 	// SeverityKeys are log attributes (and, for structured records, body fields) that carry a level
@@ -101,8 +104,14 @@ const (
 	nameRollup         = "transform/sievelog_rollup"
 	pipeSplit          = "logs/sievelog"
 	pipeMetrics        = "metrics/sievelog"
+	nameArchiveMark    = "transform/sievelog_archive"
+	nameArchiveForward = "forward/sievelog_archive"
+	nameArchiveFilter  = "filter/sievelog_archive"
+	pipeArchive        = "logs/sievelog_archive"
 	RuleAttr           = "sievelog.rule"
-	DedupCounter       = "sievelog.dedup_count"
+	// ArchiveAttr carries, on an archived record, the rule that archived it.
+	ArchiveAttr  = "sievelog.archive"
+	DedupCounter = "sievelog.dedup_count"
 )
 
 // MeasureLines and MeasureBytes name the per-rule measurement metrics.
@@ -186,7 +195,7 @@ func CheckRules(rules []Rule) error {
 		}
 		seen[r.ID] = true
 		switch r.Action {
-		case "aggregate", "dedupe", "drop":
+		case "archive", "aggregate", "dedupe", "drop":
 		case "sample":
 			if r.Keep <= 0 || r.Keep >= 100 {
 				return fmt.Errorf("emit: rule %s: sample keep must be 1..99, got %d", r.ID, r.Keep)
@@ -279,6 +288,11 @@ func Collector(files [][]byte, t Target, rules []Rule, mode Mode) ([]byte, error
 	pipelines[t.Pipeline] = pipeline
 	pipelines[pipeSplit] = map[string]any{"receivers": []any{nameForward}, "processors": tail, "exporters": []any{nameEnforceForward, nameMeasure}}
 	pipelines[pipeEnforce] = map[string]any{"receivers": []any{nameEnforceForward}, "processors": enforceProcs, "exporters": origExporters}
+	if mode == Enforce {
+		if err := t.addArchive(rules, pipelines, connectors, processors, origExporters); err != nil {
+			return nil, err
+		}
+	}
 	var measureExporters []any
 	for _, e := range dedupStrings(append(append([]string(nil), t.MeasureExporters...), t.AggregateExporters...)) {
 		measureExporters = append(measureExporters, e)
@@ -288,17 +302,17 @@ func Collector(files [][]byte, t Target, rules []Rule, mode Mode) ([]byte, error
 }
 
 func collectorNamesFree(pipelines, connectors, processors map[string]any) error {
-	for _, name := range []string{pipeSplit, pipeMetrics, pipeEnforce} {
+	for _, name := range []string{pipeSplit, pipeMetrics, pipeEnforce, pipeArchive} {
 		if _, taken := pipelines[name]; taken {
 			return fmt.Errorf("emit: pipeline %s already exists", name)
 		}
 	}
-	for _, n := range []string{nameForward, nameMeasure, nameEnforceForward} {
+	for _, n := range []string{nameForward, nameMeasure, nameEnforceForward, nameArchiveForward} {
 		if _, taken := connectors[n]; taken {
 			return fmt.Errorf("emit: connector %s already exists", n)
 		}
 	}
-	for _, n := range []string{nameFilter, nameDedupe, nameRollup} {
+	for _, n := range []string{nameFilter, nameDedupe, nameRollup, nameArchiveMark, nameArchiveFilter} {
 		if _, taken := processors[n]; taken {
 			return fmt.Errorf("emit: processor %s already exists", n)
 		}
@@ -306,16 +320,19 @@ func collectorNamesFree(pipelines, connectors, processors map[string]any) error 
 	return nil
 }
 
-// checkExporters requires a measurement exporter, an aggregate exporter when a rule aggregates, and
-// every named exporter to exist.
+// checkExporters requires a measurement exporter, an aggregate exporter when a rule aggregates, an
+// archive exporter when a rule archives, and every named exporter to exist.
 func (t Target) checkExporters(rules []Rule, exporters map[string]any) error {
 	if slices.ContainsFunc(rules, func(r Rule) bool { return r.Action == "aggregate" }) && len(t.AggregateExporters) == 0 {
 		return fmt.Errorf("emit: rules aggregate but no aggregate exporter is configured")
 	}
+	if slices.ContainsFunc(rules, func(r Rule) bool { return r.Action == "archive" }) && len(t.ArchiveExporters) == 0 {
+		return fmt.Errorf("emit: rules archive but no archive exporter is configured")
+	}
 	if len(t.MeasureExporters) == 0 {
 		return fmt.Errorf("emit: no measurement exporter is configured")
 	}
-	for _, e := range append(append([]string(nil), t.MeasureExporters...), t.AggregateExporters...) {
+	for _, e := range slices.Concat(t.MeasureExporters, t.AggregateExporters, t.ArchiveExporters) {
 		if _, ok := exporters[e]; !ok {
 			return fmt.Errorf("emit: exporter %s does not exist", e)
 		}
@@ -361,6 +378,40 @@ func (t Target) measurementMetrics(rules []Rule, mode Mode) []any {
 	return metrics
 }
 
+// addArchive sends archived rules' lines to the archive exporters instead of the pipeline's own.
+// The split pipeline marks each such record with the rule that archives it, in a transform whose
+// errors skip the record: a record whose condition cannot be evaluated is neither archived nor
+// removed, as it is not measured. The enforce pipeline drops marked records; a pipeline beside it
+// keeps only them and exports them to the archive.
+func (t Target) addArchive(rules []Rule, pipelines, connectors, processors map[string]any, origExporters []any) error {
+	var marks []any
+	for _, r := range rules {
+		if r.Action == "archive" {
+			marks = append(marks, fmt.Sprintf("set(log.attributes[%s], %s) where %s", ottlString(ArchiveAttr), ottlString(r.ID), r.GuardedCondition(t.SeverityKeys)))
+		}
+	}
+	if len(marks) == 0 {
+		return nil
+	}
+	var archive []any
+	for _, e := range t.ArchiveExporters {
+		if slices.Contains(origExporters, any(e)) {
+			return fmt.Errorf("emit: archive exporter %s is one of pipeline %s's exporters; archived lines would still reach it", e, t.Pipeline)
+		}
+		archive = append(archive, e)
+	}
+	processors[nameArchiveMark] = map[string]any{"error_mode": "ignore",
+		"log_statements": []any{map[string]any{"context": "log", "statements": marks}}}
+	processors[nameArchiveFilter] = map[string]any{"error_mode": "ignore",
+		"log_conditions": []any{fmt.Sprintf("log.attributes[%s] == nil", ottlString(ArchiveAttr))}}
+	connectors[nameArchiveForward] = map[string]any{}
+	split := pipelines[pipeSplit].(map[string]any)
+	split["processors"] = append(split["processors"].([]any), nameArchiveMark)
+	split["exporters"] = append(split["exporters"].([]any), nameArchiveForward)
+	pipelines[pipeArchive] = map[string]any{"receivers": []any{nameArchiveForward}, "processors": []any{nameArchiveFilter}, "exporters": archive}
+	return nil
+}
+
 // addEnforcement adds the rollup, dedupe and filter processors the rules need, and returns their
 // names in the order they run.
 func (t Target) addEnforcement(rules []Rule, processors map[string]any) []any {
@@ -368,6 +419,8 @@ func (t Target) addEnforcement(rules []Rule, processors map[string]any) []any {
 	for _, r := range rules {
 		cond := r.GuardedCondition(t.SeverityKeys)
 		switch r.Action {
+		case "archive":
+			drops = append(drops, fmt.Sprintf("log.attributes[%s] == %s", ottlString(ArchiveAttr), ottlString(r.ID)))
 		case "aggregate", "drop":
 			drops = append(drops, cond)
 		case "sample":

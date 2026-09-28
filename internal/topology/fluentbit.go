@@ -70,6 +70,25 @@ func tagMatcher(m map[string]any) (string, bool) {
 // intersects reports whether two tag languages can share a tag; "" is a plugin that receives none.
 func intersects(a, b string) bool { return b != "" && automaton.Overlap(a, b) }
 
+// OutputsReceiving returns the outputs that can receive a record carrying exactly tag; an output
+// whose tag matching cannot be modelled is assumed to receive it.
+func (c *FluentBitConfig) OutputsReceiving(tag string) []string {
+	exact := automaton.Glob(tag)
+	var out []string
+	for i, o := range c.Outputs {
+		if re, ok := tagMatcher(o); !ok || intersects(exact, re) {
+			out = append(out, ID(o, i))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// GlobMatches reports whether a Fluent Bit Match glob matches tag.
+func GlobMatches(glob, tag string) bool {
+	return automaton.Overlap(automaton.Glob(glob), automaton.Glob(tag))
+}
+
 // FluentBitDownstream returns the outputs that can receive records tagged by match after the filter
 // aliased after, and the filters after that point that re-emit (rewrite_tag) or count
 // (log_to_metrics) those records.
