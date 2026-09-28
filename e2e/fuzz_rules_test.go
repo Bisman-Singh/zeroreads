@@ -298,6 +298,7 @@ func TestFuzzRealRulesAgainstLoki(t *testing.T) {
 	}
 	g := &fzGen{r: rand.New(rand.NewPCG(42, 7)), rules: rules}
 	var ok, rejected, notUsed, unsound, parseFail, returned int
+	var counts readCounts
 	for i := 0; i < nq; i++ {
 		fr := rules[g.r.IntN(len(rules))]
 		qs := g.query(fr)
@@ -334,12 +335,20 @@ func TestFuzzRealRulesAgainstLoki(t *testing.T) {
 				t.Errorf("UNSOUND: %s\n  Loki returned %q (rule %s)\n  analyzer: %v", qs, witness, svc, why)
 			}
 		}
+		var fv usage.Verdict
 		for _, sel := range parsed.Selections {
-			if v := usage.Evaluate(sel, fr.ur); !v.Used {
+			v := usage.Evaluate(sel, fr.ur)
+			if !v.Used {
 				notUsed++
+			} else if !fv.Used || len(fv.Widened) > 0 && len(v.Widened) == 0 {
+				fv = v
 			}
 		}
+		if fv.Used {
+			counts.add(fv, read[fr.svc] != "")
+		}
 	}
+	t.Logf("over-blocking: %s", counts)
 	t.Logf("queries accepted=%d rejected=%d parse-fallback=%d (rule,query) pairs with real reads=%d analyzer-not-used verdicts=%d UNSOUND=%d",
 		ok, rejected, parseFail, returned, notUsed, unsound)
 	if returned == 0 || notUsed == 0 {

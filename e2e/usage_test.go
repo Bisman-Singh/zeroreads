@@ -169,22 +169,78 @@ func markRead(t *testing.T, rules []usage.Rule, l lokiLine, read map[string]bool
 // predicted returns the rules the analyzer says the query reads. A query it cannot parse reads
 // everything, which is how the product treats it.
 func predicted(q string, rules []usage.Rule) (map[string]bool, bool) {
+	vs, parsed := readVerdicts(q, rules)
 	out := map[string]bool{}
+	for id := range vs {
+		out[id] = true
+	}
+	return out, parsed
+}
+
+// readVerdicts is the analyzer's "reads" verdict for each rule the query reads, the exact one when
+// any selection reads the rule's lines exactly.
+func readVerdicts(q string, rules []usage.Rule) (map[string]usage.Verdict, bool) {
+	out := map[string]usage.Verdict{}
 	pq, err := logql.Parse(q)
 	if err != nil {
 		for _, r := range rules {
-			out[r.ID] = true
+			out[r.ID] = usage.Verdict{Used: true, Widened: []string{"query does not parse"}}
 		}
 		return out, false
 	}
 	for _, sel := range pq.Selections {
 		for _, r := range rules {
-			if usage.Evaluate(sel, r).Used {
-				out[r.ID] = true
+			v := usage.Evaluate(sel, r)
+			if prev, seen := out[r.ID]; v.Used && (!seen || len(prev.Widened) > 0 && len(v.Widened) == 0) {
+				out[r.ID] = v
 			}
 		}
 	}
 	return out, true
+}
+
+// readCounts tallies "reads" verdicts: exact ones, and assumed ones for which Loki returned none of
+// the rule's lines (each of those may be over-blocking).
+type readCounts struct {
+	reads, exact, assumed, assumedUnseen int
+	kinds                                map[string]int // assumed verdicts with no rule lines returned, per kind of assumption
+}
+
+func (c *readCounts) add(v usage.Verdict, returnedRuleLines bool) {
+	c.reads++
+	switch {
+	case len(v.Widened) == 0:
+		c.exact++
+	case !returnedRuleLines:
+		c.assumed++
+		c.assumedUnseen++
+		if c.kinds == nil {
+			c.kinds = map[string]int{}
+		}
+		seen := map[string]bool{}
+		for _, w := range v.Widened {
+			if k := usage.Kind(w); !seen[k] {
+				seen[k] = true
+				c.kinds[k]++
+			}
+		}
+	default:
+		c.assumed++
+	}
+}
+
+func (c readCounts) String() string {
+	pct := 0.0
+	if c.reads > 0 {
+		pct = 100 * float64(c.exact) / float64(c.reads)
+	}
+	kinds := make([]string, 0, len(c.kinds))
+	for k, n := range c.kinds {
+		kinds = append(kinds, fmt.Sprintf("%s=%d", k, n))
+	}
+	sort.Strings(kinds)
+	return fmt.Sprintf("reads verdicts=%d exact=%d (%.1f%%) assumed=%d assumed_with_no_rule_lines_returned=%d by kind: %s",
+		c.reads, c.exact, pct, c.assumed, c.assumedUnseen, strings.Join(kinds, ", "))
 }
 
 // queryGen builds random log queries from real corpus text.
@@ -327,10 +383,15 @@ func TestUsageSoundAgainstLoki(t *testing.T) {
 		n, _ = strconv.Atoi(s)
 	}
 	var sound, parseFallback, lokiRejected, readSomething, preciseNotUsed int
+	var counts readCounts
 	for i := 0; i < n; i++ {
 		q := g.query()
 		lines, status := lokiQuery(t, base, q)
-		pred, parsed := predicted(q, rules)
+		verdicts, parsed := readVerdicts(q, rules)
+		pred := map[string]bool{}
+		for id := range verdicts {
+			pred[id] = true
+		}
 		if status != http.StatusOK {
 			lokiRejected++
 			if parsed {
@@ -356,10 +417,14 @@ func TestUsageSoundAgainstLoki(t *testing.T) {
 				preciseNotUsed++
 			}
 		}
+		for id, v := range verdicts {
+			counts.add(v, actual[id])
+		}
 		sound++
 	}
 	t.Logf("queries=%d sound=%d loki_rejected=%d parse_fallback=%d with_rule_lines=%d proven_unused_pairs=%d",
 		n, sound, lokiRejected, parseFallback, readSomething, preciseNotUsed)
+	t.Logf("over-blocking: %s", counts)
 	if lokiRejected > n/50 {
 		t.Fatalf("Loki rejected %d of %d queries: too many went unchecked", lokiRejected, n)
 	}

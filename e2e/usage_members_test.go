@@ -115,7 +115,7 @@ func TestUsageSoundOnLanguageMembers(t *testing.T) {
 		return s
 	}
 	stage := func() string {
-		switch r.IntN(16) {
+		switch r.IntN(17) {
 		case 0, 1:
 			return "|= " + strconv.Quote(tok())
 		case 2, 3:
@@ -142,11 +142,16 @@ func TestUsageSoundOnLanguageMembers(t *testing.T) {
 			return `| line_format "{{__line__}}"`
 		case 14:
 			return `| json`
+		case 15:
+			// A label filter that keeps nothing: an exact verdict here would be caught below.
+			return `| service_name="` + run + `-none"`
 		}
 		return "!~ " + strconv.Quote(re()) + " or " + strconv.Quote(re())
 	}
 	queries := envInt("E2E_MEMBER_QUERIES", 600)
 	var unused, withMembers, rejected int
+	var counts readCounts
+	var exact []exactRead
 	for i := 0; i < queries; i++ {
 		var b strings.Builder
 		if r.IntN(3) == 0 {
@@ -163,7 +168,11 @@ func TestUsageSoundOnLanguageMembers(t *testing.T) {
 			rejected++
 			continue
 		}
-		pred, parsed := predicted(q, rules)
+		verdicts, parsed := readVerdicts(q, rules)
+		pred := map[string]bool{}
+		for id := range verdicts {
+			pred[id] = true
+		}
 		if !parsed {
 			t.Errorf("analyzer could not parse a query Loki accepts: %s", q)
 		}
@@ -189,11 +198,81 @@ func TestUsageSoundOnLanguageMembers(t *testing.T) {
 			if !pred[ru.ID] {
 				unused++
 			}
+			if v, ok := verdicts[ru.ID]; ok {
+				counts.add(v, read[ru.ID])
+				if len(v.Widened) == 0 && v.Witness != "" {
+					exact = append(exact, exactRead{q, ru.ID, ru.Scope["service_name"], v.Witness})
+				}
+			}
 		}
 	}
+	t.Logf("over-blocking: %s", counts)
+	confirmExactReads(t, base, exact)
 	t.Logf("members: %d lines of %d languages, %d queries (%d rejected by Loki), %d returned members, %d proven-unused pairs, 0 unsound",
 		n, len(rules), queries, rejected, withMembers, unused)
 	if withMembers < queries/5 || unused == 0 {
 		t.Fatalf("the test has no teeth: %d queries returned members, %d unused verdicts", withMembers, unused)
 	}
+}
+
+// exactRead is an exact "reads" verdict: query q reads the lines of rule in stream svc, and witness
+// is one of them.
+type exactRead struct{ q, rule, svc, witness string }
+
+// confirmExactReads checks the other side of soundness: an exact "reads" verdict must be true. Each
+// verdict's witness line is stored in the rule's stream, and the query must return it.
+func confirmExactReads(t *testing.T, base string, reads []exactRead) {
+	t.Helper()
+	if len(reads) == 0 {
+		t.Fatal("no exact reads verdict to confirm: the check has no teeth")
+	}
+	at := time.Now().Add(-30 * time.Second).UnixNano()
+	streams := map[string]map[string]string{}
+	lines := map[string][][2]string{}
+	stamp := map[string]string{} // svc|witness -> timestamp it was stored at
+	for i, r := range reads {
+		key := r.svc + "|" + r.witness
+		if _, done := stamp[key]; done {
+			continue
+		}
+		ts := strconv.FormatInt(at+int64(i), 10)
+		stamp[key] = ts
+		streams[r.svc] = map[string]string{"service_name": r.svc}
+		lines[r.svc] = append(lines[r.svc], [2]string{ts, r.witness})
+	}
+	pushLoki(t, base, streams, lines)
+	time.Sleep(5 * time.Second)
+	byQuery := map[string][]int{}
+	for i, r := range reads {
+		byQuery[r.q] = append(byQuery[r.q], i)
+	}
+	confirmed := 0
+	for q, idx := range byQuery {
+		got := map[string]bool{}
+		for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(2 * time.Second) {
+			rows, status := lokiQuery(t, base, q)
+			if status != http.StatusOK {
+				t.Fatalf("Loki rejected a query it accepted before (%d): %s", status, q)
+			}
+			for _, l := range rows {
+				got[l.service+"|"+l.ts] = true
+			}
+			all := true
+			for _, i := range idx {
+				all = all && got[reads[i].svc+"|"+stamp[reads[i].svc+"|"+reads[i].witness]]
+			}
+			if all || time.Now().After(deadline) {
+				break
+			}
+		}
+		for _, i := range idx {
+			r := reads[i]
+			if !got[r.svc+"|"+stamp[r.svc+"|"+r.witness]] {
+				t.Errorf("OVER-CLAIMED EXACT: %s\n  the analyzer says it reads %s exactly, e.g. %q, but Loki did not return that line", q, r.rule, r.witness)
+				continue
+			}
+			confirmed++
+		}
+	}
+	t.Logf("exact reads verdicts confirmed by Loki: %d of %d (%d distinct queries)", confirmed, len(reads), len(byQuery))
 }
