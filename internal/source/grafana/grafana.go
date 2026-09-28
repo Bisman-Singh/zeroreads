@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -368,6 +370,46 @@ func (r *orgReader) listK8s(ctx context.Context, group, version, resource string
 		}
 		cont = page.Metadata.Continue
 	}
+}
+
+// listK8sStable lists a resource until two consecutive lists name the same objects (at most four
+// lists) and returns every object any of them named, by name. Grafana 13.2.2 sometimes answers a
+// list with no items and a success status right after writes; for a resource with no second API to
+// check against, two agreeing lists are the evidence that nothing was left out.
+func (r *orgReader) listK8sStable(ctx context.Context, group, version, resource string) ([]json.RawMessage, error) {
+	union := map[string]json.RawMessage{}
+	var prev map[string]bool
+	var undecodable []json.RawMessage
+	for attempt := 0; attempt < 4; attempt++ {
+		items, err := r.listK8s(ctx, group, version, resource)
+		if err != nil {
+			return nil, err
+		}
+		names := map[string]bool{}
+		undecodable = nil
+		for _, raw := range items {
+			var m struct {
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
+			}
+			if err := json.Unmarshal(raw, &m); err != nil {
+				undecodable = append(undecodable, raw) // the caller decodes it again and reports it
+				continue
+			}
+			names[m.Metadata.Name] = true
+			union[m.Metadata.Name] = raw
+		}
+		if prev != nil && maps.Equal(prev, names) || !sleepCtx(ctx, 300*time.Millisecond) {
+			break
+		}
+		prev = names
+	}
+	out := undecodable
+	for _, name := range slices.Sorted(maps.Keys(union)) {
+		out = append(out, union[name])
+	}
+	return out, nil
 }
 
 // dedupeViews drops a dashboard query already seen in another schema view of the same dashboard:

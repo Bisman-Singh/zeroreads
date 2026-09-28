@@ -4,6 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"net/url"
+	"slices"
+	"sort"
+	"time"
 )
 
 type k8sDashboard struct {
@@ -23,23 +28,43 @@ type k8sDashboard struct {
 // dashboards reads every dashboard in both the classic (v1) and the v2 schema. Grafana converts on
 // read and reports conversion failures; a dashboard is parsed in every version that converted, and
 // is a gap only when no version did.
+//
+// Grafana 13.2.2's dashboard list sometimes answers with no items and a success status right after
+// writes (reproduced: 0 listed, 357 found by search, 3 seconds after an import). So every dashboard
+// the search API knows must be listed: the list is retried while any is missing, the rest are read
+// one by one, and one that cannot be read is a gap.
 func (r *orgReader) dashboards(ctx context.Context) {
 	r.loadLibraries(ctx)
+	want, err := r.searchDashboards(ctx)
+	if err != nil {
+		r.gap("dashboards/search", "list: %v", err) // nothing to check the list against
+	}
+	listed := map[string]map[string]k8sDashboard{"v1": {}, "v2": {}}
+	listErr := map[string]error{}
+	for attempt := 0; ; attempt++ {
+		for _, v := range []string{"v1", "v2"} {
+			if err := r.listDashboards(ctx, v, listed[v]); err != nil {
+				if len(listed[v]) == 0 {
+					listErr[v] = err
+				}
+				continue
+			}
+			delete(listErr, v)
+		}
+		missing := unlisted(want, listed)
+		if len(missing) == 0 || attempt == 3 || !sleepCtx(ctx, time.Duration(attempt+1)*500*time.Millisecond) {
+			r.readUnlisted(ctx, missing, listed["v1"])
+			break
+		}
+	}
+	for _, v := range slices.Sorted(maps.Keys(listErr)) {
+		r.gap("dashboards/"+v, "list: %v", listErr[v])
+	}
 	parsed := map[string]bool{}
 	failed := map[string]string{}
 	for _, v := range []string{"v1", "v2"} {
-		items, err := r.listK8s(ctx, "dashboard.grafana.app", v, "dashboards")
-		if err != nil {
-			r.gap("dashboards/"+v, "list: %v", err)
-			continue
-		}
-		for _, raw := range items {
-			var d k8sDashboard
-			if err := json.Unmarshal(raw, &d); err != nil {
-				r.gap("dashboards/"+v, "decode: %v", err)
-				continue
-			}
-			name := d.Metadata.Name
+		for _, name := range slices.Sorted(maps.Keys(listed[v])) {
+			d := listed[v][name]
 			if d.Status.Conversion != nil && d.Status.Conversion.Failed {
 				failed[name] = fmt.Sprintf("%s conversion failed: %s", v, d.Status.Conversion.Error)
 				continue
@@ -56,6 +81,81 @@ func (r *orgReader) dashboards(ctx context.Context) {
 		if !parsed[name] {
 			r.gap("dashboard:"+name, "%s", why)
 		}
+	}
+}
+
+// listDashboards adds every dashboard one schema version lists to into.
+func (r *orgReader) listDashboards(ctx context.Context, version string, into map[string]k8sDashboard) error {
+	items, err := r.listK8s(ctx, "dashboard.grafana.app", version, "dashboards")
+	if err != nil {
+		return err
+	}
+	for _, raw := range items {
+		var d k8sDashboard
+		if err := json.Unmarshal(raw, &d); err != nil {
+			r.gap("dashboards/"+version, "decode: %v", err)
+			continue
+		}
+		into[d.Metadata.Name] = d
+	}
+	return nil
+}
+
+// readUnlisted reads, one by one, dashboards the search API found but no list returned; one that
+// cannot be read is a gap.
+func (r *orgReader) readUnlisted(ctx context.Context, uids []string, into map[string]k8sDashboard) {
+	for _, uid := range uids {
+		var d k8sDashboard
+		path := fmt.Sprintf("/apis/dashboard.grafana.app/v1/namespaces/%s/dashboards/%s", namespace(r.org), url.PathEscape(uid))
+		if err := r.c.do(ctx, r.org, path, &d); err != nil {
+			r.gap("dashboard:"+uid, "found by search but not listed, and reading it failed: %v", err)
+			continue
+		}
+		into[uid] = d
+	}
+}
+
+// searchDashboards returns the UID of every dashboard the search API finds in the org.
+func (r *orgReader) searchDashboards(ctx context.Context) (map[string]bool, error) {
+	out := map[string]bool{}
+	const perPage = 5000
+	for page := 1; ; page++ {
+		var hits []struct {
+			UID string `json:"uid"`
+		}
+		if err := r.c.do(ctx, r.org, fmt.Sprintf("/api/search?type=dash-db&limit=%d&page=%d", perPage, page), &hits); err != nil {
+			return out, err
+		}
+		for _, h := range hits {
+			out[h.UID] = true
+		}
+		if len(hits) < perPage {
+			return out, nil
+		}
+	}
+}
+
+// unlisted is every searched dashboard that no schema version listed, sorted.
+func unlisted(want map[string]bool, listed map[string]map[string]k8sDashboard) []string {
+	var out []string
+	for uid := range want {
+		if _, v1 := listed["v1"][uid]; !v1 {
+			if _, v2 := listed["v2"][uid]; !v2 {
+				out = append(out, uid)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sleepCtx waits d unless ctx ends first, and reports whether it waited.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
 	}
 }
 

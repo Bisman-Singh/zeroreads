@@ -86,6 +86,7 @@ func fakeGrafana(t *testing.T, org2Broken bool) *httptest.Server {
 		}},
 		"1 /api/query-history": map[string]any{"result": map[string]any{"totalCount": 1, "queryHistory": []any{
 			map[string]any{"uid": "h1", "datasourceUid": "loki", "queries": []any{map[string]any{"expr": `{service_name="orders"} |= "history"`}}}}}},
+		"1 /api/search": []any{map[string]any{"uid": "d1"}, map[string]any{"uid": "broken"}},
 		"1 /api/datasources/correlations": map[string]any{"totalCount": 2, "correlations": []any{
 			map[string]any{"uid": "c1", "targetUID": "loki", "type": "query", "config": map[string]any{"target": map[string]any{"expr": `{service_name="${service}"}`}}},
 			map[string]any{"uid": "c2", "targetUID": "loki", "type": "external", "config": map[string]any{"target": map[string]any{"url": "https://x"}}}}},
@@ -349,5 +350,124 @@ func TestDashboardDatasourceVariables(t *testing.T) {
 	sort.Strings(got)
 	if want := []string{"dashboard:c/panel:2/A=l1", "dashboard:v/panel-1/0=*"}; !slices.Equal(got, want) {
 		t.Fatalf("%v, want %v", got, want)
+	}
+}
+
+// flakyGrafana serves one Loki dashboard that the search API always finds, while the list answers
+// empty for the first emptyLists calls (as Grafana 13.2.2 did right after an import) and the single
+// read answers with getStatus.
+func flakyGrafana(t *testing.T, emptyLists int, getStatus int) (*httptest.Server, *int) {
+	t.Helper()
+	dash := map[string]any{"metadata": map[string]any{"name": "late"}, "spec": map[string]any{"panels": []any{
+		map[string]any{"id": 1, "datasource": map[string]any{"uid": "loki", "type": "loki"}, "targets": []any{
+			map[string]any{"refId": "A", "expr": `{service_name="checkout"} |= "late"`}}}}}}
+	lists := new(int)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var doc any
+		switch p := r.URL.Path; {
+		case p == "/api/orgs":
+			doc = []any{map[string]any{"id": 1}}
+		case p == "/api/datasources":
+			doc = []any{map[string]any{"uid": "loki", "name": "Loki", "type": "loki", "url": "http://loki:3100", "isDefault": true}}
+		case p == "/api/search":
+			doc = []any{map[string]any{"uid": "late"}}
+		case p == "/apis/dashboard.grafana.app/v1/namespaces/default/dashboards":
+			*lists++
+			doc = map[string]any{"items": []any{}}
+			if *lists > emptyLists {
+				doc = map[string]any{"items": []any{dash}}
+			}
+		case p == "/apis/dashboard.grafana.app/v1/namespaces/default/dashboards/late":
+			if getStatus != http.StatusOK {
+				http.Error(w, "boom", getStatus)
+				return
+			}
+			doc = dash
+		case strings.HasPrefix(p, "/apis/"):
+			doc = map[string]any{"items": []any{}}
+		case strings.Contains(p, "library") || strings.Contains(p, "history"):
+			doc = map[string]any{"result": map[string]any{}}
+		case strings.Contains(p, "correlations"):
+			doc = map[string]any{}
+		default:
+			doc = []any{}
+		}
+		json.NewEncoder(w).Encode(doc)
+	}))
+	return srv, lists
+}
+
+func lateQueryAndGaps(t *testing.T, srv *httptest.Server) (bool, []string) {
+	t.Helper()
+	res, err := (&Client{Base: srv.URL, Token: "tok"}).Read(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := slices.ContainsFunc(res.Queries, func(q Query) bool { return strings.Contains(q.Expr, `"late"`) })
+	var gaps []string
+	for _, g := range res.Gaps {
+		if strings.HasPrefix(g.Origin, "dashboard") {
+			gaps = append(gaps, g.Origin)
+		}
+	}
+	return found, gaps
+}
+
+// A dashboard the search API knows is never silently missed: the list is retried, then the
+// dashboard is read on its own, and only one that cannot be read at all is a gap.
+func TestDashboardListCheckedAgainstSearch(t *testing.T) {
+	srv, lists := flakyGrafana(t, 1, http.StatusOK)
+	if found, gaps := lateQueryAndGaps(t, srv); !found || len(gaps) > 0 || *lists != 2 {
+		t.Fatalf("empty list then full: found=%v gaps=%v lists=%d", found, gaps, *lists)
+	}
+	srv.Close()
+	srv, _ = flakyGrafana(t, 1000, http.StatusOK)
+	if found, gaps := lateQueryAndGaps(t, srv); !found || len(gaps) > 0 {
+		t.Fatalf("never listed, read on its own: found=%v gaps=%v", found, gaps)
+	}
+	srv.Close()
+	srv, _ = flakyGrafana(t, 1000, http.StatusInternalServerError)
+	if found, gaps := lateQueryAndGaps(t, srv); found || !slices.Equal(gaps, []string{"dashboard:late"}) {
+		t.Fatalf("unreadable: found=%v gaps=%v", found, gaps)
+	}
+	srv.Close()
+}
+
+// Short links have no second API to check a list against, so the reader lists until two lists
+// agree: a list that answers empty once cannot hide one.
+func TestShortURLListMustAgree(t *testing.T) {
+	lists := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var doc any
+		switch p := r.URL.Path; {
+		case p == "/api/orgs":
+			doc = []any{map[string]any{"id": 1}}
+		case p == "/api/datasources":
+			doc = []any{map[string]any{"uid": "loki", "name": "Loki", "type": "loki", "url": "http://loki:3100", "isDefault": true}}
+		case p == "/apis/shorturl.grafana.app/v1beta1/namespaces/default/shorturls":
+			lists++
+			doc = map[string]any{"items": []any{}}
+			if lists > 1 {
+				doc = map[string]any{"items": []any{map[string]any{"metadata": map[string]any{"name": "s1"},
+					"spec": map[string]any{"path": "explore?schemaVersion=1&panes=" + url.QueryEscape(`{"a":{"datasource":"loki","queries":[{"refId":"A","expr":"{service_name=\"checkout\"} |= \"linked\""}]}}`)}}}}
+			}
+		case strings.HasPrefix(p, "/apis/"):
+			doc = map[string]any{"items": []any{}}
+		case strings.Contains(p, "library") || strings.Contains(p, "history"):
+			doc = map[string]any{"result": map[string]any{}}
+		case strings.Contains(p, "correlations"):
+			doc = map[string]any{}
+		default:
+			doc = []any{}
+		}
+		json.NewEncoder(w).Encode(doc)
+	}))
+	defer srv.Close()
+	res, err := (&Client{Base: srv.URL, Token: "tok"}).Read(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(res.Queries, func(q Query) bool { return strings.Contains(q.Expr, `"linked"`) }) || lists < 3 {
+		t.Fatalf("short link missed after an empty list: %d lists, %+v", lists, res.Queries)
 	}
 }

@@ -89,7 +89,7 @@ func (r *orgReader) alertRules(ctx context.Context) {
 // shortURLs reads stored short links. Explore links carry their queries in the path, in the
 // current "panes" format or the legacy "left"/"right" format.
 func (r *orgReader) shortURLs(ctx context.Context) {
-	items, err := r.listK8s(ctx, "shorturl.grafana.app", "v1beta1", "shorturls")
+	items, err := r.listK8sStable(ctx, "shorturl.grafana.app", "v1beta1", "shorturls")
 	if err != nil {
 		r.gap("shorturls", "list: %v", err)
 		return
