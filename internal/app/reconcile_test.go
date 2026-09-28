@@ -50,6 +50,8 @@ func TestReconcileStatuses(t *testing.T) {
 		"count_over_time({service_name=\"svc\"} |~ `\\Aroll-ok\\z`":    {100, 0},
 		"count_over_time({service_name=\"svc\"} |~ `\\Aroll-raw\\z`":   {100, 4},
 		"count_over_time({service_name=\"svc\"} |~ `\\Aroll-lost\\z`":  {100, 0},
+		"count_over_time({service_name=\"svc\"} |~ `\\Aarch-ok\\z`":    {100, 0},
+		"count_over_time({service_name=\"svc\"} |~ `\\Aarch-kept\\z`":  {100, 2},
 		"`sievelog rollup r-roll-ok`":                                  {0, 97},
 		"`sievelog rollup r-roll-raw`":                                 {0, 90},
 	})
@@ -69,13 +71,16 @@ func TestReconcileStatuses(t *testing.T) {
 		mk("r-roll-raw", `\Aroll-raw\z`, "rollup", 0),
 		mk("r-roll-lost", `\Aroll-lost\z`, "rollup", 0),
 		mk("r-teleport", `\Aquiet\z`, "teleport", 0),
+		// An archived line must be gone from Loki: it lives in the archive.
+		mk("r-arch-ok", `\Aarch-ok\z`, "archive", 0),
+		mk("r-arch-kept", `\Aarch-kept\z`, "archive", 0),
 	}}
 	res, err := Reconcile(context.Background(), c, rf, before, after, 0.05)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]string{"r-drop-ok": "ok", "r-drop-bad": "mismatch", "r-sample-ok": "ok", "r-sample-bad": "mismatch", "r-quiet": "no-traffic",
-		"r-roll-ok": "ok", "r-roll-raw": "mismatch", "r-roll-lost": "mismatch", "r-teleport": "mismatch"}
+		"r-roll-ok": "ok", "r-roll-raw": "mismatch", "r-roll-lost": "mismatch", "r-teleport": "mismatch", "r-arch-ok": "ok", "r-arch-kept": "mismatch"}
 	for _, r := range res.Rules {
 		if r.Status != want[r.RuleID] {
 			t.Fatalf("%s: %s (%s), want %s", r.RuleID, r.Status, r.Detail, want[r.RuleID])

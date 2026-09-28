@@ -87,6 +87,14 @@ func TestActionPreferences(t *testing.T) {
 	if r := m[cache.Template]; r.Action != "sample" || r.Keep != 10 || r.RemovedBytesPerDay != 48000*0.9 {
 		t.Fatalf("variable template: %+v", r)
 	}
+	// Archive first: every unread template leaves Loki whole, nothing is lost, and the saving counts.
+	pol.Actions = []string{"archive", "dedupe", "sample"}
+	recs, _ = Decide([]Candidate{heartbeat, cache}, nil, nil, nil, pol)
+	for _, r := range recs {
+		if r.Action != "archive" || r.RemovedBytesPerDay == 0 || r.UpperBound {
+			t.Fatalf("archive: %+v", r)
+		}
+	}
 	pol.Actions = []string{"dedupe"}
 	recs, _ = Decide([]Candidate{cache}, nil, nil, nil, pol)
 	if recs[0].Action != "none" || !strings.Contains(strings.Join(recs[0].Blockers, ";"), "no allowed action") {

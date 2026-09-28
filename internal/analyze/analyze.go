@@ -82,7 +82,7 @@ type Gap struct {
 
 // Policy is the operator's settings.
 type Policy struct {
-	// Actions in order of preference. Allowed: aggregate, dedupe, sample, drop.
+	// Actions in order of preference. Allowed: archive, aggregate, dedupe, sample, drop, rollup.
 	Actions []string
 	// SamplePercent is the share of lines a sample rule keeps.
 	SamplePercent int
@@ -192,7 +192,7 @@ func newDecision(cands []Candidate, queries []UsageQuery, scoped []ScopedReader,
 	}
 	for _, a := range pol.Actions {
 		switch a {
-		case "aggregate", "dedupe", "sample", "drop", "rollup":
+		case "archive", "aggregate", "dedupe", "sample", "drop", "rollup":
 		default:
 			return nil, fmt.Errorf("analyze: unknown action %q", a)
 		}
@@ -417,8 +417,8 @@ func (d *decision) chooseAction(rec *Recommendation, c Candidate, perDay float64
 	case "rollup":
 		rec.RemovedBytesPerDay = perDay
 		rec.Rewrites = uniqueRewrites(rec.Readers)
-	case "aggregate", "drop":
-		rec.RemovedBytesPerDay = perDay
+	case "archive", "aggregate", "drop":
+		rec.RemovedBytesPerDay = perDay // an archived line leaves Loki; the archive keeps it elsewhere
 	case "dedupe":
 		rec.RemovedBytesPerDay = perDay
 		rec.UpperBound = true

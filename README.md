@@ -41,7 +41,8 @@ do when every rule is blocked.
    explicitly exempted.
 6. **The least lossy action.** A rule nobody reads gets, in order of preference: aggregate (lines
    become a counter), dedupe (identical lines collapse into one with a count), or sample. Drop only
-   when your policy allows it.
+   when your policy allows it. With an archive, put archive first: the lines leave Loki for storage
+   you choose and stay retrievable, each marked with the rule that moved it.
 7. **Warnings and errors are kept.** A rule whose pattern could match an error-like word, or whose
    sampled lines carry a warning or error level, gets no action. And every Collector, Vector and
    Fluent Bit rule carries a runtime guard: a record whose `severity_number`, `severity_text` or level

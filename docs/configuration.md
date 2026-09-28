@@ -74,6 +74,8 @@ collector:
   after: transform/prep          # rules act after this processor
   measure_exporters: [prometheus] # receive the per-rule measurement metrics
   aggregate_exporters: [prometheus] # receive the counters that replace aggregated lines
+  archive_exporters: []          # receive archived lines (the archive action); never the
+                                 # pipeline's own exporters
   dedupe_interval: 10s
   severity_keys: []              # log attributes (and structured body fields) holding a level, in
                                  # addition to level, severity, lvl, loglevel and log.level; a record
@@ -96,6 +98,7 @@ vector:
   measure_sink: {type: prometheus_exporter, address: "0.0.0.0:9598"}
   severity_paths: []             # VRL paths of level fields, checked in addition to the defaults at
                                  # the top level and beside every structured field, and severity_number
+  archive_sinks: []              # sinks that receive archived events, besides what they read
   sinks: {loki: {loki: true}}
   derived_exempt: {}
 
@@ -109,12 +112,15 @@ fluentbit:
   metrics_tag: sievelog.metrics  # outputs matching this tag receive the measurement metrics
   severity_keys: []              # record paths of level fields, e.g. [[custom]], checked in addition
                                  # to the defaults at the top level and beside every structured field
+  archive_outputs: []            # outputs (alias) receiving archived records; they, and no other
+                                 # output, must match the tag sievelog.archive
   sinks: {loki: {loki: true}}
   derived_exempt: {}
 
 policy:
-  actions: [aggregate, dedupe, sample]  # in order of preference; add drop to allow it, and
-                                        # rollup to allow rewriting counting queries (Collector only)
+  actions: [aggregate, dedupe, sample]  # in order of preference; put archive first when you have
+                                        # an archive, add drop to allow it, and rollup to allow
+                                        # rewriting counting queries (Collector only)
   experimental_rollup: false     # rollup is experimental: it is refused unless this is true
   sample_percent: 10
   acknowledge: []                # evidence gap keys accepted deliberately, from the report
@@ -127,6 +133,25 @@ pricing:                         # what you pay your log service; the report sho
   per_million_lines: 0           # per million lines (events) indexed, if you are billed for that
   currency: USD                  # printed beside every amount
 ```
+
+## Archive
+
+The archive action moves a rule's lines out of Loki into a destination you already run, such as an
+object-storage exporter, a file, or a Loki with long retention, instead of removing them. It is
+chosen under exactly the same evidence as every other action: nothing known reads those lines in
+Loki. What it adds is recovery: if someone needs the lines during an incident, they are in the
+archive, each carrying the rule that moved it (`sievelog.archive` in the Collector,
+`sievelog_archive` in Vector and Fluent Bit).
+
+- Collector: archived records leave the pipeline's exporters and go to `archive_exporters` only.
+- Vector: archived events leave the rest of the chain and are added to each `archive_sinks` sink.
+- Fluent Bit: archived records are re-tagged `sievelog.archive` and leave their stream. Only the
+  `archive_outputs` may match that tag, and `match` must not, or emit refuses.
+- A record at warning or above is never archived, as it is never removed. Telemetry Policy files
+  cannot express the action and skip it. An archive destination that is the analysed Loki is
+  refused, since archiving there would remove nothing.
+
+The saving shown is the Loki volume that moves; what the archive costs to keep is yours to weigh.
 
 The saving is reported in money only at prices you give. List prices differ by region, plan,
 retention and discount, so no price is built in: take the per-gigabyte (and, if billed, per-event)

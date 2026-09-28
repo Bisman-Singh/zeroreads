@@ -117,6 +117,7 @@ type CollectorConfig struct {
 	After              string            `yaml:"after"`
 	MeasureExporters   []string          `yaml:"measure_exporters"`
 	AggregateExporters []string          `yaml:"aggregate_exporters"`
+	ArchiveExporters   []string          `yaml:"archive_exporters"` // receive archived lines; required for the archive action
 	DedupeInterval     string            `yaml:"dedupe_interval"`
 	Sinks              map[string]Sink   `yaml:"sinks"`
 	Derived            map[string]string `yaml:"derived_exempt"` // connector -> reason it may change
@@ -139,6 +140,8 @@ type VectorConfig struct {
 	Derived     map[string]string `yaml:"derived_exempt"`
 	// SeverityPaths are VRL paths of level fields, in addition to the defaults.
 	SeverityPaths []string `yaml:"severity_paths"`
+	// ArchiveSinks receive archived events; required for the archive action.
+	ArchiveSinks []string `yaml:"archive_sinks"`
 }
 
 // FluentBitConfig is the Fluent Bit instance the rules are enforced in (YAML configuration).
@@ -154,6 +157,9 @@ type FluentBitConfig struct {
 	Derived     map[string]string   `yaml:"derived_exempt"`
 	// SeverityKeys are record paths of level fields, in addition to the defaults.
 	SeverityKeys [][]string `yaml:"severity_keys"`
+	// ArchiveOutputs (alias, else name#index) receive archived records, which carry the tag
+	// sievelog.archive; required for the archive action.
+	ArchiveOutputs []string `yaml:"archive_outputs"`
 }
 
 // Sink says what an exporter downstream of the enforcement point is.
@@ -540,9 +546,35 @@ func (c *Config) validatePolicy() error {
 		if a == "rollup" && !c.Policy.ExperimentalRollup {
 			return fmt.Errorf("policy.actions: rollup is experimental; set policy.experimental_rollup: true to allow it")
 		}
+		if a == "archive" {
+			if err := c.validateArchive(); err != nil {
+				return err
+			}
+		}
 	}
 	if c.Policy.SamplePercent < 1 || c.Policy.SamplePercent > 99 {
 		return fmt.Errorf("policy.sample_percent must be 1..99")
+	}
+	return nil
+}
+
+// validateArchive requires the runtime's archive destinations, none of them the analysed Loki:
+// archiving into it would remove nothing.
+func (c *Config) validateArchive() error {
+	field, names, sinks := "collector.archive_exporters", c.Collector.ArchiveExporters, c.Collector.Sinks
+	switch c.Runtime {
+	case "vector":
+		field, names, sinks = "vector.archive_sinks", c.Vector.ArchiveSinks, c.Vector.Sinks
+	case "fluentbit":
+		field, names, sinks = "fluentbit.archive_outputs", c.FluentBit.ArchiveOutputs, c.FluentBit.Sinks
+	}
+	if len(names) == 0 {
+		return fmt.Errorf("policy.actions has archive, so %s must name where archived lines go", field)
+	}
+	for _, n := range names {
+		if sinks[n].Loki {
+			return fmt.Errorf("%s: %s is the analysed Loki; archiving there removes nothing", field, n)
+		}
 	}
 	return nil
 }

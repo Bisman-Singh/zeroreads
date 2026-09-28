@@ -136,9 +136,9 @@ func (m reconciler) rolledUp(ctx context.Context, r EnforcedRule) (float64, erro
 func verdict(r EnforcedRule, rr RuleReconciliation, rolled, tolerance float64) (status, detail string) {
 	stillStored := fmt.Sprintf("%.0f lines of this rule were still stored after enforcement", rr.AfterLines)
 	switch {
-	case !slices.Contains([]string{"drop", "aggregate", "rollup", "sample", "dedupe"}, r.Action):
+	case !slices.Contains([]string{"drop", "aggregate", "archive", "rollup", "sample", "dedupe"}, r.Action):
 		return "mismatch", fmt.Sprintf("unknown action %q", r.Action)
-	case r.Action == "drop" || r.Action == "aggregate":
+	case r.Action == "drop" || r.Action == "aggregate" || r.Action == "archive":
 		if rr.AfterLines > 0 {
 			return "mismatch", stillStored
 		}

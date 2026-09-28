@@ -462,10 +462,10 @@ func (c *Config) scalar(ctx context.Context, lc *loki.Client, q string, at time.
 	return 0, fmt.Errorf("expected one series from %s, got %d", q, len(s))
 }
 
-// removes reports whether an action leaves no record at all for some lines. Dedupe and rollup
-// always leave a record where lines were.
+// removes reports whether an action leaves no record in Loki for some lines. Dedupe and rollup
+// always leave a record where lines were; archive moves every line out of Loki.
 func removes(action string) bool {
-	return action == "drop" || action == "aggregate" || action == "sample"
+	return action == "drop" || action == "aggregate" || action == "sample" || action == "archive"
 }
 
 // keepStreams blocks rules whose removal would leave some stream with no line at all in the

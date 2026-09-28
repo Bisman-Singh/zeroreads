@@ -112,7 +112,7 @@ under, and, given `-deployed`, when the deployed pipeline config is not exactly 
 - **`verify` catches a new reader after the fact; it does not bring lines back.** If someone searches
   for removed lines during an incident, the next `verify` fails and prints the rules to revert, but the
   lines removed before the revert are not in Loki. Aggregate, dedupe and rollup keep counts, not the
-  lines themselves.
+  lines themselves. Only the archive action keeps every line, in the archive you name.
 - **Structured records rarely qualify.** Because a line filter on a JSON line can match any field,
   most queries against structured services count as reading every line.
 - **Only the scope label can exclude a stream.** A query matching other labels (namespace, pod) is

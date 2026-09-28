@@ -72,6 +72,11 @@ func TestConfigValidation(t *testing.T) {
 		{"infinite price", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\npricing: {per_million_lines: .inf}\n", "pricing.per_million_lines"},
 		{"bad currency", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\npricing: {per_gb: 1, currency: rupees}\n", "currency"},
 		{"no built-in price lists", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\npricing: {backend: some-service}\n", "backend"},
+		{"archive needs a destination", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs}\npolicy: {actions: [archive, aggregate]}\n", "collector.archive_exporters"},
+		{"archive to its own exporter", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs, archive_exporters: [file/archive]}\npolicy: {actions: [archive, aggregate]}\n", ""},
+		{"archive into the analysed loki", "loki: {url: http://l}\ncollector: {config_files: [c.yaml], pipeline: logs, archive_exporters: [otlp_http/loki], sinks: {otlp_http/loki: {loki: true}}}\npolicy: {actions: [archive]}\n", "removes nothing"},
+		{"vector archive needs a sink", "loki: {url: http://l}\nruntime: vector\nvector: {config_files: [v.yaml], after: a, scope_path: .s, text_path: .m, measure_sink: {type: blackhole}}\npolicy: {actions: [archive]}\n", "vector.archive_sinks"},
+		{"fluent bit archive needs an output", "loki: {url: http://l}\nruntime: fluentbit\nfluentbit: {config_files: [f.yaml], match: kube.*, scope_key: service, text_key: [log], metrics_tag: m}\npolicy: {actions: [archive]}\n", "fluentbit.archive_outputs"},
 		{"fluent bit bad accessor", "loki: {url: http://l}\nruntime: fluentbit\nfluentbit: {config_files: [f.yaml], match: kube.*, scope_key: \"${HOME}\", text_key: [log], metrics_tag: m}\n", "scope_key"},
 	}
 	for _, c := range cases {

@@ -248,7 +248,7 @@ func EmitCollector(c *Config, rf *RulesFile, mode emit.Mode) ([]byte, error) {
 	}
 	rules := rf.emitRules()
 	return emit.Collector(files, emit.Target{Pipeline: c.Collector.Pipeline, After: c.Collector.After,
-		MeasureExporters: c.Collector.MeasureExporters, AggregateExporters: c.Collector.AggregateExporters,
+		MeasureExporters: c.Collector.MeasureExporters, AggregateExporters: c.Collector.AggregateExporters, ArchiveExporters: c.Collector.ArchiveExporters,
 		DedupeInterval: c.Collector.DedupeInterval, SeverityKeys: c.Collector.SeverityKeys}, rules, mode)
 }
 
@@ -451,7 +451,7 @@ func EmitVector(c *Config, rf *RulesFile, mode emit.Mode) ([]byte, error) {
 	rules := rf.emitRules()
 	v := c.Vector
 	return emit.Vector(files, emit.VectorTarget{After: v.After, ScopePath: v.ScopePath, TextPath: v.TextPath, FieldPaths: v.FieldPaths,
-		GroupBy: v.GroupBy, MeasureSink: v.MeasureSink, DedupeMS: v.DedupeMS, SeverityPaths: v.SeverityPaths}, rules, mode)
+		GroupBy: v.GroupBy, MeasureSink: v.MeasureSink, DedupeMS: v.DedupeMS, SeverityPaths: v.SeverityPaths, ArchiveSinks: v.ArchiveSinks}, rules, mode)
 }
 
 // EmitFluentBit writes the Fluent Bit YAML configuration for the rules in the given mode.
@@ -463,5 +463,5 @@ func EmitFluentBit(c *Config, rf *RulesFile, mode emit.Mode) ([]byte, error) {
 	rules := rf.emitRules()
 	f := c.FluentBit
 	return emit.FluentBit(files, emit.FluentBitTarget{Match: f.Match, After: f.After, ScopeKey: f.ScopeKey, TextKey: f.TextKey,
-		FieldKeys: f.FieldKeys, MetricsTag: f.MetricsTag, SeverityKeys: f.SeverityKeys}, rules, mode)
+		FieldKeys: f.FieldKeys, MetricsTag: f.MetricsTag, SeverityKeys: f.SeverityKeys, ArchiveOutputs: f.ArchiveOutputs}, rules, mode)
 }
