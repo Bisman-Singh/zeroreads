@@ -12,8 +12,9 @@ The first release. Everything below is new.
   with a marker), the Loki ruler, every Grafana object that stores a Loki query, and OpenSearch (beta).
 - Every evidence gap blocks every rule until fixed or acknowledged.
 - A Grafana Loki datasource that is not classified counts as the analysed Loki and is reported.
-- Warning and error lines are never acted on: at analysis, and by a runtime guard in every emitted
-  rule (Collector, Vector, Fluent Bit).
+- Warning and error lines are never acted on: at analysis, and by a runtime guard in every Collector,
+  Vector and Fluent Bit rule. Telemetry Policy output cannot carry the guard and needs
+  `-allow-no-severity-guard`.
 - A rule that would empty a stream is blocked.
 
 ### Enforces

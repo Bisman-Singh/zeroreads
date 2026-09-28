@@ -74,15 +74,17 @@ a window can shift by up to one interval at the window's edges.
 blocked, because the stream would vanish from label, series and volume results. Dedupe and rollup
 always leave a record, so they are not affected.
 
-**Errors and warnings are never touched.** A rule whose pattern can contain an error-like word, or
-whose sampled lines carry a warning or error level (from Loki labels, structured metadata or record
-fields named in `scope.severity_keys`), gets no action. And every emitted rule carries a runtime guard,
-whatever the analysis saw: a record whose `severity_number` is WARN or above, whose `severity_text`
+**Errors and warnings are never touched, except in Telemetry Policy output.** A rule whose pattern can
+contain an error-like word, or whose sampled lines carry a warning or error level (from Loki labels,
+structured metadata or record fields named in `scope.severity_keys`), gets no action. And every
+Collector, Vector and Fluent Bit rule carries a runtime guard, whatever the analysis saw: a record whose `severity_number` is WARN or above, whose `severity_text`
 says warning or worse, or whose configured level field does, never matches a rule, so it is neither
 measured as removable nor removed. The Collector checks `severity_number`, `severity_text`, log
 attributes and structured body fields; Vector checks level paths and `severity_number`; Fluent Bit
 checks level record keys. The default level fields are always checked: configured ones are added to
-them, so no configuration can switch the guard off. Each is tested against the real engine.
+them, so no configuration can switch the guard off. Each is tested against the real engine. Telemetry
+Policy files cannot carry the guard (see Limits), so `emit -format policy` refuses unless
+`-allow-no-severity-guard` is passed; those files rely on the analysis-time check alone.
 
 **Measure before removing.** Shadow mode adds only measurement: per rule, the lines (and, where the
 runtime can count them, bytes) that enforcement would remove. In the Collector, measurement runs after
@@ -107,6 +109,10 @@ under, and, given `-deployed`, when the deployed pipeline config is not exactly 
   seen. Grafana only exposes the query history of the user the credentials belong to.
 - **A line nobody reads today may matter in a future incident.** Severity floors and the preference for
   aggregation over dropping reduce this. Nothing removes it.
+- **`verify` catches a new reader after the fact; it does not bring lines back.** If someone searches
+  for removed lines during an incident, the next `verify` fails and prints the rules to revert, but the
+  lines removed before the revert are not in Loki. Aggregate, dedupe and rollup keep counts, not the
+  lines themselves.
 - **Structured records rarely qualify.** Because a line filter on a JSON line can match any field,
   most queries against structured services count as reading every line.
 - **Only the scope label can exclude a stream.** A query matching other labels (namespace, pod) is

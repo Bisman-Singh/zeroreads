@@ -1,7 +1,7 @@
 # sievelog
 
-sievelog finds the log lines nobody reads, proves it, and writes the pipeline configuration that
-removes them.
+sievelog finds the log lines that no logged query, alert, dashboard or stored query reads, proves it
+for each rule, and writes the pipeline configuration that removes or shrinks them.
 
 > **Before you enforce anything:** deploy the shadow configuration first and let it run, with
 > `sievelog verify` on a schedule, for a period that covers your normal weekly traffic and on-call
@@ -43,10 +43,11 @@ do when every rule is blocked.
    become a counter), dedupe (identical lines collapse into one with a count), or sample. Drop only
    when your policy allows it.
 7. **Warnings and errors are kept.** A rule whose pattern could match an error-like word, or whose
-   sampled lines carry a warning or error level, gets no action. And every emitted rule carries a
-   runtime guard: a record whose `severity_number`, `severity_text` or level field says warning or
-   worse is never measured as removable and never removed, whatever the rule matched. (The Telemetry
-   Policy format cannot express that guard; see below.)
+   sampled lines carry a warning or error level, gets no action. And every Collector, Vector and
+   Fluent Bit rule carries a runtime guard: a record whose `severity_number`, `severity_text` or level
+   field says warning or worse is never measured as removable and never removed, whatever the rule
+   matched. The one exception is Telemetry Policy output: the format cannot express the guard, so it
+   is written only when you pass `-allow-no-severity-guard` (see below).
 8. **Rollup (experimental).** When the only readers of a rule's lines are stored queries that count
    them, the lines can roll up into one record per interval carrying the count, and those queries
    are rewritten to return the same numbers before, during and after the switch. It is off unless
