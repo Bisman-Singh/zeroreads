@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -212,6 +213,9 @@ type orgReader struct {
 	lokiByName map[string]string // name -> uid
 	defaultDS  struct{ uid, typ string }
 	libraries  map[string]bool // library panel UIDs that exist
+	// dsVars are the datasource variables of the dashboard being read: name -> the plugin type whose
+	// datasources it lists. Such a variable only ever holds a datasource of that type.
+	dsVars map[string]string
 }
 
 func (r *orgReader) gap(origin, format string, a ...any) {
@@ -258,6 +262,26 @@ func (r *orgReader) datasources(ctx context.Context) error {
 
 func isVariable(s string) bool { return strings.Contains(s, "$") || strings.Contains(s, "[[") }
 
+// variableRef matches a reference that is exactly one variable: $name, ${name}, ${name:format} or
+// [[name]].
+var variableRef = regexp.MustCompile(`\A(?:\$([A-Za-z0-9_]+)|\$\{([A-Za-z0-9_]+)(?::[^}]*)?\}|\[\[([A-Za-z0-9_]+)(?::[^\]]*)?\]\])\z`)
+
+// variableDatasource resolves a datasource reference that is a variable. A datasource variable of
+// the dashboard lists only datasources of its plugin type, so one of another type never runs
+// against Loki. Anything else (another kind of variable, a reference built from several parts, a
+// variable this dashboard does not declare) may name any datasource, so it may be any Loki.
+func (r *orgReader) variableDatasource(ref string) []string {
+	m := variableRef.FindStringSubmatch(ref)
+	if m == nil {
+		return []string{AnyLoki}
+	}
+	plugin, declared := r.dsVars[m[1]+m[2]+m[3]]
+	if declared && plugin != "" && plugin != "loki" && !isVariable(plugin) {
+		return nil
+	}
+	return []string{AnyLoki}
+}
+
 // resolve maps a datasource reference to the Loki UIDs it can run against. It returns nil for a
 // non-Loki datasource, and inherit=true when the query inherits the panel's datasource.
 func (r *orgReader) resolve(ref any) (uids []string, inherit bool) {
@@ -269,7 +293,7 @@ func (r *orgReader) resolve(ref any) (uids []string, inherit bool) {
 			return nil, true
 		}
 		if isVariable(v) {
-			return []string{AnyLoki}, false
+			return r.variableDatasource(v), false
 		}
 		if r.lokiByUID[v] {
 			return []string{v}, false
@@ -284,8 +308,11 @@ func (r *orgReader) resolve(ref any) (uids []string, inherit bool) {
 		if uid == "" && typ == "" {
 			return nil, true
 		}
-		if isVariable(uid) || isVariable(typ) {
+		if isVariable(typ) {
 			return []string{AnyLoki}, false
+		}
+		if isVariable(uid) {
+			return r.variableDatasource(uid), false
 		}
 		if uid == "" {
 			if typ == "loki" {

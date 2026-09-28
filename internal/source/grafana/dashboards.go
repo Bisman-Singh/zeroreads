@@ -62,6 +62,17 @@ func (r *orgReader) dashboards(ctx context.Context) {
 // classicDashboard walks the classic JSON model.
 func (r *orgReader) classicDashboard(uid string, spec map[string]any) {
 	origin := "dashboard:" + uid
+	r.dsVars = map[string]string{}
+	if tm, ok := spec["templating"].(map[string]any); ok {
+		list, _ := tm["list"].([]any)
+		for _, v := range list {
+			vm, _ := v.(map[string]any)
+			name, _ := vm["name"].(string)
+			if typ, _ := vm["type"].(string); typ == "datasource" && name != "" {
+				r.dsVars[name], _ = vm["query"].(string)
+			}
+		}
+	}
 	if ann, ok := spec["annotations"].(map[string]any); ok {
 		list, _ := ann["list"].([]any)
 		for i, a := range list {
@@ -125,6 +136,16 @@ func (r *orgReader) classicPanels(origin string, panels []any) {
 // v2Dashboard walks the v2 schema: elements, and annotations.
 func (r *orgReader) v2Dashboard(uid string, spec map[string]any) {
 	origin := "dashboard:" + uid
+	r.dsVars = map[string]string{}
+	vars, _ := spec["variables"].([]any)
+	for _, v := range vars {
+		vm, _ := v.(map[string]any)
+		vs, _ := vm["spec"].(map[string]any)
+		name, _ := vs["name"].(string)
+		if kind, _ := vm["kind"].(string); kind == "DatasourceVariable" && name != "" {
+			r.dsVars[name], _ = vs["pluginId"].(string)
+		}
+	}
 	if anns, ok := spec["annotations"].([]any); ok {
 		for i, a := range anns {
 			am, _ := a.(map[string]any)

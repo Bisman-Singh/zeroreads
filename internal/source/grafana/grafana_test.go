@@ -297,3 +297,57 @@ func TestResolveMapReferenceByName(t *testing.T) {
 		}
 	}
 }
+
+// A datasource variable lists only datasources of its plugin type, so a panel on a Prometheus one
+// never runs against Loki; any other variable may name any datasource. Found by measuring the public
+// dashboard corpus: every Prometheus panel on a $datasource variable was read as a Loki query that
+// does not parse, which blocks every rule.
+func TestResolveDatasourceVariables(t *testing.T) {
+	r := &orgReader{lokiByUID: map[string]bool{"l1": true}, lokiByName: map[string]string{},
+		dsVars: map[string]string{"datasource": "prometheus", "logs": "loki", "templated": "$plugin"}}
+	for _, c := range []struct {
+		ref  any
+		want []string
+	}{
+		{map[string]any{"uid": "${datasource}", "type": "prometheus"}, nil},
+		{map[string]any{"uid": "$datasource"}, nil},
+		{"$datasource", nil},
+		{"${datasource:raw}", nil},
+		{"[[datasource]]", nil},
+		{map[string]any{"uid": "${logs}", "type": "loki"}, []string{AnyLoki}},
+		{"$logs", []string{AnyLoki}},
+		{"$undeclared", []string{AnyLoki}},                               // a custom or constant variable can hold a Loki UID
+		{"$templated", []string{AnyLoki}},                                // the plugin type itself is templated
+		{"loki-$datasource", []string{AnyLoki}},                          // built from several parts
+		{map[string]any{"uid": "l1", "type": "${t}"}, []string{AnyLoki}}, // the type is a variable
+	} {
+		if got, _ := r.resolve(c.ref); !slices.Equal(got, c.want) {
+			t.Fatalf("%v: %v, want %v", c.ref, got, c.want)
+		}
+	}
+}
+
+// Both schemas declare datasource variables; the reader takes each dashboard's own.
+func TestDashboardDatasourceVariables(t *testing.T) {
+	r := &orgReader{res: &Result{}, lokiByUID: map[string]bool{"l1": true}, lokiByName: map[string]string{}, libraries: map[string]bool{}}
+	r.classicDashboard("c", map[string]any{
+		"templating": map[string]any{"list": []any{map[string]any{"name": "ds", "type": "datasource", "query": "prometheus"}}},
+		"panels": []any{
+			map[string]any{"id": 1, "datasource": map[string]any{"uid": "${ds}", "type": "prometheus"}, "targets": []any{map[string]any{"refId": "A", "expr": `up`}}},
+			map[string]any{"id": 2, "datasource": map[string]any{"uid": "l1", "type": "loki"}, "targets": []any{map[string]any{"refId": "A", "expr": `{a="b"}`}}},
+		}})
+	r.v2Dashboard("v", map[string]any{
+		"variables": []any{map[string]any{"kind": "DatasourceVariable", "spec": map[string]any{"name": "ds", "pluginId": "loki"}}},
+		"elements": map[string]any{"panel-1": map[string]any{"kind": "Panel", "spec": map[string]any{"data": map[string]any{"spec": map[string]any{"queries": []any{
+			map[string]any{"spec": map[string]any{"query": map[string]any{"group": "loki", "datasource": map[string]any{"name": "${ds}"},
+				"spec": map[string]any{"expr": `{c="d"}`}}}}}}}}}},
+	})
+	var got []string
+	for _, q := range r.res.Queries {
+		got = append(got, q.Origin+"="+strings.Join(q.Datasources, ","))
+	}
+	sort.Strings(got)
+	if want := []string{"dashboard:c/panel:2/A=l1", "dashboard:v/panel-1/0=*"}; !slices.Equal(got, want) {
+		t.Fatalf("%v, want %v", got, want)
+	}
+}
