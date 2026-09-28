@@ -32,6 +32,29 @@ First release candidate. Everything below is new.
 - `reconcile`: stored volume before and after enforcement, from Loki.
 - Helm chart for a scheduled `verify`, and a GitHub Action running the released image.
 
+### Hardened before the first release
+
+- Rollup rewrites stay linear in size for any number of rules, and count each line once when two
+  services share a language.
+- Values from logs are written literally into every runtime's configuration (the Collector and Vector
+  expand `${...}`, VRL reads `{{ }}`), and emitters refuse unsafe rule IDs and actions they cannot
+  enforce.
+- Default deny tightened: only the ruler's own 404 means no rules; credentials that cannot list
+  Grafana organisations leave a `grafana-orgs` gap; OpenSearch requests on names the cluster no longer
+  has count as reads, and cross-cluster reads are a gap; a gap about one Grafana object names that
+  object, so acknowledging it accepts nothing else; configured level fields add to the defaults, so an
+  empty list can never switch the severity guard off.
+- `rules.json` is validated on load (a hand-edited rule no longer matches its ID) and written
+  atomically; emitted runtime configurations are readable by their owner only.
+- Configuration: credentials in URLs and empty secret variables are refused, durations are exact,
+  names written into queries and pipeline programs are checked, and the query log has its own
+  credentials.
+- Robustness: every HTTP answer is bounded, transient failures of reads are retried, Loki paging always
+  moves forward, query text is bounded at 256 KiB, and every regular-expression question is bounded in
+  work as well as states.
+- `sievelog version`, documented exit codes, CI with lint and vulnerability scans, actions and base
+  images pinned to digests.
+
 ### Supported versions
 
 See the table in the README. The test suites run against exactly those versions.

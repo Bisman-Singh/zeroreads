@@ -123,6 +123,10 @@ go build ./cmd/sievelog
                               # chart; a million-line scale run
 ```
 
+## Security
+
+Report vulnerabilities privately, as described in [SECURITY.md](SECURITY.md).
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
