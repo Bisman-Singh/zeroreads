@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -171,14 +170,10 @@ policy:
 	t.Setenv("E2E_GSCALE_TOKEN", token)
 	outDir := filepath.Join(work, "gscale-out")
 	start = time.Now()
-	out, err := runCmd(root, "/usr/bin/time", "-l", bin, "analyze", "-c", cfgPath, "-o", outDir)
+	out, rss, err := timedRun(root, bin, "analyze", "-c", cfgPath, "-o", outDir)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("analyze: %v\n%s", err, out)
-	}
-	rss := 0
-	if m := regexp.MustCompile(`(\d+)\s+maximum resident set size`).FindStringSubmatch(out); m != nil {
-		rss, _ = strconv.Atoi(m[1])
 	}
 	var rep app.Report
 	rb, _ := os.ReadFile(filepath.Join(outDir, "report.json"))

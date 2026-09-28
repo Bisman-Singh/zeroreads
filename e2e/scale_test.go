@@ -164,14 +164,10 @@ policy:
 `, run, lokiURL, gen.IPMaskName, gen.IPMaskPattern, filepath.Join(work, "loop-user.yaml"))), 0o644)
 	outDir := filepath.Join(work, "scale-out")
 	start = time.Now()
-	out, err := runCmd(root, "/usr/bin/time", "-l", bin, "analyze", "-c", cfgPath, "-o", outDir)
+	out, rss, err := timedRun(root, bin, "analyze", "-c", cfgPath, "-o", outDir)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("analyze: %v\n%s", err, out)
-	}
-	rss := 0
-	if m := regexp.MustCompile(`(\d+)\s+maximum resident set size`).FindStringSubmatch(out); m != nil {
-		rss, _ = strconv.Atoi(m[1])
 	}
 	t.Logf("analyze over %d lines and %d query executions: %s, peak memory %d MB", per*len(services), execs, elapsed.Round(time.Second), rss>>20)
 	if elapsed > 10*time.Minute || rss > 2<<30 {
@@ -286,6 +282,22 @@ policy:
 	if elapsed > 10*time.Minute {
 		t.Fatalf("reading the audit log took %s", elapsed)
 	}
+}
+
+// timedRun runs a command under /usr/bin/time and returns its output and peak memory in bytes. BSD
+// time (macOS) takes -l and prints bytes; GNU time (Linux) takes -v and prints kilobytes.
+func timedRun(dir string, args ...string) (string, int, error) {
+	flag, peak, unit := "-l", `(\d+)\s+maximum resident set size`, 1
+	if runtime.GOOS == "linux" {
+		flag, peak, unit = "-v", `Maximum resident set size \(kbytes\): (\d+)`, 1024
+	}
+	out, err := runCmd(dir, "/usr/bin/time", append([]string{flag}, args...)...)
+	rss := 0
+	if m := regexp.MustCompile(peak).FindStringSubmatch(out); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		rss = n * unit
+	}
+	return out, rss, err
 }
 
 func runCmd(dir, name string, args ...string) (string, error) {
