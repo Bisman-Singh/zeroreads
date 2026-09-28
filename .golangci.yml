@@ -2,11 +2,16 @@ version: "2"
 
 linters:
   default: none
-  enable: [errcheck, gosec, staticcheck, unused, ineffassign, bodyclose, noctx, misspell, govet]
+  enable: [errcheck, gosec, staticcheck, unused, ineffassign, bodyclose, noctx, misspell, govet, gocognit, gocyclo, nestif]
+  settings:
+    # Functions stay small enough to read in one go; tests are exempt, as tables of cases.
+    gocognit: {min-complexity: 40}
+    gocyclo: {min-complexity: 25}
+    nestif: {min-complexity: 6}
   exclusions:
     rules:
       - path: _test\.go
-        linters: [gosec, errcheck, noctx]
+        linters: [gosec, errcheck, noctx, gocognit, gocyclo, nestif]
       # Files the operator names: on the command line, in sievelog.yaml, or through GitHub Actions.
       - path: (cmd/sievelog/main\.go|internal/app/)
         text: (G304|G703)

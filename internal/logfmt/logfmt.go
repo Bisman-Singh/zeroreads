@@ -37,29 +37,11 @@ func Parse(line string) (map[string]string, error) {
 		}
 		i++ // '='
 		if i < len(line) && line[i] == '"' {
-			j := i + 1
-			for j < len(line) {
-				if line[j] == '\\' {
-					j += 2
-					continue
-				}
-				if line[j] == '"' {
-					break
-				}
-				j++
-			}
-			if j >= len(line) {
-				return nil, fmt.Errorf("logfmt: unterminated quote for %s", key)
-			}
-			v, err := strconv.Unquote(line[i : j+1])
+			v, next, err := quoted(line, i, key)
 			if err != nil {
-				return nil, fmt.Errorf("logfmt: value of %s: %w", key, err)
+				return nil, err
 			}
-			out[key] = v
-			i = j + 1
-			if i < len(line) && line[i] != ' ' {
-				return nil, fmt.Errorf("logfmt: junk after quoted value of %s", key)
-			}
+			out[key], i = v, next
 			continue
 		}
 		j := strings.IndexByte(line[i:], ' ')
@@ -70,4 +52,27 @@ func Parse(line string) (map[string]string, error) {
 		i += j
 	}
 	return out, nil
+}
+
+// quoted reads the double-quoted value of key starting at line[i], and returns it with the index
+// after it. The value must be followed by a space or the end of the line.
+func quoted(line string, i int, key string) (string, int, error) {
+	j := i + 1
+	for j < len(line) && line[j] != '"' {
+		if line[j] == '\\' {
+			j++
+		}
+		j++
+	}
+	if j >= len(line) {
+		return "", 0, fmt.Errorf("logfmt: unterminated quote for %s", key)
+	}
+	v, err := strconv.Unquote(line[i : j+1])
+	if err != nil {
+		return "", 0, fmt.Errorf("logfmt: value of %s: %w", key, err)
+	}
+	if j+1 < len(line) && line[j+1] != ' ' {
+		return "", 0, fmt.Errorf("logfmt: junk after quoted value of %s", key)
+	}
+	return v, j + 1, nil
 }

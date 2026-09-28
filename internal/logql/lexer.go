@@ -56,7 +56,7 @@ func lex(src string) ([]token, error) {
 			for i < len(src) && src[i] != '\n' {
 				i++
 			}
-		case r == '"' || r == '`' || r == '\'':
+		case isQuote(r):
 			s, n, err := lexString(src[i:])
 			if err != nil {
 				return nil, fmt.Errorf("string at %d: %w", i, err)
@@ -64,29 +64,25 @@ func lex(src string) ([]token, error) {
 			out = append(out, token{kind: tString, text: s, pos: i, end: i + n})
 			i += n
 		case r == '[':
-			end := strings.IndexByte(src[i:], ']')
-			if end < 0 {
-				return nil, fmt.Errorf("missing ] at %d", i)
+			tok, err := lexRange(src, i)
+			if err != nil {
+				return nil, err
 			}
-			out = append(out, token{kind: tRange, text: strings.TrimSpace(src[i+1 : i+end]), pos: i, end: i + end + 1})
-			i += end + 1
+			out = append(out, tok)
+			i = tok.end
 		case r == '-' && strings.HasPrefix(src[i:], "--"):
-			j := i + 2
-			for j < len(src) && (isLetter(src[j]) || src[j] == '-') {
-				j++
+			tok, err := lexFlag(src, i)
+			if err != nil {
+				return nil, err
 			}
-			flag := src[i:j]
-			if flag != "--strict" && flag != "--keep-empty" {
-				return nil, fmt.Errorf("unknown flag %q at %d", flag, i)
-			}
-			out = append(out, token{kind: tFlag, text: flag, pos: i, end: j})
-			i = j
-		case r >= '0' && r <= '9' || (r == '.' && i+1 < len(src) && src[i+1] >= '0' && src[i+1] <= '9'):
+			out = append(out, tok)
+			i = tok.end
+		case startsNumber(src[i:]):
 			tok, n := lexNumber(src[i:])
 			tok.pos, tok.end = i, i+n
 			out = append(out, tok)
 			i += n
-		case r < utf8.RuneSelf && isLetter(byte(r)) || r == '_':
+		case startsIdent(r):
 			j := i
 			for j < len(src) && (isLetter(src[j]) || isDigit(src[j]) || src[j] == '_') {
 				j++
@@ -94,22 +90,58 @@ func lex(src string) ([]token, error) {
 			out = append(out, token{kind: tIdent, text: src[i:j], pos: i, end: j})
 			i = j
 		default:
-			matched := false
-			for _, op := range ops {
-				if strings.HasPrefix(src[i:], op) {
-					out = append(out, token{kind: tOp, text: op, pos: i, end: i + len(op)})
-					i += len(op)
-					matched = true
-					break
-				}
-			}
-			if !matched {
+			op, ok := opAt(src[i:])
+			if !ok {
 				return nil, fmt.Errorf("unexpected %q at %d", r, i)
 			}
+			out = append(out, token{kind: tOp, text: op, pos: i, end: i + len(op)})
+			i += len(op)
 		}
 	}
 	return append(out, token{kind: tEOF, pos: len(src), end: len(src)}), nil
 }
+
+// lexRange reads a range such as [5m] at src[i].
+func lexRange(src string, i int) (token, error) {
+	end := strings.IndexByte(src[i:], ']')
+	if end < 0 {
+		return token{}, fmt.Errorf("missing ] at %d", i)
+	}
+	return token{kind: tRange, text: strings.TrimSpace(src[i+1 : i+end]), pos: i, end: i + end + 1}, nil
+}
+
+// lexFlag reads a logfmt parser flag at src[i]; only the flags Loki knows are accepted.
+func lexFlag(src string, i int) (token, error) {
+	j := i + 2
+	for j < len(src) && (isLetter(src[j]) || src[j] == '-') {
+		j++
+	}
+	flag := src[i:j]
+	if flag != "--strict" && flag != "--keep-empty" {
+		return token{}, fmt.Errorf("unknown flag %q at %d", flag, i)
+	}
+	return token{kind: tFlag, text: flag, pos: i, end: j}, nil
+}
+
+// opAt is the operator src starts with. ops lists longer operators first, so "!=" wins over "!".
+func opAt(src string) (string, bool) {
+	for _, op := range ops {
+		if strings.HasPrefix(src, op) {
+			return op, true
+		}
+	}
+	return "", false
+}
+
+func isQuote(r rune) bool { return r == '"' || r == '`' || r == '\'' }
+
+// startsNumber reports a number at the start of src: a digit, or a dot and a digit.
+func startsNumber(src string) bool {
+	return isDigit(src[0]) || (src[0] == '.' && len(src) > 1 && isDigit(src[1]))
+}
+
+// startsIdent reports a rune that starts an identifier: an ASCII letter or an underscore.
+func startsIdent(r rune) bool { return r == '_' || (r < utf8.RuneSelf && isLetter(byte(r))) }
 
 func isLetter(b byte) bool { return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' }
 func isDigit(b byte) bool  { return b >= '0' && b <= '9' }

@@ -127,8 +127,7 @@ func Parse(src string) (*Query, error) {
 
 type parser struct {
 	src      string
-	closing  []int   // for each "(" token, the index of its ")"; -1 when unmatched
-	log      logSpan // the last log expression parsed inside a range aggregation
+	closing  []int // for each "(" token, the index of its ")"; -1 when unmatched
 	toks     []token
 	i        int
 	q        *Query
@@ -210,21 +209,21 @@ func (p *parser) binModifiers() error {
 	if p.isKw("bool") {
 		p.i++
 	}
-	if p.isKw("on") || p.isKw("ignoring") {
-		p.i++
-		if err := p.labelList(); err != nil {
-			return err
-		}
-		if p.isKw("group_left") || p.isKw("group_right") {
-			p.i++
-			if p.isOp("(") {
-				if err := p.labelList(); err != nil {
-					return err
-				}
-			}
-		}
+	if !p.isKw("on") && !p.isKw("ignoring") {
+		return nil
 	}
-	return nil
+	p.i++
+	if err := p.labelList(); err != nil {
+		return err
+	}
+	if !p.isKw("group_left") && !p.isKw("group_right") {
+		return nil
+	}
+	p.i++
+	if !p.isOp("(") {
+		return nil
+	}
+	return p.labelList()
 }
 
 func (p *parser) labelList() error {
@@ -270,53 +269,62 @@ func (p *parser) unary() error {
 		if err := p.expr(0); err != nil {
 			return err
 		}
-		if err := p.expectOp(")"); err != nil {
-			return err
-		}
-		// A parenthesised log expression may be followed by more pipeline stages or a range.
-		return nil
+		return p.expectOp(")")
 	case t.kind == tOp && t.text == "{":
-		return p.logExpr(false)
+		_, err := p.logExpr(false)
+		return err
 	case t.kind == tIdent:
-		name := strings.ToLower(t.text)
-		switch {
-		case rangeOps[name] && p.peekAt(1).kind == tOp && p.peekAt(1).text == "(":
-			return p.rangeAgg()
-		case vectorOps[name]:
-			return p.vectorAgg()
-		case name == "label_replace":
-			p.i++
-			if err := p.expectOp("("); err != nil {
-				return err
-			}
-			if err := p.expr(0); err != nil {
-				return err
-			}
-			for k := 0; k < 4; k++ {
-				if err := p.expectOp(","); err != nil {
-					return err
-				}
-				if p.peek().kind != tString {
-					return p.errf("expected string in label_replace")
-				}
-				p.i++
-			}
-			return p.expectOp(")")
-		case name == "vector":
-			p.i++
-			if err := p.expectOp("("); err != nil {
-				return err
-			}
-			if p.peek().kind != tNumber {
-				return p.errf("expected number in vector()")
-			}
-			p.i++
-			return p.expectOp(")")
-		case name == "variants":
-			return p.variants()
+		if ok, err := p.call(strings.ToLower(t.text)); ok {
+			return err
 		}
 	}
 	return p.errf("unexpected %s", t)
+}
+
+// call parses a function call; ok is false when name is not a function LogQL knows here.
+func (p *parser) call(name string) (ok bool, err error) {
+	switch {
+	case rangeOps[name] && p.peekAt(1).kind == tOp && p.peekAt(1).text == "(":
+		return true, p.rangeAgg()
+	case vectorOps[name]:
+		return true, p.vectorAgg()
+	case name == "label_replace":
+		return true, p.labelReplace()
+	case name == "vector":
+		p.i++
+		if err := p.expectOp("("); err != nil {
+			return true, err
+		}
+		if p.peek().kind != tNumber {
+			return true, p.errf("expected number in vector()")
+		}
+		p.i++
+		return true, p.expectOp(")")
+	case name == "variants":
+		return true, p.variants()
+	}
+	return false, nil
+}
+
+// labelReplace parses label_replace(expr, "dst", "replacement", "src", "regex").
+func (p *parser) labelReplace() error {
+	p.i++
+	if err := p.expectOp("("); err != nil {
+		return err
+	}
+	if err := p.expr(0); err != nil {
+		return err
+	}
+	for k := 0; k < 4; k++ {
+		if err := p.expectOp(","); err != nil {
+			return err
+		}
+		if p.peek().kind != tString {
+			return p.errf("expected string in label_replace")
+		}
+		p.i++
+	}
+	return p.expectOp(")")
 }
 
 func (p *parser) grouping() error {
@@ -428,7 +436,7 @@ func (p *parser) rangeAgg() error {
 		param = true
 	}
 	p.counting++
-	err := p.logExpr(true)
+	l, err := p.logExpr(true)
 	p.counting--
 	if err != nil {
 		return err
@@ -440,7 +448,6 @@ func (p *parser) rangeAgg() error {
 	if err := p.grouping(); err != nil {
 		return err
 	}
-	l := p.log
 	p.q.RangeAggs = append(p.q.RangeAggs, RangeAgg{Func: strings.ToLower(start.text), Start: start.pos, End: p.toks[p.i-1].end,
 		Selection: len(p.q.Selections) - 1, Selector: l.selector, Filters: l.filters, Range: l.rng, Offset: l.offset,
 		Plain: l.plain && !param && !g})
@@ -481,7 +488,7 @@ func (p *parser) variants() error {
 		return err
 	}
 	p.counting++
-	err := p.logExpr(true)
+	_, err := p.logExpr(true)
 	p.counting--
 	if err != nil {
 		return err
@@ -490,8 +497,9 @@ func (p *parser) variants() error {
 }
 
 // logExpr parses a selector with its pipeline, possibly parenthesised, and, inside a range
-// aggregation, the range, offset and unwrap parts in any of the orders the grammar allows.
-func (p *parser) logExpr(inRange bool) error {
+// aggregation, the range, offset and unwrap parts in any of the orders the grammar allows. It
+// returns the expression's source parts for the range aggregation around it.
+func (p *parser) logExpr(inRange bool) (logSpan, error) {
 	depth := 0
 	for p.isOp("(") {
 		p.i++
@@ -500,7 +508,7 @@ func (p *parser) logExpr(inRange bool) error {
 	selStart := p.peek().pos
 	sel, err := p.selector()
 	if err != nil {
-		return err
+		return logSpan{}, err
 	}
 	sel.Counting = p.counting > 0
 	span := logSpan{selector: p.src[selStart:p.toks[p.i-1].end], plain: depth == 0}
@@ -510,17 +518,8 @@ func (p *parser) logExpr(inRange bool) error {
 		case p.peek().kind == tRange && inRange && !seenRange:
 			span.rng = p.next().text
 			seenRange = true
-			if p.isKw("offset") {
-				p.i++
-				from := p.peek().pos
-				if p.isOp("-") {
-					p.i++
-				}
-				if p.peek().kind != tDuration {
-					return p.errf("expected duration after offset")
-				}
-				p.i++
-				span.offset = p.src[from:p.toks[p.i-1].end]
+			if span.offset, err = p.offset(); err != nil {
+				return logSpan{}, err
 			}
 			continue
 		case p.isOp(")") && depth > 0:
@@ -530,33 +529,46 @@ func (p *parser) logExpr(inRange bool) error {
 		case p.isLineFilterStart():
 			from := p.peek().pos
 			if err := p.lineFilterStage(&sel); err != nil {
-				return err
+				return logSpan{}, err
 			}
 			span.filters = append(span.filters, p.src[from:p.toks[p.i-1].end])
 			continue
 		case p.isOp("|"):
 			span.plain = false
 			if err := p.pipeStage(&sel, inRange); err != nil {
-				return err
+				return logSpan{}, err
 			}
 			continue
 		}
 		break
 	}
-	if inRange {
-		p.log = span
-	}
-	if depth != 0 {
-		return p.errf("unbalanced parentheses in log expression")
-	}
-	if inRange && !seenRange {
-		return p.errf("range aggregation without a range")
-	}
-	if !inRange && p.peek().kind == tRange {
-		return p.errf("range outside a range aggregation")
+	switch {
+	case depth != 0:
+		return logSpan{}, p.errf("unbalanced parentheses in log expression")
+	case inRange && !seenRange:
+		return logSpan{}, p.errf("range aggregation without a range")
+	case !inRange && p.peek().kind == tRange:
+		return logSpan{}, p.errf("range outside a range aggregation")
 	}
 	p.q.Selections = append(p.q.Selections, sel)
-	return nil
+	return span, nil
+}
+
+// offset parses an optional "offset <duration>" after a range and returns its source text.
+func (p *parser) offset() (string, error) {
+	if !p.isKw("offset") {
+		return "", nil
+	}
+	p.i++
+	from := p.peek().pos
+	if p.isOp("-") {
+		p.i++
+	}
+	if p.peek().kind != tDuration {
+		return "", p.errf("expected duration after offset")
+	}
+	p.i++
+	return p.src[from:p.toks[p.i-1].end], nil
 }
 
 func (p *parser) selector() (Selection, error) {
@@ -711,85 +723,27 @@ func (p *parser) pipeStage(sel *Selection, inRange bool) error {
 		}
 		return p.extractionList()
 	case "regexp", "pattern":
-		p.i++
-		if p.peek().kind != tString {
-			return p.errf("expected string after %s", t.text)
-		}
-		p.i++
-		return nil
-	case "unpack":
+		return p.stringArgument(t.text)
+	case "unpack", "decolorize":
 		// unpack replaces the line with the packed _entry value, like line_format.
 		p.i++
 		sel.Rewritten = true
 		return nil
 	case "line_format":
-		p.i++
-		if p.peek().kind != tString {
-			return p.errf("expected string after line_format")
-		}
-		p.i++
 		sel.Rewritten = true
-		return nil
-	case "decolorize":
-		p.i++
-		sel.Rewritten = true
-		return nil
+		return p.stringArgument("line_format")
 	case "label_format":
 		p.i++
-		for {
-			if p.peek().kind != tIdent {
-				return p.errf("expected label in label_format")
-			}
-			p.i++
-			if err := p.expectOp("="); err != nil {
-				return err
-			}
-			if v := p.peek(); v.kind != tString && v.kind != tIdent {
-				return p.errf("expected value in label_format")
-			}
-			p.i++
-			if !p.isOp(",") {
-				return nil
-			}
-			p.i++
-		}
+		return p.labelFormats()
 	case "drop", "keep":
 		p.i++
-		for {
-			if p.peek().kind != tIdent {
-				return p.errf("expected label in %s", t.text)
-			}
-			if op := p.peekAt(1); op.kind == tOp && (op.text == "=" || op.text == "!=" || op.text == "=~" || op.text == "!~") {
-				if _, err := p.matcher(); err != nil {
-					return err
-				}
-			} else {
-				p.i++
-			}
-			if !p.isOp(",") {
-				return nil
-			}
-			p.i++
-		}
+		return p.labelMatchers(t.text)
 	case "unwrap":
 		if !inRange {
 			return p.errf("unwrap outside a range aggregation")
 		}
 		p.i++
-		if p.peek().kind != tIdent {
-			return p.errf("expected label after unwrap")
-		}
-		conv := strings.ToLower(p.peek().text)
-		if (conv == "bytes" || conv == "duration" || conv == "duration_seconds") && p.peekAt(1).kind == tOp && p.peekAt(1).text == "(" {
-			p.i += 2
-			if p.peek().kind != tIdent {
-				return p.errf("expected label in conversion")
-			}
-			p.i++
-			return p.expectOp(")")
-		}
-		p.i++
-		return nil
+		return p.unwrapped()
 	}
 	start := p.i
 	if err := p.labelFilter(); err != nil {
@@ -799,6 +753,75 @@ func (p *parser) pipeStage(sel *Selection, inRange bool) error {
 	if p.i-start == 3 && p.toks[start].text == "sievelog_rule" && p.isOp2(start+1, "=") && p.toks[start+2].kind == tString && p.toks[start+2].text == "" {
 		sel.NoRollups = true
 	}
+	return nil
+}
+
+// stringArgument parses a stage that takes one string, such as regexp "..." or line_format "...".
+func (p *parser) stringArgument(stage string) error {
+	p.i++
+	if p.peek().kind != tString {
+		return p.errf("expected string after %s", stage)
+	}
+	p.i++
+	return nil
+}
+
+// labelFormats parses label_format's comma-separated name=value list.
+func (p *parser) labelFormats() error {
+	for {
+		if p.peek().kind != tIdent {
+			return p.errf("expected label in label_format")
+		}
+		p.i++
+		if err := p.expectOp("="); err != nil {
+			return err
+		}
+		if v := p.peek(); v.kind != tString && v.kind != tIdent {
+			return p.errf("expected value in label_format")
+		}
+		p.i++
+		if !p.isOp(",") {
+			return nil
+		}
+		p.i++
+	}
+}
+
+// labelMatchers parses drop's or keep's comma-separated labels and label matchers.
+func (p *parser) labelMatchers(stage string) error {
+	for {
+		if p.peek().kind != tIdent {
+			return p.errf("expected label in %s", stage)
+		}
+		if op := p.peekAt(1); op.kind == tOp && (op.text == "=" || op.text == "!=" || op.text == "=~" || op.text == "!~") {
+			if _, err := p.matcher(); err != nil {
+				return err
+			}
+		} else {
+			p.i++
+		}
+		if !p.isOp(",") {
+			return nil
+		}
+		p.i++
+	}
+}
+
+// unwrapped parses unwrap's label, bare or in a conversion such as bytes(label).
+func (p *parser) unwrapped() error {
+	if p.peek().kind != tIdent {
+		return p.errf("expected label after unwrap")
+	}
+	conv := strings.ToLower(p.peek().text)
+	if (conv == "bytes" || conv == "duration" || conv == "duration_seconds") && p.peekAt(1).kind == tOp && p.peekAt(1).text == "(" {
+		p.i += 2
+		if p.peek().kind != tIdent {
+			return p.errf("expected label in conversion")
+		}
+		p.i++
+		return p.expectOp(")")
+	}
+	p.i++
 	return nil
 }
 
