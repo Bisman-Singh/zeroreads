@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.0
 
-First release candidate. Everything below is new.
+The first release. Everything below is new.
 
 ### Decides
 
