@@ -58,6 +58,10 @@ type Selection struct {
 	// NoRollups is true when a stage keeps only lines without a sievelog rollup rule
 	// (| sievelog_rule=""), so the selection reads no rollup record.
 	NoRollups bool
+	// Unmodelled lists the stages that can narrow what the selection reads but are not modelled:
+	// label filters and line filters after a rewrite. Ignoring them only widens the selection, so a
+	// "reads" answer for a selection with any of them may be broader than the truth.
+	Unmodelled []string
 }
 
 // Same reports whether two selections read the same lines in the same way.
@@ -683,6 +687,8 @@ func (p *parser) lineFilterStage(sel *Selection) error {
 	}
 	if !sel.Rewritten {
 		sel.Stages = append(sel.Stages, st)
+	} else {
+		sel.Unmodelled = append(sel.Unmodelled, fmt.Sprintf("line filter %s %q after the line is rewritten", op, st.Alternatives[0].Value))
 	}
 	return nil
 }
@@ -752,8 +758,23 @@ func (p *parser) pipeStage(sel *Selection, inRange bool) error {
 	// sievelog_rule="" keeps only lines without a rollup rule: it excludes every rollup record.
 	if p.i-start == 3 && p.toks[start].text == "sievelog_rule" && p.isOp2(start+1, "=") && p.toks[start+2].kind == tString && p.toks[start+2].text == "" {
 		sel.NoRollups = true
+		return nil
 	}
+	sel.Unmodelled = append(sel.Unmodelled, "label filter "+p.source(start, p.i))
 	return nil
+}
+
+// source is the text of tokens [from, to), strings quoted, for naming a stage in a report.
+func (p *parser) source(from, to int) string {
+	parts := make([]string, 0, to-from)
+	for _, t := range p.toks[from:to] {
+		if t.kind == tString {
+			parts = append(parts, strconv.Quote(t.text))
+			continue
+		}
+		parts = append(parts, t.text)
+	}
+	return strings.Join(parts, " ")
 }
 
 // stringArgument parses a stage that takes one string, such as regexp "..." or line_format "...".

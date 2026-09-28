@@ -9,8 +9,10 @@ package usage
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"regexp/syntax"
+	"slices"
 	"strings"
 	"sync"
 	"unicode"
@@ -39,6 +41,11 @@ type Verdict struct {
 	Counting bool
 	Witness  string // a line in the rule's language the selection reads, when Used and decidable
 	Reason   string
+	// Widened lists, for a "used" verdict, every assumption that may make it broader than the truth:
+	// parts of the query that are not modelled, or modelled as a superset. Empty means the verdict is
+	// exact: the witness is a line the query really selects. A "not used" verdict is a proof either
+	// way, so it never carries any.
+	Widened []string
 }
 
 // limit bounds each automaton question. Exceeding it yields "used".
@@ -47,37 +54,52 @@ const limit = automaton.DefaultLimit
 // Evaluate decides one selection against one rule.
 func Evaluate(sel logql.Selection, r Rule) Verdict {
 	v := Verdict{Counting: sel.Counting}
+	var widened []string
+	named := false
 	for _, m := range sel.Matchers {
 		val, scoped := r.Scope[m.Name]
 		if !scoped {
 			continue // not a scope label: cannot exclude
 		}
+		named = true
 		ok, known := matchLabel(m, val)
 		if known && !ok {
 			v.Reason = fmt.Sprintf("stream matcher %s%s%q excludes %s=%q", m.Name, m.Op, m.Value, m.Name, val)
 			return v
 		}
+		if !known {
+			widened = append(widened, matcherAssumption(m))
+		}
+	}
+	if !named && len(r.Scope) > 0 {
+		widened = append(widened, noScopeAssumption(slices.Sorted(maps.Keys(r.Scope))))
 	}
 	if r.Structured && len(sel.Stages) > 0 {
 		v.Used = true
 		v.Reason = "line filters on structured records cannot be decided on one field; treated as reading every line"
+		v.Widened = append(widened, v.Reason)
 		return v
 	}
 	terms := []automaton.Term{{Pattern: r.Language}}
-	var ignored []string
+	var ignored, approximate []string
 	for _, st := range sel.Stages {
 		t, why := stageTerms(st)
 		terms = append(terms, t...)
 		ignored = append(ignored, why...)
+		if len(why) == 0 {
+			approximate = append(approximate, supersets(st)...)
+		}
 	}
 	w, found, err := automaton.Witness(terms, limit)
 	switch {
 	case errors.Is(err, automaton.ErrLimit):
 		v.Used = true
 		v.Reason = "too complex to decide; treated as used"
+		widened = append(widened, v.Reason)
 	case err != nil:
 		v.Used = true
 		v.Reason = "decision error (" + err.Error() + "); treated as used"
+		widened = append(widened, v.Reason)
 	case found:
 		v.Used = true
 		v.Witness = w
@@ -88,7 +110,129 @@ func Evaluate(sel logql.Selection, r Rule) Verdict {
 	if len(ignored) > 0 {
 		v.Reason += "; ignored (widening): " + strings.Join(ignored, "; ")
 	}
+	if v.Used {
+		v.Widened = slices.Concat(widened, sel.Unmodelled, ignored, approximate)
+	}
 	return v
+}
+
+// supersets names the filters of a modelled stage whose model is a superset of what Loki keeps: a
+// positive case-insensitive regex is modelled as both of Loki's readings, and a positive regex whose
+// re-serialised form means something else is modelled as both forms.
+func supersets(st logql.Stage) []string {
+	if st.Negative {
+		return nil // negative stages are modelled only when exact
+	}
+	var out []string
+	for _, f := range st.Alternatives {
+		if f.Kind != "regex" {
+			continue
+		}
+		if reason := regexSuperset(f.Value); reason != "" {
+			out = append(out, reason)
+		}
+	}
+	return out
+}
+
+var supersetCache sync.Map // regex -> reason ("" when exact)
+
+func regexSuperset(expr string) string {
+	if r, ok := supersetCache.Load(expr); ok {
+		return r.(string)
+	}
+	reason := ""
+	ast, err := syntax.Parse(expr, syntax.Perl)
+	switch {
+	case err != nil:
+		reason = fmt.Sprintf("regex %q does not parse", expr)
+	case hasFold(ast):
+		reason = fmt.Sprintf("case-insensitive filter %q is modelled as both of Loki's readings", expr)
+	default:
+		orig, err1 := automaton.Compile(expr)
+		round, err2 := automaton.Compile(ast.Simplify().String())
+		if err1 != nil || err2 != nil || !equivalent(orig, round) {
+			reason = fmt.Sprintf("regex %q is modelled as both its written and its re-serialised form", expr)
+		}
+	}
+	supersetCache.Store(expr, reason)
+	return reason
+}
+
+// Assumptions lists what any "used" verdict on this selection assumes, whatever the rule: matchers
+// on a scope label that cannot be evaluated, a selector that names no scope label, and every
+// pipeline stage that is not modelled exactly. A selection with none is decided exactly for every
+// rule, except that line filters on structured records never are.
+func Assumptions(sel logql.Selection, scopeLabels []string) []string {
+	var out []string
+	named := false
+	for _, m := range sel.Matchers {
+		if !slices.Contains(scopeLabels, m.Name) {
+			continue
+		}
+		named = true
+		if _, known := matchLabel(m, ""); !known {
+			out = append(out, matcherAssumption(m))
+		}
+	}
+	if !named && len(scopeLabels) > 0 {
+		out = append(out, noScopeAssumption(scopeLabels))
+	}
+	out = append(out, sel.Unmodelled...)
+	for _, st := range sel.Stages {
+		_, why := stageTerms(st)
+		out = append(out, why...)
+		if len(why) == 0 {
+			out = append(out, supersets(st)...)
+		}
+	}
+	return out
+}
+
+// kinds maps a phrase of an assumption to the kind of query part it names. The first match wins, so
+// more specific phrases come first. The analysis adds two of its own: a query that does not parse,
+// and an OpenSearch request, which is decided per service.
+var kinds = []struct{ phrase, kind string }{
+	{"query does not parse", "query does not parse"},
+	{"per service, not per line", "OpenSearch request, decided per service"},
+	{"template variable", "template variable"},
+	{"names no scope label", "stream selector without the scope label"},
+	{"stream matcher", "stream matcher not evaluated exactly"},
+	{"after the line is rewritten", "line filter after line_format, decolorize or unpack"},
+	{"label filter", "label filter"},
+	{"structured records", "line filter on structured records"},
+	{"case-insensitive", "case-insensitive filter"},
+	{"re-serialised", "regex that Loki re-serialises with another meaning"},
+	{"pattern filter", "pattern filter (|> or !>)"},
+	{"ip filter", "ip() filter"},
+	{"too complex", "too complex to decide"},
+	{"does not parse", "regex that does not parse"},
+	{"does not compile", "regex that does not compile"},
+}
+
+// Kind names the kind of query part an assumption is about, for counting them.
+func Kind(assumption string) string {
+	for _, k := range kinds {
+		if strings.Contains(assumption, k.phrase) {
+			return k.kind
+		}
+	}
+	return "other"
+}
+
+// matcherAssumption names a scope-label matcher whose value cannot be decided here.
+func matcherAssumption(m logql.Matcher) string {
+	why := "is not evaluated exactly"
+	if hasVariable(m.Value) {
+		why = "uses a template variable"
+	}
+	return fmt.Sprintf("stream matcher %s%s%q %s", m.Name, m.Op, m.Value, why)
+}
+
+// noScopeAssumption names a selector without any scope label: its other matchers are assumed to
+// select the rule's streams, since which streams they select is not known here.
+func noScopeAssumption(scopeLabels []string) string {
+	return "stream selector names no scope label (" + strings.Join(scopeLabels, ", ") + "); assumed to select the rule's streams"
 }
 
 // matchLabel evaluates a stream matcher against a known value. known is false when the matcher

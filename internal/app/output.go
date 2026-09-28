@@ -181,6 +181,13 @@ func Markdown(rep *Report) string {
 			fmt.Fprintf(&b, "- `%s` (%s %s): %s\n", g.Key, g.Source, g.Origin, g.Reason)
 		}
 	}
+	if s := rep.Readers; s.Readers > 0 {
+		fmt.Fprintf(&b, "\n## Readers\n\n%d readers across all rules. %d read the rule's lines exactly (each shows a line it reads). %d are assumed to read more than they may, because part of the query is not modelled; each of those can block a rule that is in fact safe:\n\n",
+			s.Readers, s.Exact, s.Readers-s.Exact)
+		for _, a := range s.Assumptions {
+			fmt.Fprintf(&b, "- %s: %d\n", a.Kind, a.Readers)
+		}
+	}
 	b.WriteString("\n## Rules\n\n")
 	for _, r := range rep.Recommendations {
 		fmt.Fprintf(&b, "### %s `%s` (%s)\n\n", r.ID, r.Candidate.Template, r.Candidate.Service)
@@ -213,6 +220,9 @@ func Markdown(rep *Report) string {
 			fmt.Fprintf(&b, "  - %s %s: `%s`", rd.Source, rd.Origin, rd.Expr)
 			if rd.Witness != "" {
 				fmt.Fprintf(&b, " %s e.g. `%s`", kind, rd.Witness)
+			}
+			if len(rd.Widened) > 0 {
+				fmt.Fprintf(&b, " (assumed: %s)", strings.Join(rd.Widened, "; "))
 			}
 			b.WriteString("\n")
 		}
@@ -415,7 +425,11 @@ func readsRule(p parsedQuery, r EnforcedRule, ur usage.Rule, languages map[strin
 			return fmt.Sprintf("%s %s would count or show this rule's rollup records: %s", p.Source, p.Origin, p.Expr), true
 		}
 		if v := usage.Evaluate(sel, ur); v.Used {
-			return fmt.Sprintf("%s %s reads these lines: %s (e.g. %q)", p.Source, p.Origin, p.Expr, v.Witness), true
+			msg := fmt.Sprintf("%s %s reads these lines: %s (e.g. %q)", p.Source, p.Origin, p.Expr, v.Witness)
+			if len(v.Widened) > 0 {
+				msg += " (assumed: " + strings.Join(v.Widened, "; ") + ")"
+			}
+			return msg, true
 		}
 	}
 	return "", false

@@ -115,6 +115,79 @@ func TestCountingFlag(t *testing.T) {
 	}
 }
 
+// A "used" verdict names every assumption behind it, and only an exact one names none: its witness is
+// then a line the query really selects. A "not used" verdict is a proof and never carries any.
+func TestWidenedNamesEveryAssumption(t *testing.T) {
+	cases := []struct {
+		q    string
+		r    Rule
+		want string // a phrase of the assumption, "" when the verdict must be exact
+	}{
+		{`{service_name="checkout"}`, health, ""},
+		{`{service_name="checkout"} |= "healthz"`, health, ""},
+		{`{service_name="checkout"} != "200 1"`, health, ""},
+		{`{service_name=~"check.*"} |~ "GET /health[a-z]+"`, health, ""},
+		{`{service_name="checkout", namespace="prod"} |= "healthz"`, health, ""}, // the rule covers every stream of its service
+		{`{namespace="prod"} |= "healthz"`, health, "names no scope label (service_name)"},
+		{`sum(count_over_time({service_name="checkout"} |= "healthz" [5m]))`, health, ""},
+		{`{service_name="$svc"}`, health, `stream matcher service_name="$svc" uses a template variable`},
+		{`{service_name=~"(?i)CHECKOUT"}`, health, "is not evaluated exactly"},
+		{`{service_name="checkout"} |= "$search"`, health, "uses a template variable"},
+		{`{service_name="checkout"} |> "<_> nomatch <_>"`, health, "pattern filter"},
+		{`{service_name="checkout"} |= ip("10.0.0.0/8")`, health, "ip filter"},
+		{`{service_name="checkout"} !~ "(?i)healthz"`, health, "case-insensitive negative regex"},
+		{`{service_name="checkout"} |~ "(?i)HEALTHZ"`, health, "case-insensitive filter"},
+		{`{service_name="checkout"} | line_format "x" |= "heartbeat"`, health, "after the line is rewritten"},
+		{`{service_name="checkout"} | logfmt | level="nothing"`, health, `label filter level = "nothing"`},
+		{`{service_name="orders"} |= "nothing like this"`, route, "structured records"},
+	}
+	for _, c := range cases {
+		v := verdict(t, c.q, c.r)
+		if !v.Used {
+			t.Fatalf("%s: not used (%s)", c.q, v.Reason)
+		}
+		got := strings.Join(v.Widened, "; ")
+		if c.want == "" && got != "" || c.want != "" && !strings.Contains(got, c.want) {
+			t.Fatalf("%s: widened %q, want %q", c.q, got, c.want)
+		}
+	}
+	for _, q := range []string{
+		`{service_name="checkout"} |= "heartbeat" | logfmt | level="x"`,
+		`{service_name="checkout"} |= "heartbeat" |> "<_>"`,
+		`{service_name="$svc"} |= "heartbeat"`,
+	} {
+		if v := verdict(t, q, health); v.Used || len(v.Widened) > 0 {
+			t.Fatalf("%s: a proof must carry no assumptions: %+v", q, v)
+		}
+	}
+}
+
+// Assumptions is what a verdict would assume whatever the rule, so query coverage can be measured
+// without rules: the same phrases a used verdict carries.
+func TestAssumptionsWithoutARule(t *testing.T) {
+	cases := map[string]string{
+		`{service_name="checkout"} |= "x" != "y"`:                            "",
+		`{service_name=~"check.*", pod="p"} |~ "a[0-9]+"`:                    "",
+		`{service_name="$svc"} |= "x"`:                                       "uses a template variable",
+		`{app="x"} |= "y"`:                                                   "names no scope label (service_name)",
+		`{service_name="a"} | json | status >= 500`:                          "label filter status >= 500",
+		`{service_name="a"} |= "$q"`:                                         "uses a template variable",
+		`{service_name="a"} |~ "(?i)err"`:                                    "case-insensitive filter",
+		`{service_name="a"} | line_format "{{.msg}}" |= "timeout"`:           "after the line is rewritten",
+		`sum by (level) (count_over_time({service_name="a"} |> "<_>" [1m]))`: "pattern filter",
+	}
+	for q, want := range cases {
+		pq, err := logql.Parse(q)
+		if err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		got := strings.Join(Assumptions(pq.Selections[0], []string{"service_name"}), "; ")
+		if want == "" && got != "" || want != "" && !strings.Contains(got, want) {
+			t.Fatalf("%s: %q, want %q", q, got, want)
+		}
+	}
+}
+
 // Loki evaluates simplified case-insensitive literals with unicode.ToLower, which matches runes Go's
 // (?i) does not: U+0130 lowercases to 'i'. A rule containing it must count as read by (?i)i.
 func TestLokiLowerSemantics(t *testing.T) {

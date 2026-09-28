@@ -7,6 +7,27 @@ import (
 	"time"
 )
 
+// Every stage that can narrow a selection without being modelled is named, so a verdict can say what
+// it assumed. The rollup-marker filter is modelled (NoRollups) and parsers narrow nothing.
+func TestUnmodelledStages(t *testing.T) {
+	q, err := Parse(`{a="b"} |= "x" | json | level="info" | line_format "y" |= "z" | sievelog_rule=""`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := q.Selections[0]
+	want := `label filter level = "info"|line filter |= "z" after the line is rewritten`
+	if got := strings.Join(sel.Unmodelled, "|"); got != want || !sel.NoRollups || len(sel.Stages) != 1 {
+		t.Fatalf("unmodelled %q (want %q), no rollups %v, stages %d", got, want, sel.NoRollups, len(sel.Stages))
+	}
+	q, err = Parse(`sum(count_over_time({a="b"} |= "x" | logfmt [5m]))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u := q.Selections[0].Unmodelled; len(u) != 0 {
+		t.Fatalf("a parser alone narrows nothing: %q", u)
+	}
+}
+
 // summary renders a parsed query compactly so tests can compare it with an expected string.
 func summary(q *Query) string {
 	var parts []string

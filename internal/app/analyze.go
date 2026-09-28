@@ -40,6 +40,8 @@ type Report struct {
 	RemovedPerDay   float64                  `json:"removed_bytes_per_day"`
 	// MonthlyCost is the saving per month at the operator's prices, 0 when none were given.
 	MonthlyCost float64 `json:"monthly_cost"`
+	// Readers says how many readers were decided exactly and what was assumed for the others.
+	Readers ReaderSummary `json:"readers"`
 }
 
 // Skipped is a template that got no rule, and why.
@@ -197,6 +199,7 @@ func Analyze(ctx context.Context, c *Config, now time.Time) (*Report, error) {
 		return nil, err
 	}
 	rep.Recommendations = recs
+	rep.Readers = summarizeReaders(recs)
 	rep.Pricing = pricing.Price{PerGB: c.Pricing.PerGB, PerMillionLines: c.Pricing.PerMillionLines, Currency: c.Pricing.Currency}
 	for _, r := range recs {
 		if r.Action == "none" {

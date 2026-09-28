@@ -113,7 +113,10 @@ type Reader struct {
 	Counting             bool
 	Witness              string
 	Reason               string
-	Rewrite              *Rewrite // set when a rollup can keep this reader's numbers
+	// Widened lists what was assumed to decide this reader (see usage.Verdict.Widened). Empty means
+	// the query really reads the rule's lines, as the witness shows.
+	Widened []string `json:"Widened,omitempty"`
+	Rewrite *Rewrite // set when a rollup can keep this reader's numbers
 	// Compensated is true for a query sievelog already rewrote for a rollup of this rule: its
 	// raw-line term reads the lines, and only a rollup keeps its numbers.
 	Compensated bool
@@ -245,7 +248,8 @@ func (d *decision) recommend(c Candidate) (Recommendation, error) {
 	}
 	for _, sr := range d.scoped {
 		if sr.Service == c.Service {
-			rec.Readers = append(rec.Readers, Reader{Source: sr.Source, Origin: sr.Origin, Expr: sr.Expr, Counting: true, Reason: sr.Reason})
+			rec.Readers = append(rec.Readers, Reader{Source: sr.Source, Origin: sr.Origin, Expr: sr.Expr, Counting: true, Reason: sr.Reason,
+				Widened: []string{"decided per service, not per line"}})
 			rollupOK = false // only Loki queries can be rewritten for a rollup
 		}
 	}
@@ -267,25 +271,42 @@ func (d *decision) readers(id string, c Candidate, lang *automaton.Pattern, roll
 	for _, p := range d.queries {
 		if p.err != nil {
 			out = append(out, Reader{Source: p.Source, Origin: p.Origin, Expr: p.Expr, Counting: true,
-				Reason: "query does not parse (" + p.err.Error() + "); treated as reading and counting every line"})
+				Reason:  "query does not parse (" + p.err.Error() + "); treated as reading and counting every line",
+				Widened: []string{"query does not parse"}})
 			continue
 		}
+		// The first reading selection decides, unless a later one reads the lines exactly: then the
+		// report shows the exact one, since that reader cannot be an over-approximation.
+		var first, chosen *usage.Verdict
+		compensated := false
 		for _, sel := range p.query.Selections {
 			if rewrite.Compensated(p.query, sel, id, d.languages) {
 				// A sievelog rewrite's raw-line term: summed with the rollup counts, it keeps the
 				// query's numbers only if this rule is rolled up.
-				out = append(out, Reader{Source: p.Source, Origin: p.Origin, Expr: p.Expr, Counting: true, Compensated: true,
-					Reason: "already rewritten for a rollup of these lines; any other removal changes its count"})
-				break
-			}
-			if v := usage.Evaluate(sel, rule); v.Used {
-				rd := Reader{Source: p.Source, Origin: p.Origin, Expr: p.Expr, Counting: v.Counting, Witness: v.Witness, Reason: v.Reason}
-				if rollupAllowed {
-					rd.Rewrite = rewriteFor(p.UsageQuery, id, c)
+				if chosen == nil {
+					out = append(out, Reader{Source: p.Source, Origin: p.Origin, Expr: p.Expr, Counting: true, Compensated: true,
+						Reason: "already rewritten for a rollup of these lines; any other removal changes its count"})
+					compensated = true
 				}
-				out = append(out, rd)
 				break
 			}
+			if v := usage.Evaluate(sel, rule); v.Used && (chosen == nil || len(chosen.Widened) > 0 && len(v.Widened) == 0) {
+				if first == nil {
+					first = &v
+				}
+				chosen = &v
+				if len(v.Widened) == 0 {
+					break
+				}
+			}
+		}
+		if chosen != nil && !compensated {
+			// Counting comes from the first reading selection, as the decision has always used it.
+			rd := Reader{Source: p.Source, Origin: p.Origin, Expr: p.Expr, Counting: first.Counting, Witness: chosen.Witness, Reason: chosen.Reason, Widened: chosen.Widened}
+			if rollupAllowed {
+				rd.Rewrite = rewriteFor(p.UsageQuery, id, c)
+			}
+			out = append(out, rd)
 		}
 	}
 	return out
