@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -269,119 +270,40 @@ type VerifyOptions struct {
 // rules that are no longer safe.
 func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time, opt VerifyOptions) (*VerifyResult, error) {
 	rep := &Report{}
-	var services []string
-	seen := map[string]bool{}
-	for _, r := range rf.Rules {
-		if !seen[r.Service] {
-			seen[r.Service] = true
-			services = append(services, r.Service)
-		}
-	}
-	queries, scoped, gaps := c.evidence(ctx, now, services, rep)
+	queries, scoped, gaps := c.evidence(ctx, now, rf.services(), rep)
 	tg, err := c.topologyGaps(rep)
 	if err != nil {
 		return nil, err
 	}
-	gaps = append(gaps, tg...)
-	ack := map[string]bool{}
-	for _, k := range c.Policy.Acknowledge {
-		ack[k] = true
-	}
-	var global []string
-	for _, g := range gaps {
-		if !ack[g.Key] {
-			global = append(global, fmt.Sprintf("evidence gap %q: %s", g.Key, g.Reason))
-		}
-	}
-	switch v, err := templating.DrainVersion(); {
-	case err != nil:
-		global = append(global, "this binary cannot tell which drain it embeds ("+err.Error()+"), so the rules' templates cannot be trusted")
-	case v != rf.DrainVersion:
-		global = append(global, fmt.Sprintf("rules were made with drain %s, this binary embeds %s", rf.DrainVersion, v))
-	}
-	if h := c.DrainConfigHash(); h != rf.DrainConfigHash {
-		global = append(global, "the drain version, masking rules or seed templates changed since the rules were made; re-analyse")
-	}
-	var deployedMode string
-	var deployedDiffs []string
-	if opt.Deployed != nil {
-		var err error
-		deployedMode, deployedDiffs, err = DeployedDiff(c, rf, opt.Deployed)
-		if err != nil {
-			return nil, err
-		}
-		for _, d := range deployedDiffs {
-			global = append(global, "the deployed pipeline config is not what emit produces for these rules ("+deployedMode+" mode): "+d)
-		}
-	}
-	type parsed struct {
-		q      analyze.UsageQuery
-		parsed *logql.Query
-		sel    []logql.Selection
-		err    error
-	}
-	var pqs []parsed
-	for _, q := range queries {
-		p, err := logql.Parse(q.Expr)
-		if err != nil {
-			pqs = append(pqs, parsed{q: q, err: err})
-			continue
-		}
-		pqs = append(pqs, parsed{q: q, parsed: p, sel: p.Selections})
-	}
-	res := &VerifyResult{CheckedAt: now.UTC(), DeployedMode: deployedMode, DeployedDiffs: deployedDiffs,
+	res := &VerifyResult{CheckedAt: now.UTC(),
 		Keep: &RulesFile{GeneratedAt: rf.GeneratedAt, DrainVersion: rf.DrainVersion, DrainConfigHash: rf.DrainConfigHash, LokiLabel: rf.LokiLabel,
 			RewritesAppliedAt: rf.RewritesAppliedAt}}
-	if opt.Drift {
-		d, err := c.Drift(ctx, rf, now)
-		if err != nil {
+	global := c.unacknowledged(append(gaps, tg...))
+	global = append(global, c.drainChanges(rf)...)
+	if opt.Deployed != nil {
+		if res.DeployedMode, res.DeployedDiffs, err = DeployedDiff(c, rf, opt.Deployed); err != nil {
 			return nil, err
 		}
-		res.Drift = d
+		for _, d := range res.DeployedDiffs {
+			global = append(global, "the deployed pipeline config is not what emit produces for these rules ("+res.DeployedMode+" mode): "+d)
+		}
 	}
+	if opt.Drift {
+		if res.Drift, err = c.Drift(ctx, rf, now); err != nil {
+			return nil, err
+		}
+	}
+	parsed := parseQueries(queries)
 	languages := make(map[string]string, len(rf.Rules))
 	for _, r := range rf.Rules {
 		languages[r.ID] = r.Language
 	}
 	for _, r := range rf.Rules {
-		reasons := append([]string(nil), global...)
-		lang, err := automaton.Compile(r.Language)
+		reasons, err := rf.readersOf(r, parsed, scoped, languages)
 		if err != nil {
-			return nil, fmt.Errorf("rule %s: %w", r.ID, err)
+			return nil, err
 		}
-		ur := usage.Rule{ID: r.ID, Scope: map[string]string{rf.LokiLabel: r.Service}, Language: lang, Structured: r.Field != ""}
-		replaced := map[string]bool{} // original queries this rule's rewrites replaced
-		for _, rw := range r.Rewrites {
-			replaced[logql.Canonical(rw.Old)] = true
-		}
-		for _, p := range pqs {
-			if p.err != nil {
-				reasons = append(reasons, fmt.Sprintf("%s %s does not parse; treated as reading every line", p.q.Source, p.q.Origin))
-				continue
-			}
-			// An original query executed only before its rewrite was applied is history.
-			if p.q.Source == "loki-querylog" && replaced[logql.Canonical(p.q.Expr)] && !rf.RewritesAppliedAt.IsZero() && p.q.Last.Before(rf.RewritesAppliedAt) {
-				continue
-			}
-			for _, sel := range p.sel {
-				if r.Action == "rollup" && rewrite.Compensated(p.parsed, sel, r.ID, languages) {
-					continue
-				}
-				if r.Action == "rollup" && rewrite.ReadsRollups(sel, r.ID, ur.Scope) {
-					reasons = append(reasons, fmt.Sprintf("%s %s would count or show this rule's rollup records: %s", p.q.Source, p.q.Origin, p.q.Expr))
-					break
-				}
-				if v := usage.Evaluate(sel, ur); v.Used {
-					reasons = append(reasons, fmt.Sprintf("%s %s reads these lines: %s (e.g. %q)", p.q.Source, p.q.Origin, p.q.Expr, v.Witness))
-					break
-				}
-			}
-		}
-		for _, sr := range scoped {
-			if sr.Service == r.Service {
-				reasons = append(reasons, fmt.Sprintf("%s %s may read these lines: %s", sr.Source, sr.Origin, sr.Reason))
-			}
-		}
+		reasons = append(append([]string(nil), global...), reasons...)
 		if len(reasons) > 0 {
 			sort.Strings(reasons)
 			res.Violations = append(res.Violations, Violation{RuleID: r.ID, Reasons: reasons})
@@ -390,6 +312,112 @@ func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time, opt Ve
 		res.Keep.Rules = append(res.Keep.Rules, r)
 	}
 	return res, nil
+}
+
+// services are the rules' services, in first-seen order.
+func (rf *RulesFile) services() []string {
+	var out []string
+	for _, r := range rf.Rules {
+		if !slices.Contains(out, r.Service) {
+			out = append(out, r.Service)
+		}
+	}
+	return out
+}
+
+// unacknowledged is every gap the policy does not accept, as a reason that fails every rule.
+func (c *Config) unacknowledged(gaps []analyze.Gap) []string {
+	var out []string
+	for _, g := range gaps {
+		if !slices.Contains(c.Policy.Acknowledge, g.Key) {
+			out = append(out, fmt.Sprintf("evidence gap %q: %s", g.Key, g.Reason))
+		}
+	}
+	return out
+}
+
+// drainChanges are the reasons templates made for the rules may no longer match: another drain
+// version, or other masking rules or seed templates.
+func (c *Config) drainChanges(rf *RulesFile) []string {
+	var out []string
+	switch v, err := templating.DrainVersion(); {
+	case err != nil:
+		out = append(out, "this binary cannot tell which drain it embeds ("+err.Error()+"), so the rules' templates cannot be trusted")
+	case v != rf.DrainVersion:
+		out = append(out, fmt.Sprintf("rules were made with drain %s, this binary embeds %s", rf.DrainVersion, v))
+	}
+	if c.DrainConfigHash() != rf.DrainConfigHash {
+		out = append(out, "the drain version, masking rules or seed templates changed since the rules were made; re-analyse")
+	}
+	return out
+}
+
+// parsedQuery is a usage query parsed once; err is set when it does not parse.
+type parsedQuery struct {
+	analyze.UsageQuery
+	query *logql.Query
+	err   error
+}
+
+func parseQueries(queries []analyze.UsageQuery) []parsedQuery {
+	out := make([]parsedQuery, len(queries))
+	for i, q := range queries {
+		out[i].UsageQuery = q
+		out[i].query, out[i].err = logql.Parse(q.Expr)
+	}
+	return out
+}
+
+// readersOf is why rule r is no longer safe to enforce: every query that reads its lines (a query
+// that does not parse reads everything), every query that would count or show its rollup records,
+// and every other store's reader of its service.
+func (rf *RulesFile) readersOf(r EnforcedRule, queries []parsedQuery, scoped []analyze.ScopedReader, languages map[string]string) ([]string, error) {
+	lang, err := automaton.Compile(r.Language)
+	if err != nil {
+		return nil, fmt.Errorf("rule %s: %w", r.ID, err)
+	}
+	ur := usage.Rule{ID: r.ID, Scope: map[string]string{rf.LokiLabel: r.Service}, Language: lang, Structured: r.Field != ""}
+	replaced := map[string]bool{} // original queries this rule's rewrites replaced
+	for _, rw := range r.Rewrites {
+		replaced[logql.Canonical(rw.Old)] = true
+	}
+	var reasons []string
+	for _, p := range queries {
+		if p.err != nil {
+			reasons = append(reasons, fmt.Sprintf("%s %s does not parse; treated as reading every line", p.Source, p.Origin))
+			continue
+		}
+		// An original query executed only before its rewrite was applied is history.
+		if p.Source == "loki-querylog" && replaced[logql.Canonical(p.Expr)] && !rf.RewritesAppliedAt.IsZero() && p.Last.Before(rf.RewritesAppliedAt) {
+			continue
+		}
+		if why, ok := readsRule(p, r, ur, languages); ok {
+			reasons = append(reasons, why)
+		}
+	}
+	for _, sr := range scoped {
+		if sr.Service == r.Service {
+			reasons = append(reasons, fmt.Sprintf("%s %s may read these lines: %s", sr.Source, sr.Origin, sr.Reason))
+		}
+	}
+	return reasons, nil
+}
+
+// readsRule reports whether a parsed query reads rule r's lines or, for a rollup, its records; a
+// rollup's own compensated raw-line term is not a reader.
+func readsRule(p parsedQuery, r EnforcedRule, ur usage.Rule, languages map[string]string) (string, bool) {
+	for _, sel := range p.query.Selections {
+		if r.Action == "rollup" && rewrite.Compensated(p.query, sel, r.ID, languages) {
+			continue
+		}
+		if r.Action == "rollup" && rewrite.ReadsRollups(sel, r.ID, ur.Scope) {
+			return fmt.Sprintf("%s %s would count or show this rule's rollup records: %s", p.Source, p.Origin, p.Expr), true
+		}
+		if v := usage.Evaluate(sel, ur); v.Used {
+			return fmt.Sprintf("%s %s reads these lines: %s (e.g. %q)", p.Source, p.Origin, p.Expr, v.Witness), true
+		}
+	}
+	return "", false
 }
 
 // EmitPolicies writes the rules as Telemetry Policies, each verified against policy-go; rules the
