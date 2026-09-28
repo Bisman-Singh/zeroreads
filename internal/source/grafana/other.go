@@ -120,43 +120,44 @@ func (r *orgReader) shortURLs(ctx context.Context) {
 		q := u.Query()
 		found := false
 		if panes := q.Get("panes"); panes != "" {
-			var m map[string]struct {
-				Datasource any              `json:"datasource"`
-				Queries    []map[string]any `json:"queries"`
-			}
+			var m map[string]explorePane
 			if err := json.Unmarshal([]byte(panes), &m); err != nil {
 				r.gap(origin, "panes: %v", err)
 				continue
 			}
-			for pane, p := range m {
-				paneDS, _ := r.resolve(p.Datasource)
-				for i, qq := range p.Queries {
-					r.exploreQuery(fmt.Sprintf("%s/%s/%d", origin, pane, i), paneDS, qq)
-					found = true
-				}
+			for name, pane := range m {
+				found = r.explorePane(origin+"/"+name, pane) || found
 			}
 		}
 		for _, side := range []string{"left", "right"} {
 			if v := q.Get(side); v != "" {
-				var p struct {
-					Datasource any              `json:"datasource"`
-					Queries    []map[string]any `json:"queries"`
-				}
-				if err := json.Unmarshal([]byte(v), &p); err != nil {
+				var pane explorePane
+				if err := json.Unmarshal([]byte(v), &pane); err != nil {
 					r.gap(origin, "%s: %v", side, err)
 					continue
 				}
-				paneDS, _ := r.resolve(p.Datasource)
-				for i, qq := range p.Queries {
-					r.exploreQuery(fmt.Sprintf("%s/%s/%d", origin, side, i), paneDS, qq)
-					found = true
-				}
+				found = r.explorePane(origin+"/"+side, pane) || found
 			}
 		}
 		if !found {
 			r.gap(origin, "explore link without readable queries")
 		}
 	}
+}
+
+// explorePane is one pane of an Explore link: its datasource and its queries.
+type explorePane struct {
+	Datasource any              `json:"datasource"`
+	Queries    []map[string]any `json:"queries"`
+}
+
+// explorePane adds a pane's queries and reports whether it had any.
+func (r *orgReader) explorePane(origin string, pane explorePane) bool {
+	paneDS, _ := r.resolve(pane.Datasource)
+	for i, q := range pane.Queries {
+		r.exploreQuery(fmt.Sprintf("%s/%d", origin, i), paneDS, q)
+	}
+	return len(pane.Queries) > 0
 }
 
 func (r *orgReader) exploreQuery(origin string, paneDS []string, q map[string]any) {

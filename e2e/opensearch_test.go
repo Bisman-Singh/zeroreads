@@ -127,7 +127,7 @@ func TestOpenSearchEvidence(t *testing.T) {
 
 	cl := &opensearch.Client{Base: os.Getenv("OPENSEARCH_URL"), Username: "admin", Password: os.Getenv("OPENSEARCH_PASSWORD"), InsecureSkipVerify: true}
 	reader := func(prove bool, timeout time.Duration) *opensearch.Reader {
-		return &opensearch.Reader{C: cl, AuditIndex: "security-auditlog-*", DashboardsIndex: ".kibana_" + n, ProveLive: prove, ProveTimeout: timeout}
+		return &opensearch.Reader{Client: cl, AuditIndex: "security-auditlog-*", DashboardsIndex: ".kibana_" + n, ProveLive: prove, ProveTimeout: timeout}
 	}
 	defer osAdmin(t, "PUT", "/_plugins/_security/api/audit/config", auditConfig([]string{"GRANTED_PRIVILEGES"}, []string{"kibanaserver"}))
 
@@ -518,7 +518,7 @@ func TestOpenSearchDashboardsSavedObjects(t *testing.T) {
 	}()
 
 	cl := &opensearch.Client{Base: os.Getenv("OPENSEARCH_URL"), Username: "admin", Password: os.Getenv("OPENSEARCH_PASSWORD"), InsecureSkipVerify: true}
-	r := &opensearch.Reader{C: cl, AuditIndex: "security-auditlog-*", DashboardsIndex: ".kibana*"}
+	r := &opensearch.Reader{Client: cl, AuditIndex: "security-auditlog-*", DashboardsIndex: ".kibana*"}
 	res := r.Read(context.Background(), time.Now().Add(-time.Minute), time.Now())
 	if g := gapSet(res.Gaps); !strings.Contains(g["opensearch-saved-queries"], n+"-q") || g["opensearch-dashboards-unreadable"] != "" {
 		t.Fatalf("gaps: %v", g)

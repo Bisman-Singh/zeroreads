@@ -237,7 +237,7 @@ policy:
 	runtime.GC()
 	runtime.ReadMemStats(&before)
 	start = time.Now()
-	res := (&opensearch.Reader{C: cl, AuditIndex: idx, DashboardsIndex: ".kibana*"}).Read(context.Background(), from.Add(-time.Minute), now)
+	res := (&opensearch.Reader{Client: cl, AuditIndex: idx, DashboardsIndex: ".kibana*"}).Read(context.Background(), from.Add(-time.Minute), now)
 	elapsed = time.Since(start)
 	runtime.ReadMemStats(&after)
 	if g := gapSet(res.Gaps); g["opensearch-audit-unreadable"] != "" {

@@ -142,7 +142,7 @@ func TestReadAudit(t *testing.T) {
 	}}
 	srv := httptest.NewServer(f)
 	defer srv.Close()
-	r := &Reader{C: &Client{Base: srv.URL}, AuditIndex: "security-auditlog-*", DashboardsIndex: ".kibana*", ProveLive: true, ProveTimeout: 5 * time.Second}
+	r := &Reader{Client: &Client{Base: srv.URL}, AuditIndex: "security-auditlog-*", DashboardsIndex: ".kibana*", ProveLive: true, ProveTimeout: 5 * time.Second}
 	res := r.Read(context.Background(), time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), time.Now())
 	keys := gapKeys(res)
 	for _, k := range []string{"opensearch-audit-not-live", "opensearch-audit-window", "opensearch-audit-config-unreadable", "opensearch-audit-unreadable", "opensearch-monitors-unreadable"} {
@@ -202,7 +202,7 @@ func TestAuditGaps(t *testing.T) {
 			f.pipelines = `{"rewrite":{"request_processors":[]}}`
 		}
 		srv := httptest.NewServer(f)
-		r := &Reader{C: &Client{Base: srv.URL}, AuditIndex: "security-auditlog-*", DashboardsIndex: ".kibana*"}
+		r := &Reader{Client: &Client{Base: srv.URL}, AuditIndex: "security-auditlog-*", DashboardsIndex: ".kibana*"}
 		res := r.Read(context.Background(), time.Now().Add(-24*time.Hour), time.Now())
 		srv.Close()
 		keys := gapKeys(res)
@@ -225,7 +225,7 @@ func TestProbeNotLive(t *testing.T) {
 		f.ServeHTTP(w, r)
 	}))
 	defer srv.Close()
-	r := &Reader{C: &Client{Base: srv.URL}, AuditIndex: "security-auditlog-*", DashboardsIndex: ".kibana*", ProveLive: true, ProveTimeout: 10 * time.Millisecond}
+	r := &Reader{Client: &Client{Base: srv.URL}, AuditIndex: "security-auditlog-*", DashboardsIndex: ".kibana*", ProveLive: true, ProveTimeout: 10 * time.Millisecond}
 	if err := r.proveLive(context.Background()); err == nil {
 		t.Fatalf("probe proven without being recorded")
 	}
@@ -243,7 +243,7 @@ func TestMonitors(t *testing.T) {
 	]}}`}
 	srv := httptest.NewServer(f)
 	defer srv.Close()
-	r := &Reader{C: &Client{Base: srv.URL}, AuditIndex: "security-auditlog-*", DashboardsIndex: ".kibana*"}
+	r := &Reader{Client: &Client{Base: srv.URL}, AuditIndex: "security-auditlog-*", DashboardsIndex: ".kibana*"}
 	var res Result
 	if err := r.readMonitors(context.Background(), &res); err != nil {
 		t.Fatal(err)
@@ -285,7 +285,7 @@ func TestSavedObjects(t *testing.T) {
 	}}
 	srv := httptest.NewServer(f)
 	defer srv.Close()
-	r := &Reader{C: &Client{Base: srv.URL}, AuditIndex: "security-auditlog-*", DashboardsIndex: ".kibana*"}
+	r := &Reader{Client: &Client{Base: srv.URL}, AuditIndex: "security-auditlog-*", DashboardsIndex: ".kibana*"}
 	var res Result
 	if err := r.readSavedObjects(context.Background(), &res); err != nil {
 		t.Fatal(err)

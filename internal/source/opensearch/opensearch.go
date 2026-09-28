@@ -131,7 +131,7 @@ type Result struct {
 
 // Reader reads one cluster's evidence.
 type Reader struct {
-	C *Client
+	Client *Client
 	// AuditIndex is the audit log index pattern, e.g. security-auditlog-*.
 	AuditIndex string
 	// DashboardsIndex is the saved objects index pattern, e.g. .kibana*.
@@ -178,7 +178,7 @@ func (r *Reader) Read(ctx context.Context, start, end time.Time) Result {
 // query after it is audited, so a filter in the audited body proves nothing.
 func (r *Reader) checkSearchPipelines(ctx context.Context, res *Result) {
 	var out map[string]json.RawMessage
-	err := r.C.do(ctx, http.MethodGet, "/_search/pipeline", nil, &out)
+	err := r.Client.do(ctx, http.MethodGet, "/_search/pipeline", nil, &out)
 	switch {
 	case notFound(err, ""):
 		return // none defined
@@ -212,7 +212,7 @@ func (r *Reader) checkAuditConfig(ctx context.Context, res *Result) {
 			} `json:"audit"`
 		} `json:"config"`
 	}
-	if err := r.C.do(ctx, http.MethodGet, "/_plugins/_security/api/audit", nil, &out); err != nil {
+	if err := r.Client.do(ctx, http.MethodGet, "/_plugins/_security/api/audit", nil, &out); err != nil {
 		res.Gaps = append(res.Gaps, Gap{Key: "opensearch-audit-config-unreadable", Origin: "security plugin",
 			Reason: "the audit configuration could not be read, so it is unknown which requests are logged: " + err.Error()})
 		return
@@ -256,7 +256,7 @@ func (r *Reader) proveLive(ctx context.Context) error {
 		return err
 	}
 	marker := probePrefix + hex.EncodeToString(nonce)
-	probe := *r.C
+	probe := *r.Client
 	probe.untagged = true
 	if err := probe.do(ctx, http.MethodPost, "/"+marker+"/_search?ignore_unavailable=true&allow_no_indices=true", map[string]any{"size": 0}, nil); err != nil {
 		return fmt.Errorf("sending marker search: %w", err)
@@ -273,7 +273,7 @@ func (r *Reader) proveLive(ctx context.Context) error {
 			} `json:"hits"`
 		}
 		path := "/" + marker + "/_search"
-		err := r.C.do(ctx, http.MethodPost, "/"+r.AuditIndex+"/_search?ignore_unavailable=true&allow_no_indices=true",
+		err := r.Client.do(ctx, http.MethodPost, "/"+r.AuditIndex+"/_search?ignore_unavailable=true&allow_no_indices=true",
 			map[string]any{"size": 10, "query": map[string]any{"match_phrase": map[string]any{"audit_rest_request_path": path}}}, &out)
 		if err != nil {
 			return fmt.Errorf("reading the audit log: %w", err)
@@ -307,7 +307,7 @@ func (r *Reader) checkAuditWindow(ctx context.Context, start time.Time, res *Res
 			} `json:"first"`
 		} `json:"aggregations"`
 	}
-	err := r.C.do(ctx, http.MethodPost, "/"+r.AuditIndex+"/_search?ignore_unavailable=true&allow_no_indices=true",
+	err := r.Client.do(ctx, http.MethodPost, "/"+r.AuditIndex+"/_search?ignore_unavailable=true&allow_no_indices=true",
 		map[string]any{"size": 0, "aggs": map[string]any{"first": map[string]any{"min": map[string]any{"field": "@timestamp"}}}}, &out)
 	if err != nil {
 		return err
@@ -338,12 +338,12 @@ func (r *Reader) scan(ctx context.Context, index string, query any, fn func(hit)
 			Hits []hit `json:"hits"`
 		} `json:"hits"`
 	}
-	if err := r.C.do(ctx, http.MethodPost, "/"+index+"/_search?scroll=2m&size=1000&ignore_unavailable=true&allow_no_indices=true&expand_wildcards=all", map[string]any{"query": query, "sort": []any{"_doc"}}, &page); err != nil {
+	if err := r.Client.do(ctx, http.MethodPost, "/"+index+"/_search?scroll=2m&size=1000&ignore_unavailable=true&allow_no_indices=true&expand_wildcards=all", map[string]any{"query": query, "sort": []any{"_doc"}}, &page); err != nil {
 		return err
 	}
 	defer func() {
 		if page.ScrollID != "" {
-			_ = r.C.do(context.Background(), http.MethodDelete, "/_search/scroll", map[string]any{"scroll_id": page.ScrollID}, nil)
+			_ = r.Client.do(context.Background(), http.MethodDelete, "/_search/scroll", map[string]any{"scroll_id": page.ScrollID}, nil)
 		}
 	}()
 	for len(page.Hits.Hits) > 0 {
@@ -357,7 +357,7 @@ func (r *Reader) scan(ctx context.Context, index string, query any, fn func(hit)
 		}
 		next := page
 		next.Hits.Hits = nil
-		if err := r.C.do(ctx, http.MethodPost, "/_search/scroll", map[string]any{"scroll": "2m", "scroll_id": page.ScrollID}, &next); err != nil {
+		if err := r.Client.do(ctx, http.MethodPost, "/_search/scroll", map[string]any{"scroll": "2m", "scroll_id": page.ScrollID}, &next); err != nil {
 			return err
 		}
 		page = next
@@ -365,9 +365,10 @@ func (r *Reader) scan(ctx context.Context, index string, query any, fn func(hit)
 	return nil
 }
 
-func has(p string, subs ...string) bool {
-	for _, s := range subs {
-		if strings.Contains(p, s) {
+// containsAny reports whether path contains any of parts.
+func containsAny(path string, parts ...string) bool {
+	for _, s := range parts {
+		if strings.Contains(path, s) {
 			return true
 		}
 	}
@@ -380,22 +381,22 @@ func has(p string, subs ...string) bool {
 func readingEndpoint(method, path string) (reads, dsl bool) {
 	p := strings.ToLower(path)
 	switch {
-	case has(p, "/_plugins/_sql", "/_plugins/_ppl", "/_opendistro/_sql", "/_opendistro/_ppl"):
+	case containsAny(p, "/_plugins/_sql", "/_plugins/_ppl", "/_opendistro/_sql", "/_opendistro/_ppl"):
 		return true, false
-	case has(p, "/_plugins/_alerting", "/_opendistro/_alerting"):
+	case containsAny(p, "/_plugins/_alerting", "/_opendistro/_alerting"):
 		// Monitors are read as stored queries; only running one on demand returns search results.
-		return has(p, "/_execute"), false
-	case has(p, "/_search/scroll", "/_search/point_in_time"):
+		return containsAny(p, "/_execute"), false
+	case containsAny(p, "/_search/scroll", "/_search/point_in_time"):
 		return false, false // continuations of an already audited search, or a snapshot handle
-	case has(p, "/_msearch", "/_search/template", "/_render/template", "/_mget", "/_termvectors", "/_mtermvectors", "/_explain",
+	case containsAny(p, "/_msearch", "/_search/template", "/_render/template", "/_mget", "/_termvectors", "/_mtermvectors", "/_explain",
 		"/_async_search", "/_plugins/_asynchronous_search", "/_source", "/_field_caps", "/_validate", "/_knn",
 		"/_delete_by_query", "/_update_by_query", "/_reindex"):
 		return true, false
-	case has(p, "/_search", "/_count"):
+	case containsAny(p, "/_search", "/_count"):
 		return true, true
 	case strings.Contains(p, "/_doc/") && (method == http.MethodGet || method == http.MethodHead):
 		return true, false
-	case has(p, "/_bulk", "/_refresh", "/_flush", "/_mapping", "/_settings", "/_stats", "/_cat/", "/_cluster/", "/_nodes",
+	case containsAny(p, "/_bulk", "/_refresh", "/_flush", "/_mapping", "/_settings", "/_stats", "/_cat/", "/_cluster/", "/_nodes",
 		"/_plugins/_security", "/_alias", "/_template", "/_index_template", "/_component_template", "/_ingest", "/_create/",
 		"/_update/", "/_resolve/", "/_tasks", "/_snapshot", "/_plugins/_ism", "/_forcemerge", "/_open", "/_close",
 		"/_rollover", "/_data_stream"),
@@ -409,7 +410,7 @@ func readingEndpoint(method, path string) (reads, dsl bool) {
 
 // multiTarget endpoints name their indices per sub-request in the body, so the path does not bound them.
 func multiTarget(path string) bool {
-	return has(strings.ToLower(path), "/_msearch", "/_mget", "/_mtermvectors", "/_reindex")
+	return containsAny(strings.ToLower(path), "/_msearch", "/_mget", "/_mtermvectors", "/_reindex")
 }
 
 // indicesOf returns the index expressions a request path names; nil means every index.
@@ -517,7 +518,7 @@ func (r *Reader) readMonitors(ctx context.Context, res *Result) error {
 			Hits []hit `json:"hits"`
 		} `json:"hits"`
 	}
-	err := r.C.do(ctx, http.MethodPost, "/_plugins/_alerting/monitors/_search", map[string]any{"size": size, "track_total_hits": true,
+	err := r.Client.do(ctx, http.MethodPost, "/_plugins/_alerting/monitors/_search", map[string]any{"size": size, "track_total_hits": true,
 		"query": map[string]any{"match_all": map[string]any{}}}, &out)
 	if err != nil {
 		if notFound(err, "no such index") {

@@ -158,11 +158,11 @@ func Analyze(ctx context.Context, c *Config, now time.Time) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
-	tg, err := c.topologyGaps(rep)
+	topoGaps, err := c.topologyGaps(rep)
 	if err != nil {
 		return nil, err
 	}
-	gaps = append(gaps, tg...)
+	gaps = append(gaps, topoGaps...)
 	rep.Gaps = gaps
 
 	pol := analyze.Policy{Actions: c.Policy.Actions, SamplePercent: c.Policy.SamplePercent, Acknowledged: c.Policy.Acknowledge,

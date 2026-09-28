@@ -129,7 +129,8 @@ func countExprs(v any, set map[string]bool) int {
 	return n
 }
 
-func newSet(edits map[string]string) map[string]bool {
+// rewrittenQueries is the set of queries the edits write.
+func rewrittenQueries(edits map[string]string) map[string]bool {
 	m := map[string]bool{}
 	for _, nw := range edits {
 		m[nw] = true
@@ -266,7 +267,7 @@ func (c *Config) rewriteGrafana(ctx context.Context, base string, org int64, pat
 		return res, err
 	}
 	if res.Replaced == 0 {
-		if countExprs(body, newSet(edits)) > 0 {
+		if countExprs(body, rewrittenQueries(edits)) > 0 {
 			res.Applied = true // already rewritten by an earlier run
 			return res, nil
 		}
@@ -331,7 +332,7 @@ func (c *Config) rewriteRuler(ctx context.Context, path string, edits map[string
 		return res, err
 	}
 	if res.Replaced == 0 {
-		if countExprs(target, newSet(edits)) > 0 {
+		if countExprs(target, rewrittenQueries(edits)) > 0 {
 			res.Applied = true
 			return res, nil
 		}

@@ -152,8 +152,8 @@ func (r *orgReader) v2Dashboard(uid string, spec map[string]any) {
 			}
 		case "Panel":
 			data, _ := es["data"].(map[string]any)
-			ds, _ := data["spec"].(map[string]any)
-			queries, _ := ds["queries"].([]any)
+			dataSpec, _ := data["spec"].(map[string]any)
+			queries, _ := dataSpec["queries"].([]any)
 			for i, q := range queries {
 				qm, _ := q.(map[string]any)
 				qs, _ := qm["spec"].(map[string]any)

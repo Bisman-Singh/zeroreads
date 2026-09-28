@@ -271,21 +271,21 @@ type VerifyOptions struct {
 func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time, opt VerifyOptions) (*VerifyResult, error) {
 	rep := &Report{}
 	queries, scoped, gaps := c.evidence(ctx, now, rf.services(), rep)
-	tg, err := c.topologyGaps(rep)
+	topoGaps, err := c.topologyGaps(rep)
 	if err != nil {
 		return nil, err
 	}
 	res := &VerifyResult{CheckedAt: now.UTC(),
 		Keep: &RulesFile{GeneratedAt: rf.GeneratedAt, DrainVersion: rf.DrainVersion, DrainConfigHash: rf.DrainConfigHash, LokiLabel: rf.LokiLabel,
 			RewritesAppliedAt: rf.RewritesAppliedAt}}
-	global := c.unacknowledged(append(gaps, tg...))
-	global = append(global, c.drainChanges(rf)...)
+	forEveryRule := c.unacknowledged(append(gaps, topoGaps...))
+	forEveryRule = append(forEveryRule, c.drainChanges(rf)...)
 	if opt.Deployed != nil {
 		if res.DeployedMode, res.DeployedDiffs, err = DeployedDiff(c, rf, opt.Deployed); err != nil {
 			return nil, err
 		}
 		for _, d := range res.DeployedDiffs {
-			global = append(global, "the deployed pipeline config is not what emit produces for these rules ("+res.DeployedMode+" mode): "+d)
+			forEveryRule = append(forEveryRule, "the deployed pipeline config is not what emit produces for these rules ("+res.DeployedMode+" mode): "+d)
 		}
 	}
 	if opt.Drift {
@@ -303,7 +303,7 @@ func Verify(ctx context.Context, c *Config, rf *RulesFile, now time.Time, opt Ve
 		if err != nil {
 			return nil, err
 		}
-		reasons = append(append([]string(nil), global...), reasons...)
+		reasons = append(append([]string(nil), forEveryRule...), reasons...)
 		if len(reasons) > 0 {
 			sort.Strings(reasons)
 			res.Violations = append(res.Violations, Violation{RuleID: r.ID, Reasons: reasons})

@@ -80,7 +80,7 @@ func (o OpenSearchConfig) evidence(ctx context.Context, from, now time.Time, ser
 	if err != nil {
 		return nil, []analyze.Gap{{Source: src, Origin: o.URL, Key: "opensearch-unreadable", Reason: err.Error()}}
 	}
-	res := (&opensearch.Reader{C: cl, AuditIndex: o.AuditIndex, DashboardsIndex: o.DashboardsIndex, ProveLive: o.ProveLive}).Read(ctx, from, now)
+	res := (&opensearch.Reader{Client: cl, AuditIndex: o.AuditIndex, DashboardsIndex: o.DashboardsIndex, ProveLive: o.ProveLive}).Read(ctx, from, now)
 	rep.Evidence.OpenSearchUses += len(res.Uses)
 	rep.Evidence.OpenSearchAuditLines += res.Lines
 	var gaps []analyze.Gap
@@ -96,8 +96,8 @@ func (o OpenSearchConfig) evidence(ctx context.Context, from, now time.Time, ser
 		for _, i := range o.Indices {
 			idx = append(idx, strings.ReplaceAll(i, "{service}", svc))
 		}
-		scope, sg, notes := cl.VerifyScope(ctx, opensearch.Scope{Indices: idx, ServiceField: o.ServiceField, Service: svc}.Expand(cat))
-		for _, g := range sg {
+		scope, scopeGaps, notes := cl.VerifyScope(ctx, opensearch.Scope{Indices: idx, ServiceField: o.ServiceField, Service: svc}.Expand(cat))
+		for _, g := range scopeGaps {
 			gaps = append(gaps, gap(g))
 		}
 		for _, n := range notes {
