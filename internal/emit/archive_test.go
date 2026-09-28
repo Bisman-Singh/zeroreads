@@ -256,3 +256,41 @@ func TestFluentBitArchive(t *testing.T) {
 		t.Fatal("rules whose match also takes archived records accepted")
 	}
 }
+
+// With no rule to enforce, which analysis often concludes, every emitter returns the user's
+// configuration unchanged. Found on a real Collector: an empty measurement connector stopped it from
+// starting, taking the pipeline down.
+func TestNoRulesLeaveTheConfigUnchanged(t *testing.T) {
+	same := func(t *testing.T, got []byte, user string) {
+		t.Helper()
+		var a, b map[string]any
+		if err := yaml.Unmarshal(got, &a); err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.Unmarshal([]byte(user), &b); err != nil {
+			t.Fatal(err)
+		}
+		ga, _ := yaml.Marshal(a)
+		gb, _ := yaml.Marshal(b)
+		if string(ga) != string(gb) {
+			t.Fatalf("changed:\n%s\nwant:\n%s", ga, gb)
+		}
+	}
+	for _, mode := range []Mode{Shadow, Enforce} {
+		out, err := Collector([][]byte{[]byte(userConfig)}, Target{Pipeline: "logs", After: "transform/prep", MeasureExporters: []string{"file/metrics"}}, nil, mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		same(t, out, userConfig)
+		out, err = Vector([][]byte{[]byte(vectorUnit)}, vtarget(), nil, mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		same(t, out, vectorUnit)
+		out, err = FluentBit([][]byte{[]byte(fluentBitUnit)}, fbTarget(), nil, mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		same(t, out, fluentBitUnit)
+	}
+}

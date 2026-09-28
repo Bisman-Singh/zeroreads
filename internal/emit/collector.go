@@ -249,6 +249,11 @@ func Collector(files [][]byte, t Target, rules []Rule, mode Mode) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
+	if len(rules) == 0 {
+		// Nothing to measure or enforce, which analysis often concludes: the configuration stays
+		// exactly the user's. An empty measurement step would stop the Collector from starting at all.
+		return yaml.Marshal(cfg)
+	}
 	pipelines := child(child(cfg, "service"), "pipelines")
 	pipeline, ok := pipelines[t.Pipeline].(map[string]any)
 	if !ok {

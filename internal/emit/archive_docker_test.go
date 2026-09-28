@@ -278,3 +278,20 @@ func collectorTimes(t *testing.T, path string) map[int64]string {
 	}
 	return out
 }
+
+// The real Collector starts with what emit writes when no rule acts. Found on the demo run: the
+// empty measurement connector emit used to write made the Collector refuse its configuration.
+func TestCollectorStartsWithNoRules(t *testing.T) {
+	dir := t.TempDir()
+	for _, mode := range []Mode{Shadow, Enforce} {
+		out, err := Collector([][]byte{[]byte(archiveConfig)}, archiveTarget(), nil, mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(filepath.Join(dir, "c.yaml"), out, 0o644)
+		if b, err := exec.Command("docker", "run", "--rm", "-v", dir+":/w", "otel/opentelemetry-collector-contrib:0.161.0",
+			"validate", "--config", "/w/c.yaml").CombinedOutput(); err != nil {
+			t.Fatalf("%s: the Collector refuses the configuration: %v\n%s", mode, err, b)
+		}
+	}
+}

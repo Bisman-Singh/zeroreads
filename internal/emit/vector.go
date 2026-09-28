@@ -137,6 +137,11 @@ func Vector(files [][]byte, t VectorTarget, rules []Rule, mode Mode) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
+	if len(rules) == 0 {
+		// Nothing to measure or enforce, which analysis often concludes: the configuration stays
+		// exactly the user's. An empty measurement step would stop the Vector from starting at all.
+		return yaml.Marshal(cfg)
+	}
 	transforms, sinks := child(cfg, "transforms"), child(cfg, "sinks")
 	if err := vectorNamesFree(transforms, sinks); err != nil {
 		return nil, err

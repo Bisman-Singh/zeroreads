@@ -90,6 +90,11 @@ func FluentBit(files [][]byte, t FluentBitTarget, rules []Rule, mode Mode) ([]by
 	if err != nil {
 		return nil, err
 	}
+	if len(rules) == 0 {
+		// Nothing to measure or enforce, which analysis often concludes: the configuration stays
+		// exactly the user's. An empty measurement step would stop the Fluent Bit from starting at all.
+		return yaml.Marshal(cfg)
+	}
 	if err := t.checkArchive(files, rules, mode); err != nil {
 		return nil, err
 	}
