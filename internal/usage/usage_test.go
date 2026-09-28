@@ -140,6 +140,7 @@ func TestWidenedNamesEveryAssumption(t *testing.T) {
 		{`{service_name="checkout"} | line_format "x" |= "heartbeat"`, health, "after the line is rewritten"},
 		{`{service_name="checkout"} | logfmt | level="nothing"`, health, `label filter level = "nothing"`},
 		{`{service_name="orders"} |= "nothing like this"`, route, "structured records"},
+		{`{$label_name=~"$label_value", service_name="checkout"} |= "healthz"`, health, "uses a template variable as its label name"},
 	}
 	for _, c := range cases {
 		v := verdict(t, c.q, c.r)
@@ -175,6 +176,7 @@ func TestAssumptionsWithoutARule(t *testing.T) {
 		`{service_name="a"} |~ "(?i)err"`:                                    "case-insensitive filter",
 		`{service_name="a"} | line_format "{{.msg}}" |= "timeout"`:           "after the line is rewritten",
 		`sum by (level) (count_over_time({service_name="a"} |> "<_>" [1m]))`: "pattern filter",
+		`{$l=~"$v", service_name="a"}`:                                       "as its label name",
 	}
 	for q, want := range cases {
 		pq, err := logql.Parse(q)

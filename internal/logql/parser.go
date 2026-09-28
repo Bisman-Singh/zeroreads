@@ -618,9 +618,11 @@ func hasNonEmptyMatcher(ms []Matcher) bool {
 	return false
 }
 
+// matcher parses one matcher. Its label name may be a Grafana template variable, which Grafana
+// replaces before Loki runs the query; such a matcher cannot be evaluated here.
 func (p *parser) matcher() (Matcher, error) {
 	name := p.peek()
-	if name.kind != tIdent {
+	if name.kind != tIdent && name.kind != tVariable {
 		return Matcher{}, p.errf("expected label name, got %s", name)
 	}
 	p.i++

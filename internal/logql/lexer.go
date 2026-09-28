@@ -24,6 +24,7 @@ const (
 	tRange    // [5m], the text between brackets
 	tOp       // punctuation and operators
 	tFlag     // --strict, --keep-empty
+	tVariable // a Grafana template variable outside a string: $name or ${name}
 )
 
 type token struct {
@@ -82,6 +83,13 @@ func lex(src string) ([]token, error) {
 			tok.pos, tok.end = i, i+n
 			out = append(out, tok)
 			i += n
+		case r == '$':
+			n := variableLen(src[i:])
+			if n == 0 {
+				return nil, fmt.Errorf("unexpected %q at %d", r, i)
+			}
+			out = append(out, token{kind: tVariable, text: src[i : i+n], pos: i, end: i + n})
+			i += n
 		case startsIdent(r):
 			j := i
 			for j < len(src) && (isLetter(src[j]) || isDigit(src[j]) || src[j] == '_') {
@@ -138,6 +146,25 @@ func isQuote(r rune) bool { return r == '"' || r == '`' || r == '\'' }
 // startsNumber reports a number at the start of src: a digit, or a dot and a digit.
 func startsNumber(src string) bool {
 	return isDigit(src[0]) || (src[0] == '.' && len(src) > 1 && isDigit(src[1]))
+}
+
+// variableLen is the length of the Grafana template variable at the start of s ($name or ${...}),
+// or 0 when there is none.
+func variableLen(s string) int {
+	if strings.HasPrefix(s, "${") {
+		if end := strings.IndexByte(s, '}'); end > 2 {
+			return end + 1
+		}
+		return 0
+	}
+	j := 1
+	for j < len(s) && (isLetter(s[j]) || isDigit(s[j]) || s[j] == '_') {
+		j++
+	}
+	if j == 1 {
+		return 0
+	}
+	return j
 }
 
 // startsIdent reports a rune that starts an identifier: an ASCII letter or an underscore.

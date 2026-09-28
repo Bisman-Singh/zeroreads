@@ -28,6 +28,27 @@ func TestUnmodelledStages(t *testing.T) {
 	}
 }
 
+// Grafana fills template variables in before Loki runs a query, so a variable may name a matcher's
+// label. Found in the public dashboard corpus, where such queries failed to parse and so blocked
+// every rule. Anywhere else a variable outside a string is still an error.
+func TestVariableLabelNames(t *testing.T) {
+	q, err := Parse(`{$label_name=~"$label_value", job=~"$job"} | json | line_format "{{.status}}"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := q.Selections[0].Matchers; len(m) != 2 || m[0].Name != "$label_name" || m[0].Value != "$label_value" || m[1].Name != "job" {
+		t.Fatalf("%+v", m)
+	}
+	if q, err := Parse(`{${lbl}="x"} |= "y"`); err != nil || q.Selections[0].Matchers[0].Name != "${lbl}" {
+		t.Fatalf("%v %+v", err, q)
+	}
+	for _, bad := range []string{`{$="x"}`, `{a="b"} | $x`, `{a="b"} |= $x`, `${}`, `sum by ($l) (rate({a="b"}[1m]))`} {
+		if _, err := Parse(bad); err == nil {
+			t.Fatalf("%s parsed", bad)
+		}
+	}
+}
+
 // summary renders a parsed query compactly so tests can compare it with an expected string.
 func summary(q *Query) string {
 	var parts []string

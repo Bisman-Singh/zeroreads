@@ -57,6 +57,11 @@ func Evaluate(sel logql.Selection, r Rule) Verdict {
 	var widened []string
 	named := false
 	for _, m := range sel.Matchers {
+		if hasVariable(m.Name) {
+			// It may name a scope label and exclude the rule's streams; ignoring it only widens.
+			widened = append(widened, labelVariableAssumption(m))
+			continue
+		}
 		val, scoped := r.Scope[m.Name]
 		if !scoped {
 			continue // not a scope label: cannot exclude
@@ -167,6 +172,10 @@ func Assumptions(sel logql.Selection, scopeLabels []string) []string {
 	var out []string
 	named := false
 	for _, m := range sel.Matchers {
+		if hasVariable(m.Name) {
+			out = append(out, labelVariableAssumption(m))
+			continue
+		}
 		if !slices.Contains(scopeLabels, m.Name) {
 			continue
 		}
@@ -227,6 +236,11 @@ func matcherAssumption(m logql.Matcher) string {
 		why = "uses a template variable"
 	}
 	return fmt.Sprintf("stream matcher %s%s%q %s", m.Name, m.Op, m.Value, why)
+}
+
+// labelVariableAssumption names a matcher whose label name is a template variable.
+func labelVariableAssumption(m logql.Matcher) string {
+	return fmt.Sprintf("stream matcher %s%s%q uses a template variable as its label name", m.Name, m.Op, m.Value)
 }
 
 // noScopeAssumption names a selector without any scope label: its other matchers are assumed to
