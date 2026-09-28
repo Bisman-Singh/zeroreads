@@ -181,7 +181,9 @@ func TestParseIsBounded(t *testing.T) {
 		start := time.Now()
 		Parse(q)
 		Canonical(q)
-		if d := time.Since(start); d > 2*time.Second {
+		// Quadratic stripping took 5.2 s at 50,000 levels, so about 34 s at this size; linear takes well
+		// under a second. The bound sits between, wide enough for a loaded machine.
+		if d := time.Since(start); d > 15*time.Second {
 			t.Fatalf("%s: %d bytes took %v", name, len(q), d)
 		}
 	}
