@@ -5,7 +5,6 @@ import (
 	"maps"
 	"math/big"
 	"slices"
-	"sort"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -134,20 +133,59 @@ func Vector(files [][]byte, t VectorTarget, rules []Rule, mode Mode) ([]byte, er
 		return nil, err
 	}
 	transforms, sinks := child(cfg, "transforms"), child(cfg, "sinks")
+	if err := vectorNamesFree(transforms, sinks); err != nil {
+		return nil, err
+	}
+	tag, err := t.tagProgram(rules, mode)
+	if err != nil {
+		return nil, err
+	}
+	transforms[vTag] = map[string]any{"type": "remap", "inputs": []any{t.After}, "source": tag}
+	t.addMeasurement(transforms, sinks, mode)
+	if mode != Enforce {
+		return yaml.Marshal(cfg)
+	}
+	enforce, dedupe, err := t.enforceProgram(rules)
+	if err != nil {
+		return nil, err
+	}
+	transforms[vEnforce] = map[string]any{"type": "remap", "inputs": []any{vTag}, "source": enforce, "drop_on_abort": true}
+	cleanInputs := []any{vEnforce}
+	if len(dedupe) > 0 {
+		cleanInputs = t.addDedupe(transforms, dedupe)
+	}
+	transforms[vClean] = map[string]any{"type": "remap", "inputs": cleanInputs, "source": "del(.sievelog_rule)\ndel(.sievelog_bytes)\ndel(.sievelog_aggregate)\n"}
+	// Rewire every original consumer of t.After to read from the enforcement chain.
+	for _, section := range []map[string]any{transforms, sinks} {
+		if err := rewireConsumers(section, t.After); err != nil {
+			return nil, err
+		}
+	}
+	return yaml.Marshal(cfg)
+}
+
+// vectorOwn are the components Vector adds; the user's configuration must not have them already.
+var vectorOwn = map[string]bool{vTag: true, vMeasure: true, vMeasureAgg: true, vEnforce: true, vRoute: true, vReduce: true, vClean: true, vSink: true}
+
+func vectorNamesFree(transforms, sinks map[string]any) error {
 	for _, n := range []string{vTag, vMeasure, vMeasureAgg, vEnforce, vRoute, vReduce, vClean} {
 		if _, taken := transforms[n]; taken {
-			return nil, fmt.Errorf("emit: transform %s already exists", n)
+			return fmt.Errorf("emit: transform %s already exists", n)
 		}
 	}
 	if _, taken := sinks[vSink]; taken {
-		return nil, fmt.Errorf("emit: sink %s already exists", vSink)
+		return fmt.Errorf("emit: sink %s already exists", vSink)
 	}
+	return nil
+}
 
-	// Tag: exactly one rule per matching event (rules are disjoint), plus its byte length. An event
-	// whose level says warning or worse is never tagged, so it is neither measured nor removed.
+// tagProgram is the VRL that tags each event with at most one rule (rules are disjoint) and its byte
+// length. An event whose level says warning or worse is never tagged, so it is neither measured nor
+// removed.
+func (t VectorTarget) tagProgram(rules []Rule, mode Mode) (string, error) {
 	severe, err := dialect.Rust(SeverePattern)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	var tag strings.Builder
 	tag.WriteString("sievelog_severe = is_integer(.severity_number) && int!(.severity_number) >= 13\n")
@@ -155,20 +193,18 @@ func Vector(files [][]byte, t VectorTarget, rules []Rule, mode Mode) ([]byte, er
 		fmt.Fprintf(&tag, "if is_string(%s) && match(string!(%s), r'%s') { sievelog_severe = true }\n", p, p, severe)
 	}
 	tag.WriteString("if !sievelog_severe {\n")
-	first := true
-	for _, r := range rules {
+	for i, r := range rules {
 		path, err := t.textPath(r)
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 		pat, err := dialect.Rust(r.Language)
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 		kw := "} else if"
-		if first {
+		if i == 0 {
 			kw = "if"
-			first = false
 		}
 		fmt.Fprintf(&tag, "%s %s == %s && is_string(%s) && match(string!(%s), r'%s') {\n  .sievelog_rule = %s\n  .sievelog_bytes = length(string!(%s))\n",
 			kw, t.ScopePath, vrlString(r.ScopeValue), path, path, pat, vrlString(r.ID), path)
@@ -176,11 +212,15 @@ func Vector(files [][]byte, t VectorTarget, rules []Rule, mode Mode) ([]byte, er
 			tag.WriteString("  .sievelog_aggregate = 1\n")
 		}
 	}
-	if !first {
+	if len(rules) > 0 {
 		tag.WriteString("}\n")
 	}
 	tag.WriteString("}\n")
-	transforms[vTag] = map[string]any{"type": "remap", "inputs": []any{t.After}, "source": tag.String()}
+	return tag.String(), nil
+}
+
+// addMeasurement adds the per-rule counters and the sink that receives them.
+func (t VectorTarget) addMeasurement(transforms, sinks map[string]any, mode Mode) {
 	metrics := []any{
 		map[string]any{"type": "counter", "field": "sievelog_rule", "name": "sievelog_rule_lines", "tags": map[string]any{"rule": "{{ sievelog_rule }}"}},
 		map[string]any{"type": "counter", "field": "sievelog_bytes", "name": "sievelog_rule_bytes", "increment_by_value": true, "tags": map[string]any{"rule": "{{ sievelog_rule }}"}},
@@ -194,21 +234,20 @@ func Vector(files [][]byte, t VectorTarget, rules []Rule, mode Mode) ([]byte, er
 			map[string]any{"type": "counter", "field": "sievelog_aggregate", "name": "sievelog_aggregate_lines", "tags": map[string]any{"rule": "{{ sievelog_rule }}"}}}}
 		measureInputs = append(measureInputs, vMeasureAgg)
 	}
-	ms := map[string]any{}
+	measureSink := map[string]any{}
 	for k, v := range t.MeasureSink {
-		ms[k] = v
+		measureSink[k] = v
 	}
-	ms["inputs"] = measureInputs
-	sinks[vSink] = ms
-	if mode != Enforce {
-		return yaml.Marshal(cfg)
-	}
+	measureSink["inputs"] = measureInputs
+	sinks[vSink] = measureSink
+}
 
-	// Enforce: drop and sample by rule, then dedupe constant rules with a count, then clean up.
+// enforceProgram is the VRL that drops and samples by rule and marks dedupe rules for the reduce
+// transform; dedupe lists those rules.
+func (t VectorTarget) enforceProgram(rules []Rule) (program string, dedupe []string, err error) {
 	var enf strings.Builder
-	var dedupe []string
 	for _, r := range rules {
-		path, _ := t.textPath(r)
+		path, _ := t.textPath(r) // resolved without error by tagProgram
 		switch r.Action {
 		case "drop", "aggregate":
 			fmt.Fprintf(&enf, "if .sievelog_rule == %s { abort }\n", vrlString(r.ID))
@@ -219,68 +258,57 @@ func Vector(files [][]byte, t VectorTarget, rules []Rule, mode Mode) ([]byte, er
 			fmt.Fprintf(&enf, "if .sievelog_rule == %s { .sievelog_count = 1 }\n", vrlString(r.ID))
 			dedupe = append(dedupe, r.ID)
 		default:
-			return nil, fmt.Errorf("emit: rule %s: Vector cannot enforce %s; re-run analyze for runtime vector", r.ID, r.Action)
+			return "", nil, fmt.Errorf("emit: rule %s: Vector cannot enforce %s; re-run analyze for runtime vector", r.ID, r.Action)
 		}
 	}
-	transforms[vEnforce] = map[string]any{"type": "remap", "inputs": []any{vTag}, "source": enf.String(), "drop_on_abort": true}
-	cleanInputs := []any{vEnforce}
-	if len(dedupe) > 0 {
-		var conds []string
-		for _, id := range dedupe {
-			conds = append(conds, ".sievelog_rule == "+vrlString(id))
-		}
-		transforms[vRoute] = map[string]any{"type": "route", "inputs": []any{vEnforce}, "route": map[string]any{"dedupe": strings.Join(conds, " || ")}}
-		groupBy := []any{"sievelog_rule", strings.TrimPrefix(t.ScopePath, ".")}
-		for _, g := range t.GroupBy {
-			groupBy = append(groupBy, g)
-		}
-		ms := t.DedupeMS
-		if ms == 0 {
-			ms = 10000
-		}
-		transforms[vReduce] = map[string]any{"type": "reduce", "inputs": []any{vRoute + ".dedupe"}, "group_by": groupBy,
-			"expire_after_ms": ms, "merge_strategies": map[string]any{"sievelog_count": "sum"}}
-		cleanInputs = []any{vRoute + "._unmatched", vReduce}
-	}
-	transforms[vClean] = map[string]any{"type": "remap", "inputs": cleanInputs, "source": "del(.sievelog_rule)\ndel(.sievelog_bytes)\ndel(.sievelog_aggregate)\n"}
+	return enf.String(), dedupe, nil
+}
 
-	// Rewire every original consumer of t.After to read from the enforcement chain.
-	ours := map[string]bool{vTag: true, vMeasure: true, vMeasureAgg: true, vEnforce: true, vRoute: true, vReduce: true, vClean: true, vSink: true}
-	rewire := func(section map[string]any) error {
-		ids := make([]string, 0, len(section))
-		for id := range section {
-			ids = append(ids, id)
+// addDedupe routes dedupe rules' events through a reduce that collapses identical lines with a
+// count, and returns the inputs of the clean-up step.
+func (t VectorTarget) addDedupe(transforms map[string]any, dedupe []string) []any {
+	var conds []string
+	for _, id := range dedupe {
+		conds = append(conds, ".sievelog_rule == "+vrlString(id))
+	}
+	transforms[vRoute] = map[string]any{"type": "route", "inputs": []any{vEnforce}, "route": map[string]any{"dedupe": strings.Join(conds, " || ")}}
+	groupBy := []any{"sievelog_rule", strings.TrimPrefix(t.ScopePath, ".")}
+	for _, g := range t.GroupBy {
+		groupBy = append(groupBy, g)
+	}
+	expireMS := t.DedupeMS
+	if expireMS == 0 {
+		expireMS = 10000
+	}
+	transforms[vReduce] = map[string]any{"type": "reduce", "inputs": []any{vRoute + ".dedupe"}, "group_by": groupBy,
+		"expire_after_ms": expireMS, "merge_strategies": map[string]any{"sievelog_count": "sum"}}
+	return []any{vRoute + "._unmatched", vReduce}
+}
+
+// rewireConsumers points every user component that reads after at the end of the enforcement chain.
+// A consumer reading after through a named output or a glob cannot be rewired safely.
+func rewireConsumers(section map[string]any, after string) error {
+	for _, id := range slices.Sorted(maps.Keys(section)) {
+		if vectorOwn[id] {
+			continue
 		}
-		sort.Strings(ids)
-		for _, id := range ids {
-			if ours[id] {
+		comp, _ := section[id].(map[string]any)
+		in, _ := comp["inputs"].([]any)
+		changed := false
+		for i, ref := range in {
+			s, _ := ref.(string)
+			if s == after {
+				in[i] = vClean
+				changed = true
 				continue
 			}
-			comp, _ := section[id].(map[string]any)
-			in, _ := comp["inputs"].([]any)
-			changed := false
-			for i, ref := range in {
-				s, _ := ref.(string)
-				if s == t.After {
-					in[i] = vClean
-					changed = true
-					continue
-				}
-				if strings.HasPrefix(s, t.After+".") || strings.ContainsAny(s, "*?[") {
-					return fmt.Errorf("emit: %s reads %s through %q; rewrite it to read %s directly before enforcing", id, t.After, s, t.After)
-				}
-			}
-			if changed {
-				comp["inputs"] = in
+			if strings.HasPrefix(s, after+".") || strings.ContainsAny(s, "*?[") {
+				return fmt.Errorf("emit: %s reads %s through %q; rewrite it to read %s directly before enforcing", id, after, s, after)
 			}
 		}
-		return nil
+		if changed {
+			comp["inputs"] = in
+		}
 	}
-	if err := rewire(transforms); err != nil {
-		return nil, err
-	}
-	if err := rewire(sinks); err != nil {
-		return nil, err
-	}
-	return yaml.Marshal(cfg)
+	return nil
 }

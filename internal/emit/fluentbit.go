@@ -85,6 +85,31 @@ func FluentBit(files [][]byte, t FluentBitTarget, rules []Rule, mode Mode) ([]by
 	}
 	pipeline := child(cfg, "pipeline")
 	filters, _ := pipeline["filters"].([]any)
+	pos, err := t.insertAt(filters)
+	if err != nil {
+		return nil, err
+	}
+	var added []any
+	for _, step := range []func() ([]any, error){
+		func() ([]any, error) { return t.tagFilters(rules, mode) },
+		t.severityFilters,
+		func() ([]any, error) { return t.measureFilters(rules, mode) },
+		func() ([]any, error) { return t.enforceFilters(rules, mode) },
+	} {
+		f, err := step()
+		if err != nil {
+			return nil, err
+		}
+		added = append(added, f...)
+	}
+	added = append(added, map[string]any{"name": "modify", "alias": "sievelog_clean", "match": t.Match, "remove": "sievelog_rule"})
+	pipeline["filters"] = append(append(append([]any(nil), filters[:pos]...), added...), filters[pos:]...)
+	return yaml.Marshal(cfg)
+}
+
+// insertAt is where the rules' filters go: after the filter aliased t.After, or first. A
+// configuration that already holds sievelog filters is refused rather than wired twice.
+func (t FluentBitTarget) insertAt(filters []any) (int, error) {
 	pos := 0
 	if t.After != "" {
 		pos = -1
@@ -94,30 +119,37 @@ func FluentBit(files [][]byte, t FluentBitTarget, rules []Rule, mode Mode) ([]by
 			}
 		}
 		if pos < 0 {
-			return nil, fmt.Errorf("emit: no filter with alias %s", t.After)
+			return 0, fmt.Errorf("emit: no filter with alias %s", t.After)
 		}
 	}
 	for _, f := range filters {
 		if fm, _ := f.(map[string]any); strings.HasPrefix(fmt.Sprint(property(fm, "alias")), "sievelog_") {
-			return nil, fmt.Errorf("emit: the configuration already has sievelog filters")
+			return 0, fmt.Errorf("emit: the configuration already has sievelog filters")
 		}
 	}
-	pathOf := func(r Rule) ([]string, error) {
-		if r.Field == "" {
-			return t.TextKey, nil
-		}
-		p, ok := t.FieldKeys[r.ScopeValue]
-		if !ok {
-			return nil, fmt.Errorf("emit: no fluent bit field path for structured service %s", r.ScopeValue)
-		}
-		return p, nil
+	return pos, nil
+}
+
+// pathOf is the record path of the text a rule's language applies to.
+func (t FluentBitTarget) pathOf(r Rule) ([]string, error) {
+	if r.Field == "" {
+		return t.TextKey, nil
 	}
-	var added []any
+	p, ok := t.FieldKeys[r.ScopeValue]
+	if !ok {
+		return nil, fmt.Errorf("emit: no fluent bit field path for structured service %s", r.ScopeValue)
+	}
+	return p, nil
+}
+
+// tagFilters tag each record matching a rule with the rule's ID.
+func (t FluentBitTarget) tagFilters(rules []Rule, mode Mode) ([]any, error) {
+	var out []any
 	for _, r := range rules {
 		if (r.Action == "dedupe" || r.Action == "rollup") && mode == Enforce {
 			return nil, fmt.Errorf("emit: rule %s: Fluent Bit cannot enforce %s, which keeps a count of the removed lines; re-run analyze for runtime fluentbit", r.ID, r.Action)
 		}
-		path, err := pathOf(r)
+		path, err := t.pathOf(r)
 		if err != nil {
 			return nil, err
 		}
@@ -129,72 +161,88 @@ func FluentBit(files [][]byte, t FluentBitTarget, rules []Rule, mode Mode) ([]by
 		if err != nil {
 			return nil, err
 		}
-		added = append(added, map[string]any{
+		out = append(out, map[string]any{
 			"name": "modify", "alias": "sievelog_tag_" + strings.ReplaceAll(r.ID, "-", "_"), "match": t.Match,
 			"condition": []any{"Key_value_matches " + t.ScopeKey + " " + scope, "Key_value_matches " + accessor(path) + " " + pat},
 			"add":       "sievelog_rule " + r.ID,
 		})
 	}
-	// A record whose level says warning or worse loses its rule tag before anything counts or removes
-	// it (modify conditions only combine with AND, so this is its own filter per level field).
+	return out, nil
+}
+
+// severityFilters untag a record whose level says warning or worse before anything counts or
+// removes it. Modify conditions only combine with AND, so each level field is its own filter.
+func (t FluentBitTarget) severityFilters() ([]any, error) {
 	severe, err := dialect.Onigmo(SeverePattern)
 	if err != nil {
 		return nil, err
 	}
+	var out []any
 	for i, k := range t.severityKeys() {
-		added = append(added, map[string]any{
+		out = append(out, map[string]any{
 			"name": "modify", "alias": fmt.Sprintf("sievelog_severe_%d", i), "match": t.Match,
 			"condition": []any{"Key_value_matches " + accessor(k) + " " + severe},
 			"remove":    "sievelog_rule",
 		})
 	}
+	return out, nil
+}
+
+// measureFilters count each rule's tagged records, and in enforce mode the lines an aggregate rule
+// replaces.
+func (t FluentBitTarget) measureFilters(rules []Rule, mode Mode) ([]any, error) {
+	var out []any
 	for _, r := range rules {
 		idPat, err := dialect.Onigmo(`\A` + regexp.QuoteMeta(r.ID) + `\z`)
 		if err != nil {
 			return nil, err
 		}
-		added = append(added, map[string]any{
+		out = append(out, map[string]any{
 			"name": "log_to_metrics", "alias": "sievelog_measure_" + strings.ReplaceAll(r.ID, "-", "_"), "match": t.Match,
 			"tag": t.MetricsTag, "metric_mode": "counter", "metric_name": metricName("sievelog_rule_lines", r.ID),
 			"metric_description": "lines matching rule " + r.ID, "regex": "sievelog_rule " + idPat, "discard_logs": false,
 		})
 		if r.Action == "aggregate" && mode == Enforce {
-			added = append(added, map[string]any{
+			out = append(out, map[string]any{
 				"name": "log_to_metrics", "alias": "sievelog_aggregate_" + strings.ReplaceAll(r.ID, "-", "_"), "match": t.Match,
 				"tag": t.MetricsTag, "metric_mode": "counter", "metric_name": metricName("sievelog_aggregate_lines", r.ID),
 				"metric_description": "lines replaced by this counter, rule " + r.ID, "regex": "sievelog_rule " + idPat, "discard_logs": false,
 			})
 		}
 	}
-	if mode == Enforce {
-		var dropIDs []string
-		thresholds := map[string]int64{}
-		paths := map[string][]string{}
-		for _, r := range rules {
-			switch r.Action {
-			case "drop", "aggregate":
-				dropIDs = append(dropIDs, regexp.QuoteMeta(r.ID))
-			case "sample":
-				thresholds[r.ID] = FluentBitSampleThreshold(r.Keep)
-				paths[r.ID], _ = pathOf(r)
-			}
-		}
-		if len(dropIDs) > 0 {
-			ids, err := dialect.Onigmo(`\A(?:` + strings.Join(dropIDs, "|") + `)\z`)
-			if err != nil {
-				return nil, err
-			}
-			added = append(added, map[string]any{"name": "grep", "alias": "sievelog_drop", "match": t.Match, "exclude": "sievelog_rule " + ids})
-		}
-		if len(thresholds) > 0 {
-			added = append(added, map[string]any{"name": "lua", "alias": "sievelog_sample", "match": t.Match, "call": "sievelog_sample",
-				"time_as_table": true, "protected_mode": true, "code": sampleLua(thresholds, paths)})
+	return out, nil
+}
+
+// enforceFilters remove drop and aggregate rules' records and sample the sample rules' records.
+func (t FluentBitTarget) enforceFilters(rules []Rule, mode Mode) ([]any, error) {
+	if mode != Enforce {
+		return nil, nil
+	}
+	var dropIDs []string
+	thresholds := map[string]int64{}
+	paths := map[string][]string{}
+	for _, r := range rules {
+		switch r.Action {
+		case "drop", "aggregate":
+			dropIDs = append(dropIDs, regexp.QuoteMeta(r.ID))
+		case "sample":
+			thresholds[r.ID] = FluentBitSampleThreshold(r.Keep)
+			paths[r.ID], _ = t.pathOf(r) // resolved without error by tagFilters
 		}
 	}
-	added = append(added, map[string]any{"name": "modify", "alias": "sievelog_clean", "match": t.Match, "remove": "sievelog_rule"})
-	out := append(append(append([]any(nil), filters[:pos]...), added...), filters[pos:]...)
-	pipeline["filters"] = out
-	return yaml.Marshal(cfg)
+	var out []any
+	if len(dropIDs) > 0 {
+		ids, err := dialect.Onigmo(`\A(?:` + strings.Join(dropIDs, "|") + `)\z`)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, map[string]any{"name": "grep", "alias": "sievelog_drop", "match": t.Match, "exclude": "sievelog_rule " + ids})
+	}
+	if len(thresholds) > 0 {
+		out = append(out, map[string]any{"name": "lua", "alias": "sievelog_sample", "match": t.Match, "call": "sievelog_sample",
+			"time_as_table": true, "protected_mode": true, "code": sampleLua(thresholds, paths)})
+	}
+	return out, nil
 }
 
 // property reads a plugin property: Fluent Bit matches property names case-insensitively.

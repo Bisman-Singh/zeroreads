@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -91,17 +92,17 @@ const (
 
 // Component and pipeline names this package adds.
 const (
-	nameForward  = "forward/sievelog"
-	nameEnforceF = "forward/sievelog_enforce"
-	pipeEnforce  = "logs/sievelog_enforce"
-	nameMeasure  = "signal_to_metrics/sievelog"
-	nameFilter   = "filter/sievelog"
-	nameDedupe   = "logdedup/sievelog"
-	nameRollup   = "transform/sievelog_rollup"
-	pipeOut      = "logs/sievelog"
-	pipeMetrics  = "metrics/sievelog"
-	RuleAttr     = "sievelog.rule"
-	DedupCounter = "sievelog.dedup_count"
+	nameForward        = "forward/sievelog"
+	nameEnforceForward = "forward/sievelog_enforce"
+	pipeEnforce        = "logs/sievelog_enforce"
+	nameMeasure        = "signal_to_metrics/sievelog"
+	nameFilter         = "filter/sievelog"
+	nameDedupe         = "logdedup/sievelog"
+	nameRollup         = "transform/sievelog_rollup"
+	pipeSplit          = "logs/sievelog"
+	pipeMetrics        = "metrics/sievelog"
+	RuleAttr           = "sievelog.rule"
+	DedupCounter       = "sievelog.dedup_count"
 )
 
 // MeasureLines and MeasureBytes name the per-rule measurement metrics.
@@ -239,68 +240,109 @@ func Collector(files [][]byte, t Target, rules []Rule, mode Mode) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	service := child(cfg, "service")
-	pipelines := child(service, "pipelines")
-	praw, ok := pipelines[t.Pipeline].(map[string]any)
+	pipelines := child(child(cfg, "service"), "pipelines")
+	pipeline, ok := pipelines[t.Pipeline].(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("emit: no pipeline %s", t.Pipeline)
 	}
 	if !strings.HasPrefix(t.Pipeline, "logs") {
 		return nil, fmt.Errorf("emit: pipeline %s is not a logs pipeline", t.Pipeline)
 	}
-	for _, name := range []string{pipeOut, pipeMetrics, pipeEnforce} {
+	connectors, processors, exporters := child(cfg, "connectors"), child(cfg, "processors"), child(cfg, "exporters")
+	if err := collectorNamesFree(pipelines, connectors, processors); err != nil {
+		return nil, err
+	}
+	if err := t.checkExporters(rules, exporters); err != nil {
+		return nil, err
+	}
+	head, tail, err := t.splitAt(pipeline)
+	if err != nil {
+		return nil, err
+	}
+	origExporters, _ := pipeline["exporters"].([]any)
+	if len(origExporters) == 0 {
+		return nil, fmt.Errorf("emit: pipeline %s has no exporters", t.Pipeline)
+	}
+	connectors[nameForward] = map[string]any{}
+	connectors[nameEnforceForward] = map[string]any{}
+	// error_mode ignore: a record an expression cannot evaluate is skipped for measurement, never
+	// failing the batch of real logs this connector sits beside.
+	connectors[nameMeasure] = map[string]any{"error_mode": "ignore", "logs": t.measurementMetrics(rules, mode)}
+	enforceProcs := []any{}
+	if mode == Enforce {
+		enforceProcs = t.addEnforcement(rules, processors)
+	}
+	// The user's processors after t.After run first; measurement then sees exactly the records
+	// enforcement sees, so shadow numbers are what enforce removes.
+	pipeline["processors"] = head
+	pipeline["exporters"] = []any{nameForward}
+	pipelines[t.Pipeline] = pipeline
+	pipelines[pipeSplit] = map[string]any{"receivers": []any{nameForward}, "processors": tail, "exporters": []any{nameEnforceForward, nameMeasure}}
+	pipelines[pipeEnforce] = map[string]any{"receivers": []any{nameEnforceForward}, "processors": enforceProcs, "exporters": origExporters}
+	var measureExporters []any
+	for _, e := range dedupStrings(append(append([]string(nil), t.MeasureExporters...), t.AggregateExporters...)) {
+		measureExporters = append(measureExporters, e)
+	}
+	pipelines[pipeMetrics] = map[string]any{"receivers": []any{nameMeasure}, "exporters": measureExporters}
+	return yaml.Marshal(cfg)
+}
+
+func collectorNamesFree(pipelines, connectors, processors map[string]any) error {
+	for _, name := range []string{pipeSplit, pipeMetrics, pipeEnforce} {
 		if _, taken := pipelines[name]; taken {
-			return nil, fmt.Errorf("emit: pipeline %s already exists", name)
+			return fmt.Errorf("emit: pipeline %s already exists", name)
 		}
 	}
-	connectors, processors, exporters := child(cfg, "connectors"), child(cfg, "processors"), child(cfg, "exporters")
-	for _, n := range []string{nameForward, nameMeasure, nameEnforceF} {
+	for _, n := range []string{nameForward, nameMeasure, nameEnforceForward} {
 		if _, taken := connectors[n]; taken {
-			return nil, fmt.Errorf("emit: connector %s already exists", n)
+			return fmt.Errorf("emit: connector %s already exists", n)
 		}
 	}
 	for _, n := range []string{nameFilter, nameDedupe, nameRollup} {
 		if _, taken := processors[n]; taken {
-			return nil, fmt.Errorf("emit: processor %s already exists", n)
+			return fmt.Errorf("emit: processor %s already exists", n)
 		}
 	}
-	needAgg := false
-	for _, r := range rules {
-		needAgg = needAgg || r.Action == "aggregate"
-	}
-	if needAgg && len(t.AggregateExporters) == 0 {
-		return nil, fmt.Errorf("emit: rules aggregate but no aggregate exporter is configured")
+	return nil
+}
+
+// checkExporters requires a measurement exporter, an aggregate exporter when a rule aggregates, and
+// every named exporter to exist.
+func (t Target) checkExporters(rules []Rule, exporters map[string]any) error {
+	if slices.ContainsFunc(rules, func(r Rule) bool { return r.Action == "aggregate" }) && len(t.AggregateExporters) == 0 {
+		return fmt.Errorf("emit: rules aggregate but no aggregate exporter is configured")
 	}
 	if len(t.MeasureExporters) == 0 {
-		return nil, fmt.Errorf("emit: no measurement exporter is configured")
+		return fmt.Errorf("emit: no measurement exporter is configured")
 	}
 	for _, e := range append(append([]string(nil), t.MeasureExporters...), t.AggregateExporters...) {
 		if _, ok := exporters[e]; !ok {
-			return nil, fmt.Errorf("emit: exporter %s does not exist", e)
+			return fmt.Errorf("emit: exporter %s does not exist", e)
 		}
 	}
+	return nil
+}
 
-	procs, _ := praw["processors"].([]any)
+// splitAt splits the pipeline's processors after t.After (before all of them when it is empty).
+func (t Target) splitAt(pipeline map[string]any) (head, tail []any, err error) {
+	procs, _ := pipeline["processors"].([]any)
 	split := 0
 	if t.After != "" {
-		split = -1
 		for i, p := range procs {
 			if p == t.After {
 				split = i + 1
 			}
 		}
-		if split < 0 {
-			return nil, fmt.Errorf("emit: pipeline %s has no processor %s", t.Pipeline, t.After)
+		if split == 0 {
+			return nil, nil, fmt.Errorf("emit: pipeline %s has no processor %s", t.Pipeline, t.After)
 		}
 	}
-	head := append([]any(nil), procs[:split]...)
-	tail := append([]any(nil), procs[split:]...)
-	origExporters, _ := praw["exporters"].([]any)
-	if len(origExporters) == 0 {
-		return nil, fmt.Errorf("emit: pipeline %s has no exporters", t.Pipeline)
-	}
+	return append([]any(nil), procs[:split]...), append([]any(nil), procs[split:]...), nil
+}
 
-	// Measurement: per rule, lines and bytes before any enforcement; aggregate counters too.
+// measurementMetrics count, per rule, the lines and bytes enforcement acts on, and in enforce mode
+// the lines an aggregate rule replaces.
+func (t Target) measurementMetrics(rules []Rule, mode Mode) []any {
 	var metrics []any
 	for _, r := range rules {
 		cond := []any{r.GuardedCondition(t.SeverityKeys)}
@@ -316,68 +358,52 @@ func Collector(files [][]byte, t Target, rules []Rule, mode Mode) ([]byte, error
 				"conditions": cond, "attributes": attrs, "sum": map[string]any{"value": "1", "monotonic": true}})
 		}
 	}
-	connectors[nameForward] = map[string]any{}
-	connectors[nameEnforceF] = map[string]any{}
-	// error_mode ignore: a record an expression cannot evaluate is skipped for measurement, never
-	// failing the batch of real logs this connector sits beside.
-	connectors[nameMeasure] = map[string]any{"error_mode": "ignore", "logs": metrics}
+	return metrics
+}
 
-	enforceProcs := []any{}
-	if mode == Enforce {
-		var drops []any
-		var dedupes []any
-		var rollups []any
-		for _, r := range rules {
-			switch r.Action {
-			case "aggregate", "drop":
-				drops = append(drops, r.GuardedCondition(t.SeverityKeys))
-			case "sample":
-				drops = append(drops, r.sampleDrop(r.GuardedCondition(t.SeverityKeys)))
-			case "dedupe":
-				dedupes = append(dedupes, r.GuardedCondition(t.SeverityKeys))
-			case "rollup":
-				// The record keeps its resource (so its stream) and loses everything that would split
-				// the count: attributes are replaced by the rule, the body by the marker. The body is
-				// set last because the condition reads it.
-				cond := r.GuardedCondition(t.SeverityKeys)
-				rollups = append(rollups,
-					"keep_keys(log.attributes, []) where "+cond,
-					fmt.Sprintf("set(log.attributes[%s], %s) where %s", ottlString(RuleAttr), ottlString(r.ID), cond),
-					fmt.Sprintf("set(log.body, %s) where %s", ottlString(RollupMarker(r.ID)), cond))
-				dedupes = append(dedupes, fmt.Sprintf("log.attributes[%s] == %s", ottlString(RuleAttr), ottlString(r.ID)))
-			}
-		}
-		if len(rollups) > 0 {
-			processors[nameRollup] = map[string]any{"error_mode": "ignore",
-				"log_statements": []any{map[string]any{"context": "log", "statements": rollups}}}
-			enforceProcs = append(enforceProcs, nameRollup)
-		}
-		if len(dedupes) > 0 {
-			interval := t.DedupeInterval
-			if interval == "" {
-				interval = "10s"
-			}
-			processors[nameDedupe] = map[string]any{"interval": interval, "conditions": dedupes, "log_count_attribute": DedupCounter}
-			enforceProcs = append(enforceProcs, nameDedupe)
-		}
-		if len(drops) > 0 {
-			processors[nameFilter] = map[string]any{"error_mode": "ignore", "log_conditions": drops}
-			enforceProcs = append(enforceProcs, nameFilter)
+// addEnforcement adds the rollup, dedupe and filter processors the rules need, and returns their
+// names in the order they run.
+func (t Target) addEnforcement(rules []Rule, processors map[string]any) []any {
+	var drops, dedupes, rollups []any
+	for _, r := range rules {
+		cond := r.GuardedCondition(t.SeverityKeys)
+		switch r.Action {
+		case "aggregate", "drop":
+			drops = append(drops, cond)
+		case "sample":
+			drops = append(drops, r.sampleDrop(cond))
+		case "dedupe":
+			dedupes = append(dedupes, cond)
+		case "rollup":
+			// The record keeps its resource (so its stream) and loses everything that would split
+			// the count: attributes are replaced by the rule, the body by the marker. The body is
+			// set last because the condition reads it.
+			rollups = append(rollups,
+				"keep_keys(log.attributes, []) where "+cond,
+				fmt.Sprintf("set(log.attributes[%s], %s) where %s", ottlString(RuleAttr), ottlString(r.ID), cond),
+				fmt.Sprintf("set(log.body, %s) where %s", ottlString(RollupMarker(r.ID)), cond))
+			dedupes = append(dedupes, fmt.Sprintf("log.attributes[%s] == %s", ottlString(RuleAttr), ottlString(r.ID)))
 		}
 	}
-	// The user's processors after t.After run first; measurement then sees exactly the records
-	// enforcement sees, so shadow numbers are what enforce removes.
-	praw["processors"] = head
-	praw["exporters"] = []any{nameForward}
-	pipelines[t.Pipeline] = praw
-	pipelines[pipeOut] = map[string]any{"receivers": []any{nameForward}, "processors": tail, "exporters": []any{nameEnforceF, nameMeasure}}
-	pipelines[pipeEnforce] = map[string]any{"receivers": []any{nameEnforceF}, "processors": enforceProcs, "exporters": origExporters}
-	var mexp []any
-	for _, e := range dedupStrings(append(append([]string(nil), t.MeasureExporters...), t.AggregateExporters...)) {
-		mexp = append(mexp, e)
+	procs := []any{}
+	if len(rollups) > 0 {
+		processors[nameRollup] = map[string]any{"error_mode": "ignore",
+			"log_statements": []any{map[string]any{"context": "log", "statements": rollups}}}
+		procs = append(procs, nameRollup)
 	}
-	pipelines[pipeMetrics] = map[string]any{"receivers": []any{nameMeasure}, "exporters": mexp}
-	return yaml.Marshal(cfg)
+	if len(dedupes) > 0 {
+		interval := t.DedupeInterval
+		if interval == "" {
+			interval = "10s"
+		}
+		processors[nameDedupe] = map[string]any{"interval": interval, "conditions": dedupes, "log_count_attribute": DedupCounter}
+		procs = append(procs, nameDedupe)
+	}
+	if len(drops) > 0 {
+		processors[nameFilter] = map[string]any{"error_mode": "ignore", "log_conditions": drops}
+		procs = append(procs, nameFilter)
+	}
+	return procs
 }
 
 func dedupStrings(s []string) []string {
