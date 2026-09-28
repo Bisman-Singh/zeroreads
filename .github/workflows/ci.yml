@@ -47,6 +47,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
+      # The runner image ships toolchains this job never uses. The cluster's images and volumes need
+      # the room: with the disk near full, the kubelet evicts pods and OpenSearch stops writing.
+      - name: runner resources, and room for the cluster
+        run: |
+          nproc; free -m; df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
@@ -59,3 +66,6 @@ jobs:
           sudo install /tmp/linux-amd64/helm /usr/local/bin/helm
       - run: go install sigs.k8s.io/kind@v0.31.0
       - run: ./e2e/run.sh
+      - name: cluster state after a failure
+        if: failure()
+        run: ./e2e/diagnose.sh
