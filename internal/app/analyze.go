@@ -291,54 +291,102 @@ func (c *Config) discover(ctx context.Context, lc *loki.Client, svc string, star
 	for _, n := range names {
 		streamLabels[n] = true
 	}
+	lines := c.templatedTexts(entries, field)
 	var notes []string
-	var inputs []templating.Input
-	var texts []string
-	var levels []string
-	unstructured := 0
-	// levelOf reads a line's level from Loki's labels and structured metadata (dots become
-	// underscores there) and, for structured records, from the record's own fields.
-	levelOf := func(e loki.Entry, m map[string]any) string {
-		for _, k := range c.Scope.SeverityKeys {
-			if v := e.Labels[k]; v != "" {
-				return v
-			}
-			if v := e.Labels[strings.ReplaceAll(k, ".", "_")]; v != "" {
-				return v
-			}
-			if v, ok := m[k].(string); ok && v != "" {
-				return v
-			}
-		}
-		return ""
+	if lines.unstructured > 0 {
+		notes = append(notes, fmt.Sprintf("%s: %d sampled lines are not JSON records with a string %q field; they get no rule", svc, lines.unstructured, field))
 	}
+	if len(lines.inputs) == 0 {
+		return nil, nil, notes, nil
+	}
+	tmpls, err := c.templates(ctx, field, lines.inputs)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	groups := map[string][]string{}
+	levelsBy := map[string]map[string]bool{}
+	for i, t := range tmpls {
+		groups[t] = append(groups[t], lines.texts[i])
+		if lines.levels[i] != "" {
+			if levelsBy[t] == nil {
+				levelsBy[t] = map[string]bool{}
+			}
+			levelsBy[t][lines.levels[i]] = true
+		}
+	}
+	m := measure{lc: lc, svc: svc, field: field, window: end.Sub(start), end: end, streamLabels: streamLabels}
+	var cands []analyze.Candidate
+	var skipped []Skipped
+	for _, tpl := range slices.Sorted(maps.Keys(groups)) {
+		cand, skip, err := c.candidate(ctx, m, tpl, groups[tpl], slices.Sorted(maps.Keys(levelsBy[tpl])))
+		switch {
+		case err != nil:
+			return nil, nil, nil, err
+		case skip != nil:
+			skipped = append(skipped, *skip)
+		default:
+			cands = append(cands, cand)
+		}
+	}
+	return cands, skipped, notes, nil
+}
+
+// templatedLines are a service's sampled lines as drain templates them: the whole line, or the
+// templated field of a structured record, with the level each line carries (aligned by index).
+type templatedLines struct {
+	inputs       []templating.Input
+	texts        []string
+	levels       []string
+	unstructured int // records of a structured service without a string field: they get no rule
+}
+
+func (c *Config) templatedTexts(entries []loki.Entry, field string) templatedLines {
+	var out templatedLines
 	for _, e := range entries {
 		if field == "" {
-			inputs = append(inputs, templating.Input{Body: e.Line})
-			texts = append(texts, e.Line)
-			levels = append(levels, levelOf(e, nil))
+			out.inputs = append(out.inputs, templating.Input{Body: e.Line})
+			out.texts = append(out.texts, e.Line)
+			out.levels = append(out.levels, c.levelOf(e, nil))
 			continue
 		}
 		var m map[string]any
 		if err := json.Unmarshal([]byte(e.Line), &m); err != nil {
-			unstructured++
+			out.unstructured++
 			continue
 		}
 		v, ok := m[field].(string)
 		if !ok {
-			unstructured++
+			out.unstructured++
 			continue
 		}
-		inputs = append(inputs, templating.Input{Fields: m})
-		texts = append(texts, v)
-		levels = append(levels, levelOf(e, m)) // aligned with inputs
+		out.inputs = append(out.inputs, templating.Input{Fields: m})
+		out.texts = append(out.texts, v)
+		out.levels = append(out.levels, c.levelOf(e, m))
 	}
-	if unstructured > 0 {
-		notes = append(notes, fmt.Sprintf("%s: %d sampled lines are not JSON records with a string %q field; they get no rule", svc, unstructured, field))
+	return out
+}
+
+// levelOf reads a line's level from Loki's labels and structured metadata (dots become underscores
+// there) and, for structured records, from the record's own fields.
+func (c *Config) levelOf(e loki.Entry, record map[string]any) string {
+	for _, k := range c.Scope.SeverityKeys {
+		if v := e.Labels[k]; v != "" {
+			return v
+		}
+		if v := e.Labels[strings.ReplaceAll(k, ".", "_")]; v != "" {
+			return v
+		}
+		if v, ok := record[k].(string); ok && v != "" {
+			return v
+		}
 	}
-	if len(inputs) == 0 {
-		return nil, nil, notes, nil
-	}
+	return ""
+}
+
+// templates runs the embedded drain processor over the inputs twice: the first pass converges the
+// parse tree, the second assigns every line its final template, so early lines are not left under
+// cold-start literal templates.
+func (c *Config) templates(ctx context.Context, field string, inputs []templating.Input) ([]string, error) {
 	dcfg := templating.DefaultConfig()
 	dcfg.BodyField = field
 	for _, m := range c.Drain.MaskingRules {
@@ -347,83 +395,57 @@ func (c *Config) discover(ctx context.Context, lc *loki.Client, svc string, star
 	dcfg.SeedTemplates = c.Drain.SeedTemplates
 	eng, err := templating.New(ctx, dcfg)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	defer func() { _ = eng.Close(ctx) }() // templating is done; a failed shutdown loses nothing
-	// Two passes: the first converges the parse tree, the second assigns every line its final
-	// template, so early lines are not left under cold-start literal templates.
 	if _, err := eng.Template(ctx, inputs); err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
-	tmpls, err := eng.Template(ctx, inputs)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	groups := map[string][]string{}
-	levelsBy := map[string]map[string]bool{}
-	for i, t := range tmpls {
-		groups[t] = append(groups[t], texts[i])
-		if levels[i] != "" {
-			if levelsBy[t] == nil {
-				levelsBy[t] = map[string]bool{}
-			}
-			levelsBy[t][levels[i]] = true
-		}
+	return eng.Template(ctx, inputs)
+}
+
+// measure is where a service's templates are measured.
+type measure struct {
+	lc           *loki.Client
+	svc, field   string
+	window       time.Duration
+	end          time.Time
+	streamLabels map[string]bool
+}
+
+// candidate infers one template's exact language from its samples and measures its volume in Loki.
+// A template without enough samples is skipped, with the reason.
+func (c *Config) candidate(ctx context.Context, m measure, tpl string, samples, levels []string) (analyze.Candidate, *Skipped, error) {
+	if tpl == "" {
+		return analyze.Candidate{}, &Skipped{Service: m.svc, Samples: len(samples), Reason: "no template (drain warm-up)"}, nil
 	}
 	var masks []rule.Mask
-	for _, m := range c.Drain.MaskingRules {
-		masks = append(masks, rule.Mask{Name: m.Name, Pattern: m.Pattern})
+	for _, mr := range c.Drain.MaskingRules {
+		masks = append(masks, rule.Mask{Name: mr.Name, Pattern: mr.Pattern})
 	}
 	opt := rule.DefaultOptions()
 	opt.MinSamples = c.Discovery.MinSamples
-	var keys []string
-	for k := range groups {
-		keys = append(keys, k)
+	lang, err := rule.Infer(tpl, masks, samples, opt)
+	if errors.Is(err, rule.ErrTooFewSamples) {
+		return analyze.Candidate{}, &Skipped{Service: m.svc, Template: tpl, Samples: len(samples), Reason: err.Error()}, nil
 	}
-	sort.Strings(keys)
-	var cands []analyze.Candidate
-	var skipped []Skipped
-	window := end.Sub(start)
-	for _, tpl := range keys {
-		samples := groups[tpl]
-		if tpl == "" {
-			skipped = append(skipped, Skipped{Service: svc, Samples: len(samples), Reason: "no template (drain warm-up)"})
-			continue
-		}
-		lang, err := rule.Infer(tpl, masks, samples, opt)
-		if errors.Is(err, rule.ErrTooFewSamples) {
-			skipped = append(skipped, Skipped{Service: svc, Template: tpl, Samples: len(samples), Reason: err.Error()})
-			continue
-		}
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("template %q: %w", tpl, err)
-		}
-		constant := true
-		for _, p := range lang.Positions {
-			if p.Kind != "literal" {
-				constant = false
-			}
-		}
-		lines, err := c.scalar(ctx, lc, c.volumeQuery("count_over_time", svc, field, lang.Regex, window), end)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("measuring %q: %w", tpl, err)
-		}
-		bytes, err := c.scalar(ctx, lc, c.volumeQuery("bytes_over_time", svc, field, lang.Regex, window), end)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("measuring %q: %w", tpl, err)
-		}
-		var sev []string
-		for l := range levelsBy[tpl] {
-			sev = append(sev, l)
-		}
-		sort.Strings(sev)
-		cands = append(cands, analyze.Candidate{
-			Service: svc, Scope: map[string]string{c.Scope.LokiLabel: svc}, Template: tpl, Language: lang.Regex,
-			Structured: field != "", Field: field, Constant: constant, Samples: lang.Samples,
-			Lines: lines, Bytes: bytes, Window: window, Severities: sev, StreamLabels: streamLabels,
-		})
+	if err != nil {
+		return analyze.Candidate{}, nil, fmt.Errorf("template %q: %w", tpl, err)
 	}
-	return cands, skipped, notes, nil
+	constant := !slices.ContainsFunc(lang.Positions, func(p rule.Position) bool { return p.Kind != "literal" })
+	lines, err := c.scalar(ctx, m.lc, c.volumeQuery("count_over_time", m.svc, m.field, lang.Regex, m.window), m.end)
+	if err != nil {
+		return analyze.Candidate{}, nil, fmt.Errorf("measuring %q: %w", tpl, err)
+	}
+	bytes, err := c.scalar(ctx, m.lc, c.volumeQuery("bytes_over_time", m.svc, m.field, lang.Regex, m.window), m.end)
+	if err != nil {
+		return analyze.Candidate{}, nil, fmt.Errorf("measuring %q: %w", tpl, err)
+	}
+	return analyze.Candidate{
+		Service: m.svc, Scope: map[string]string{c.Scope.LokiLabel: m.svc}, Template: tpl, Language: lang.Regex,
+		Structured: m.field != "", Field: m.field, Constant: constant, Samples: lang.Samples,
+		Lines: lines, Bytes: bytes, Window: m.window, Severities: levels, StreamLabels: m.streamLabels,
+	}, nil, nil
 }
 
 func (c *Config) scalar(ctx context.Context, lc *loki.Client, q string, at time.Time) (float64, error) {
@@ -450,81 +472,102 @@ func removes(action string) bool {
 // window: the stream would disappear from label, series and volume results, which nothing else in
 // the analysis models. Counting is exact, per stream label set, from Loki itself.
 func (c *Config) keepStreams(ctx context.Context, lc *loki.Client, recs []analyze.Recommendation, start, now time.Time) error {
-	rng := rangeOf(now.Sub(start))
 	bySvc := map[string][]int{}
 	var svcs []string
 	for i, r := range recs {
-		if removes(r.Action) {
-			if _, ok := bySvc[r.Candidate.Service]; !ok {
-				svcs = append(svcs, r.Candidate.Service)
-			}
-			bySvc[r.Candidate.Service] = append(bySvc[r.Candidate.Service], i)
+		if !removes(r.Action) {
+			continue
 		}
+		if _, ok := bySvc[r.Candidate.Service]; !ok {
+			svcs = append(svcs, r.Candidate.Service)
+		}
+		bySvc[r.Candidate.Service] = append(bySvc[r.Candidate.Service], i)
 	}
 	for _, svc := range svcs {
-		idx := bySvc[svc]
-		var labels []string
-		for l := range recs[idx[0]].Candidate.StreamLabels {
-			labels = append(labels, l)
-		}
-		sort.Strings(labels)
-		streams := func(rules []int) (float64, error) {
-			var line, field []string
-			for _, i := range rules {
-				cd := recs[i].Candidate
-				if cd.Structured {
-					field = append(field, fmt.Sprintf("| json sievelog_f%d=%s | sievelog_f%d!~%s", i, strconv.Quote(cd.Field), i, logql.Quote(cd.Language)))
-				} else {
-					line = append(line, "!~ "+logql.Quote(cd.Language))
-				}
-			}
-			q := c.selector(svc)
-			if len(line) > 0 {
-				q += " " + strings.Join(line, " ")
-			}
-			if len(field) > 0 {
-				// A line that is not JSON is dropped here, so it can only count as removed: the check
-				// errs towards blocking.
-				q += " " + strings.Join(field, " ") + ` | __error__=""`
-			}
-			return c.scalar(ctx, lc, fmt.Sprintf("count(sum by (%s) (count_over_time(%s %s)))", strings.Join(labels, ", "), q, rng), now)
-		}
-		before, err := streams(nil)
-		if err != nil {
+		sc := streamCount{c: c, lc: lc, recs: recs, svc: svc, rng: rangeOf(now.Sub(start)), at: now,
+			labels: slices.Sorted(maps.Keys(recs[bySvc[svc][0]].Candidate.StreamLabels))}
+		if err := sc.keep(ctx, bySvc[svc]); err != nil {
 			return fmt.Errorf("counting streams of %s: %w", svc, err)
-		}
-		block := func(i int, why string) {
-			recs[i].Action, recs[i].Keep, recs[i].RemovedBytesPerDay, recs[i].Rewrites = "none", 0, 0, nil
-			recs[i].Blockers = append(recs[i].Blockers, why)
-		}
-		for _, i := range idx {
-			after, err := streams([]int{i})
-			if err != nil {
-				return fmt.Errorf("counting streams of %s: %w", svc, err)
-			}
-			if after < before {
-				block(i, fmt.Sprintf("%.0f of %.0f streams hold only these lines; removing them would make those streams disappear", before-after, before))
-			}
-		}
-		var left []int
-		for _, i := range idx {
-			if removes(recs[i].Action) {
-				left = append(left, i)
-			}
-		}
-		if len(left) > 1 {
-			after, err := streams(left)
-			if err != nil {
-				return fmt.Errorf("counting streams of %s: %w", svc, err)
-			}
-			if after < before {
-				for _, i := range left {
-					block(i, fmt.Sprintf("together with the other rules of %s, removing these lines would empty %.0f streams", svc, before-after))
-				}
-			}
 		}
 	}
 	return nil
+}
+
+// streamCount counts one service's streams with and without the lines of some rules.
+type streamCount struct {
+	c      *Config
+	lc     *loki.Client
+	recs   []analyze.Recommendation
+	svc    string
+	labels []string // the stream label names: one stream per distinct label set
+	rng    string
+	at     time.Time
+}
+
+// keep blocks each rule that alone empties a stream, then all the remaining rules together if
+// together they would.
+func (sc streamCount) keep(ctx context.Context, idx []int) error {
+	before, err := sc.streams(ctx, nil)
+	if err != nil {
+		return err
+	}
+	for _, i := range idx {
+		after, err := sc.streams(ctx, []int{i})
+		if err != nil {
+			return err
+		}
+		if after < before {
+			blockRemoval(&sc.recs[i], fmt.Sprintf("%.0f of %.0f streams hold only these lines; removing them would make those streams disappear", before-after, before))
+		}
+	}
+	var left []int
+	for _, i := range idx {
+		if removes(sc.recs[i].Action) {
+			left = append(left, i)
+		}
+	}
+	if len(left) < 2 {
+		return nil
+	}
+	after, err := sc.streams(ctx, left)
+	if err != nil {
+		return err
+	}
+	if after < before {
+		for _, i := range left {
+			blockRemoval(&sc.recs[i], fmt.Sprintf("together with the other rules of %s, removing these lines would empty %.0f streams", sc.svc, before-after))
+		}
+	}
+	return nil
+}
+
+// streams counts the service's streams that keep a line once the given rules' lines are gone.
+func (sc streamCount) streams(ctx context.Context, rules []int) (float64, error) {
+	var line, field []string
+	for _, i := range rules {
+		cd := sc.recs[i].Candidate
+		if cd.Structured {
+			field = append(field, fmt.Sprintf("| json sievelog_f%d=%s | sievelog_f%d!~%s", i, strconv.Quote(cd.Field), i, logql.Quote(cd.Language)))
+		} else {
+			line = append(line, "!~ "+logql.Quote(cd.Language))
+		}
+	}
+	q := sc.c.selector(sc.svc)
+	if len(line) > 0 {
+		q += " " + strings.Join(line, " ")
+	}
+	if len(field) > 0 {
+		// A line that is not JSON is dropped here, so it can only count as removed: the check errs
+		// towards blocking.
+		q += " " + strings.Join(field, " ") + ` | __error__=""`
+	}
+	return sc.c.scalar(ctx, sc.lc, fmt.Sprintf("count(sum by (%s) (count_over_time(%s %s)))", strings.Join(sc.labels, ", "), q, sc.rng), sc.at)
+}
+
+// blockRemoval takes a rule's action away, with the reason.
+func blockRemoval(rec *analyze.Recommendation, why string) {
+	rec.Action, rec.Keep, rec.RemovedBytesPerDay, rec.Rewrites = "none", 0, 0, nil
+	rec.Blockers = append(rec.Blockers, why)
 }
 
 // evidence reads every usage source. Anything that cannot be read becomes a gap with a stable key.

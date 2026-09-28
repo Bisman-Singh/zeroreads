@@ -9,6 +9,7 @@ import (
 
 	"github.com/Bisman-Singh/sievelog/internal/logql"
 	"github.com/Bisman-Singh/sievelog/internal/rewrite"
+	"github.com/Bisman-Singh/sievelog/internal/source/loki"
 )
 
 // Window is a closed time range.
@@ -58,85 +59,31 @@ func Reconcile(ctx context.Context, c *Config, rf *RulesFile, before, after Wind
 	if err != nil {
 		return nil, err
 	}
+	m := reconciler{c: c, lc: lc, before: before, after: after}
 	res := &Reconciliation{Before: before, After: after, OK: true}
-	measure := func(fn, svc, field, lang string, w Window) (float64, error) {
-		return c.scalar(ctx, lc, c.volumeQuery(fn, svc, field, lang, w.End.Sub(w.Start)), w.End)
-	}
-	services := map[string]bool{}
 	for _, r := range rf.Rules {
-		services[r.Service] = true
-		rr := RuleReconciliation{RuleID: r.ID, Service: r.Service, Action: r.Action, Keep: r.Keep}
-		var err error
-		if rr.BeforeLines, err = measure("count_over_time", r.Service, r.Field, r.Language, before); err != nil {
+		rr, err := m.rule(ctx, r)
+		if err != nil {
 			return nil, err
 		}
-		if rr.BeforeBytes, err = measure("bytes_over_time", r.Service, r.Field, r.Language, before); err != nil {
-			return nil, err
-		}
-		if rr.AfterLines, err = measure("count_over_time", r.Service, r.Field, r.Language, after); err != nil {
-			return nil, err
-		}
-		if rr.AfterBytes, err = measure("bytes_over_time", r.Service, r.Field, r.Language, after); err != nil {
-			return nil, err
-		}
-		beforeRate := rr.BeforeLines / float64(before.seconds())
-		afterRate := rr.AfterLines / float64(after.seconds())
-		if beforeRate > 0 {
-			rr.KeptFraction = afterRate / beforeRate
-		}
-		switch {
-		case !slices.Contains([]string{"drop", "aggregate", "rollup", "sample", "dedupe"}, r.Action):
-			rr.Status, rr.Detail = "mismatch", fmt.Sprintf("unknown action %q", r.Action)
-		case r.Action == "drop" || r.Action == "aggregate":
-			if rr.AfterLines == 0 {
-				rr.Status, rr.Detail = "ok", "no lines of this rule were stored after enforcement"
-			} else {
-				rr.Status, rr.Detail = "mismatch", fmt.Sprintf("%.0f lines of this rule were still stored after enforcement", rr.AfterLines)
-			}
-		case r.Action == "rollup":
-			q := fmt.Sprintf("sum(sum_over_time(%s |= %s | %s=%s | unwrap %s %s))", c.selector(r.Service),
-				logql.Quote(rewrite.Marker(r.ID)), rewrite.RuleLabel, strconv.Quote(r.ID), rewrite.CountLabel, rangeOf(after.End.Sub(after.Start)))
-			rolled, err := c.scalar(ctx, lc, q, after.End)
-			if err != nil {
+		rolled := 0.0
+		if r.Action == "rollup" {
+			if rolled, err = m.rolledUp(ctx, r); err != nil {
 				return nil, err
 			}
-			switch {
-			case rr.AfterLines > 0:
-				rr.Status, rr.Detail = "mismatch", fmt.Sprintf("%.0f lines of this rule were still stored after enforcement", rr.AfterLines)
-			case rolled == 0 && rr.BeforeLines > 0:
-				rr.Status, rr.Detail = "mismatch", fmt.Sprintf("no rollup record after enforcement, although the rule had %.0f lines before: their counts may be lost", rr.BeforeLines)
-			default:
-				rr.Status, rr.Detail = "ok", fmt.Sprintf("no lines stored after enforcement; rollup records count %.0f lines", rolled)
-			}
-		case rr.BeforeLines == 0:
-			rr.Status, rr.Detail = "no-traffic", "no lines of this rule in the before window"
-		case r.Action == "sample":
-			want := float64(r.Keep) / 100
-			if d := rr.KeptFraction - want; d <= tolerance && d >= -tolerance {
-				rr.Status = "ok"
-			} else {
-				rr.Status = "mismatch"
-			}
-			rr.Detail = fmt.Sprintf("kept %.3f of the before rate, target %.2f±%.2f", rr.KeptFraction, want, tolerance)
-		case r.Action == "dedupe":
-			if rr.KeptFraction < 1 {
-				rr.Status = "ok"
-			} else {
-				rr.Status = "mismatch"
-			}
-			rr.Detail = fmt.Sprintf("stored records at %.3f of the before rate", rr.KeptFraction)
 		}
+		rr.Status, rr.Detail = verdict(r, rr, rolled, tolerance)
 		if rr.Status == "mismatch" {
 			res.OK = false
 		}
 		res.Rules = append(res.Rules, rr)
 	}
-	for svc := range services {
-		b, err := measure("bytes_over_time", svc, "", "", before)
+	for _, svc := range rf.services() {
+		b, err := m.volume(ctx, "bytes_over_time", svc, "", "", before)
 		if err != nil {
 			return nil, err
 		}
-		a, err := measure("bytes_over_time", svc, "", "", after)
+		a, err := m.volume(ctx, "bytes_over_time", svc, "", "", after)
 		if err != nil {
 			return nil, err
 		}
@@ -144,4 +91,79 @@ func Reconcile(ctx context.Context, c *Config, rf *RulesFile, before, after Wind
 			BeforeBytesRate: b / before.End.Sub(before.Start).Hours(), AfterBytesRate: a / after.End.Sub(after.Start).Hours()})
 	}
 	return res, nil
+}
+
+// reconciler measures stored volume in the windows before and after enforcement.
+type reconciler struct {
+	c             *Config
+	lc            *loki.Client
+	before, after Window
+}
+
+func (m reconciler) volume(ctx context.Context, fn, svc, field, lang string, w Window) (float64, error) {
+	return m.c.scalar(ctx, m.lc, m.c.volumeQuery(fn, svc, field, lang, w.End.Sub(w.Start)), w.End)
+}
+
+// rule measures a rule's stored lines and bytes in both windows.
+func (m reconciler) rule(ctx context.Context, r EnforcedRule) (RuleReconciliation, error) {
+	rr := RuleReconciliation{RuleID: r.ID, Service: r.Service, Action: r.Action, Keep: r.Keep}
+	for _, x := range []struct {
+		out *float64
+		fn  string
+		w   Window
+	}{{&rr.BeforeLines, "count_over_time", m.before}, {&rr.BeforeBytes, "bytes_over_time", m.before},
+		{&rr.AfterLines, "count_over_time", m.after}, {&rr.AfterBytes, "bytes_over_time", m.after}} {
+		v, err := m.volume(ctx, x.fn, r.Service, r.Field, r.Language, x.w)
+		if err != nil {
+			return rr, err
+		}
+		*x.out = v
+	}
+	if beforeRate := rr.BeforeLines / float64(m.before.seconds()); beforeRate > 0 {
+		rr.KeptFraction = rr.AfterLines / float64(m.after.seconds()) / beforeRate
+	}
+	return rr, nil
+}
+
+// rolledUp is how many lines a rollup rule's records count in the window after enforcement.
+func (m reconciler) rolledUp(ctx context.Context, r EnforcedRule) (float64, error) {
+	q := fmt.Sprintf("sum(sum_over_time(%s |= %s | %s=%s | unwrap %s %s))", m.c.selector(r.Service),
+		logql.Quote(rewrite.Marker(r.ID)), rewrite.RuleLabel, strconv.Quote(r.ID), rewrite.CountLabel, rangeOf(m.after.End.Sub(m.after.Start)))
+	return m.c.scalar(ctx, m.lc, q, m.after.End)
+}
+
+// verdict compares what a rule stored after enforcement with what its action promises.
+func verdict(r EnforcedRule, rr RuleReconciliation, rolled, tolerance float64) (status, detail string) {
+	stillStored := fmt.Sprintf("%.0f lines of this rule were still stored after enforcement", rr.AfterLines)
+	switch {
+	case !slices.Contains([]string{"drop", "aggregate", "rollup", "sample", "dedupe"}, r.Action):
+		return "mismatch", fmt.Sprintf("unknown action %q", r.Action)
+	case r.Action == "drop" || r.Action == "aggregate":
+		if rr.AfterLines > 0 {
+			return "mismatch", stillStored
+		}
+		return "ok", "no lines of this rule were stored after enforcement"
+	case r.Action == "rollup":
+		switch {
+		case rr.AfterLines > 0:
+			return "mismatch", stillStored
+		case rolled == 0 && rr.BeforeLines > 0:
+			return "mismatch", fmt.Sprintf("no rollup record after enforcement, although the rule had %.0f lines before: their counts may be lost", rr.BeforeLines)
+		}
+		return "ok", fmt.Sprintf("no lines stored after enforcement; rollup records count %.0f lines", rolled)
+	case rr.BeforeLines == 0:
+		return "no-traffic", "no lines of this rule in the before window"
+	case r.Action == "sample":
+		want := float64(r.Keep) / 100
+		detail = fmt.Sprintf("kept %.3f of the before rate, target %.2f±%.2f", rr.KeptFraction, want, tolerance)
+		if d := rr.KeptFraction - want; d > tolerance || d < -tolerance {
+			return "mismatch", detail
+		}
+		return "ok", detail
+	}
+	detail = fmt.Sprintf("stored records at %.3f of the before rate", rr.KeptFraction)
+	if rr.KeptFraction >= 1 {
+		return "mismatch", detail
+	}
+	return "ok", detail
 }

@@ -59,62 +59,76 @@ func (c *Config) openSearchEvidence(ctx context.Context, from, now time.Time, se
 	var readers []analyze.ScopedReader
 	var gaps []analyze.Gap
 	for _, o := range c.Evidence.OpenSearch {
-		src := "opensearch " + o.Name
-		cl, err := o.client()
-		if err != nil {
-			gaps = append(gaps, analyze.Gap{Source: src, Origin: o.URL, Key: "opensearch-unreadable", Reason: err.Error()})
-			continue
+		r, g := o.evidence(ctx, from, now, services, rep)
+		readers, gaps = append(readers, r...), append(gaps, g...)
+	}
+	return readers, gaps
+}
+
+// evidence reads one cluster: its audit log, monitors and saved objects, checked against each
+// service's scope.
+func (o OpenSearchConfig) evidence(ctx context.Context, from, now time.Time, services []string, rep *Report) ([]analyze.ScopedReader, []analyze.Gap) {
+	src := "opensearch " + o.Name
+	gap := func(g opensearch.Gap) analyze.Gap {
+		return analyze.Gap{Source: src, Origin: g.Origin, Key: g.Key, Reason: g.Reason}
+	}
+	cl, err := o.client()
+	if err != nil {
+		return nil, []analyze.Gap{{Source: src, Origin: o.URL, Key: "opensearch-unreadable", Reason: err.Error()}}
+	}
+	cat, err := cl.Catalog(ctx)
+	if err != nil {
+		return nil, []analyze.Gap{{Source: src, Origin: o.URL, Key: "opensearch-unreadable", Reason: err.Error()}}
+	}
+	res := (&opensearch.Reader{C: cl, AuditIndex: o.AuditIndex, DashboardsIndex: o.DashboardsIndex, ProveLive: o.ProveLive}).Read(ctx, from, now)
+	rep.Evidence.OpenSearchUses += len(res.Uses)
+	rep.Evidence.OpenSearchAuditLines += res.Lines
+	var gaps []analyze.Gap
+	for _, g := range res.Gaps {
+		gaps = append(gaps, gap(g))
+	}
+	for _, n := range res.Notes {
+		rep.Notes = append(rep.Notes, src+": "+n)
+	}
+	var readers []analyze.ScopedReader
+	for _, svc := range services {
+		var idx []string
+		for _, i := range o.Indices {
+			idx = append(idx, strings.ReplaceAll(i, "{service}", svc))
 		}
-		cat, err := cl.Catalog(ctx)
-		if err != nil {
-			gaps = append(gaps, analyze.Gap{Source: src, Origin: o.URL, Key: "opensearch-unreadable", Reason: err.Error()})
-			continue
+		scope, sg, notes := cl.VerifyScope(ctx, opensearch.Scope{Indices: idx, ServiceField: o.ServiceField, Service: svc}.Expand(cat))
+		for _, g := range sg {
+			gaps = append(gaps, gap(g))
 		}
-		r := &opensearch.Reader{C: cl, AuditIndex: o.AuditIndex, DashboardsIndex: o.DashboardsIndex, ProveLive: o.ProveLive}
-		res := r.Read(ctx, from, now)
-		rep.Evidence.OpenSearchUses += len(res.Uses)
-		rep.Evidence.OpenSearchAuditLines += res.Lines
-		for _, g := range res.Gaps {
-			gaps = append(gaps, analyze.Gap{Source: src, Origin: g.Origin, Key: g.Key, Reason: g.Reason})
-		}
-		for _, n := range res.Notes {
+		for _, n := range notes {
 			rep.Notes = append(rep.Notes, src+": "+n)
 		}
-		for _, svc := range services {
-			var idx []string
-			for _, i := range o.Indices {
-				idx = append(idx, strings.ReplaceAll(i, "{service}", svc))
-			}
-			scope := opensearch.Scope{Indices: idx, ServiceField: o.ServiceField, Service: svc}.Expand(cat)
-			scope, sg, notes := cl.VerifyScope(ctx, scope)
-			for _, g := range sg {
-				gaps = append(gaps, analyze.Gap{Source: src, Origin: g.Origin, Key: g.Key, Reason: g.Reason})
-			}
-			for _, n := range notes {
-				rep.Notes = append(rep.Notes, src+": "+n)
-			}
-			for _, u := range res.Uses {
-				if u.CannotRead(scope) {
-					continue
-				}
-				target := "every index"
-				if len(u.Indices) > 0 {
-					target = strings.Join(u.Indices, ",")
-				}
-				why := "targets " + target + ", which can hold this service's documents"
-				for _, i := range u.Indices {
-					if u.Source == "audit" && !strings.HasPrefix(i, "-") && !strings.Contains(i, ":") && scope.Gone(i) {
-						why += "; " + i + " no longer exists here and may have been an alias over them"
-					}
-				}
-				if u.Opaque {
-					why += "; its query is not interpreted"
-				} else if len(u.Query) > 0 {
-					why += "; its query does not provably select only other services"
-				}
-				readers = append(readers, analyze.ScopedReader{Service: svc, Source: src, Origin: u.Source + " " + u.Origin, Expr: string(u.Query), Reason: why})
+		for _, u := range res.Uses {
+			if !u.CannotRead(scope) {
+				readers = append(readers, analyze.ScopedReader{Service: svc, Source: src, Origin: u.Source + " " + u.Origin, Expr: string(u.Query), Reason: whyReads(u, scope)})
 			}
 		}
 	}
 	return readers, gaps
+}
+
+// whyReads says why a request or stored query may read the scope's documents.
+func whyReads(u opensearch.Use, scope opensearch.Scope) string {
+	target := "every index"
+	if len(u.Indices) > 0 {
+		target = strings.Join(u.Indices, ",")
+	}
+	why := "targets " + target + ", which can hold this service's documents"
+	for _, i := range u.Indices {
+		if u.Source == "audit" && !strings.HasPrefix(i, "-") && !strings.Contains(i, ":") && scope.Gone(i) {
+			why += "; " + i + " no longer exists here and may have been an alias over them"
+		}
+	}
+	switch {
+	case u.Opaque:
+		why += "; its query is not interpreted"
+	case len(u.Query) > 0:
+		why += "; its query does not provably select only other services"
+	}
+	return why
 }
