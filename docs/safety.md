@@ -48,6 +48,16 @@ Anything else is a reader of its own.
 When a query can read a rule's lines, the report shows a sample line it would read. That line is
 re-checked with the real regular expression engine before it is shown.
 
+**Every reader is exact or says what it assumed.** A reader is exact when every part of the query was
+modelled: the line shown is one the query really returns (the e2e suite stores each such line in Loki
+and checks the query returns it). Any other reader carries the assumptions behind it: a label filter,
+a filter after `line_format`, a template variable, a selector without the scope label, a pattern or
+`ip()` filter, a case-insensitive filter modelled as both of Loki's readings, a query that does not
+parse, an OpenSearch request decided per service. Each assumption only widens what the query reads,
+so an assumed reader can block a rule that is in fact safe, never the reverse. The report counts
+exact and assumed readers and names the assumptions, so the over-blocking in an install can be seen
+and fixed, for example by setting `scope.loki_label` to the label its dashboards select by.
+
 **Missing evidence blocks everything.** If the query log is not enabled, not proven live, or does not
 cover the evidence window; if a source cannot be read; if a destination downstream of the enforcement
 point has no evidence; or if a connector turns these logs into metrics, every rule is blocked until

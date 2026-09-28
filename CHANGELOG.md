@@ -16,15 +16,17 @@ The first release. Everything below is new.
   Vector and Fluent Bit rule. Telemetry Policy output cannot carry the guard and needs
   `-allow-no-severity-guard`.
 - A rule that would empty a stream is blocked.
+- Every reader in the report is exact (a line it reads is shown) or assumed to read more than it may,
+  with what was assumed; the report counts both, so over-blocking can be seen and fixed.
 
 ### Enforces
 
 - OpenTelemetry Collector, Vector and Fluent Bit configuration, in shadow (measure only) and enforce
   mode, each checked against the real engine. Collector measurement runs where enforcement acts.
 - Telemetry Policy files, only with `-allow-no-severity-guard`: the format cannot express the guard.
-- Actions: aggregate, dedupe, sample, drop (opt-in), and rollup (experimental, opt-in with
-  `policy.experimental_rollup`) with rewrites of the Grafana and Loki ruler queries that count the
-  rolled-up lines.
+- Actions: archive (opt-in: the lines move to an archive you name and stay retrievable), aggregate,
+  dedupe, sample, drop (opt-in), and rollup (experimental, opt-in with `policy.experimental_rollup`)
+  with rewrites of the Grafana and Loki ruler queries that count the rolled-up lines.
 
 ### Guards
 
@@ -35,6 +37,12 @@ The first release. Everything below is new.
 
 ### Hardened before the first release
 
+- Found by measuring the public dashboard corpus: a panel on a Prometheus datasource variable was read
+  as a Loki query and blocked every rule; datasource variables now resolve by their plugin type.
+  Template variables naming a matcher's label parse.
+- Found while measuring: Grafana 13.2.2's dashboard list can answer empty with a success status right
+  after writes. Every dashboard the search API finds is now listed, read on its own, or a gap, and
+  short links are listed until two lists agree.
 - Rollup rewrites stay linear in size for any number of rules, and count each line once when two
   services share a language.
 - Values from logs are written literally into every runtime's configuration (the Collector and Vector
