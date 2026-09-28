@@ -573,19 +573,41 @@ func blockRemoval(rec *analyze.Recommendation, why string) {
 // evidence reads every usage source. Anything that cannot be read becomes a gap with a stable key.
 func (c *Config) evidence(ctx context.Context, now time.Time, services []string, rep *Report) ([]analyze.UsageQuery, []analyze.ScopedReader, []analyze.Gap) {
 	from := now.Add(-c.Evidence.Window.Duration)
-	var qs []analyze.UsageQuery
-	var gaps []analyze.Gap
-	for _, source := range []func() ([]analyze.UsageQuery, []analyze.Gap){
-		func() ([]analyze.UsageQuery, []analyze.Gap) { return c.queryLogEvidence(ctx, from, now, rep) },
-		func() ([]analyze.UsageQuery, []analyze.Gap) { return c.rulerEvidence(ctx, rep) },
-		func() ([]analyze.UsageQuery, []analyze.Gap) { return c.grafanaEvidence(ctx, rep) },
-	} {
-		q, g := source()
-		qs, gaps = append(qs, q...), append(gaps, g...)
+	rulerQueries, gaps := c.rulerEvidence(ctx, rep)
+	logQueries, logGaps := c.queryLogEvidence(ctx, from, now, rep)
+	if c.Evidence.Ruler && len(gaps) == 0 {
+		logQueries = withoutRulerExecutions(logQueries, rep)
 	}
+	grafanaQueries, grafanaGaps := c.grafanaEvidence(ctx, rep)
+	qs := append(append(logQueries, rulerQueries...), grafanaQueries...)
+	gaps = append(append(logGaps, gaps...), grafanaGaps...)
 	scoped, og := c.openSearchEvidence(ctx, from, now, services, rep)
 	return qs, scoped, append(gaps, og...)
 }
+
+// withoutRulerExecutions drops the ruler's own executions from the query log once the ruler's rules
+// were read: each of them is either a current rule, already a reader as it is stored, or a rule
+// rewritten or deleted since, which no longer runs. The ruler switches to new rules only on its next
+// poll, so without this, one late evaluation of a rewritten rule would keep failing verify for the
+// whole evidence window.
+func withoutRulerExecutions(qs []analyze.UsageQuery, rep *Report) []analyze.UsageQuery {
+	var out []analyze.UsageQuery
+	dropped := 0
+	for _, q := range qs {
+		if q.Origin == queryLogOrigin("ruler") {
+			dropped++
+			continue
+		}
+		out = append(out, q)
+	}
+	if dropped > 0 {
+		rep.Notes = append(rep.Notes, fmt.Sprintf("%d queries the ruler executed are covered by its rules, which are read directly", dropped))
+	}
+	return out
+}
+
+// queryLogOrigin names where an executed query was logged.
+func queryLogOrigin(component string) string { return "query-log (" + component + ")" }
 
 func queryLogGap(key, reason string) analyze.Gap {
 	return analyze.Gap{Source: "loki", Origin: "query-log", Key: key, Reason: reason}
@@ -629,7 +651,7 @@ func (c *Config) queryLogEvidence(ctx context.Context, from, now time.Time, rep 
 	}
 	var qs []analyze.UsageQuery
 	for _, q := range res.Queries {
-		qs = append(qs, analyze.UsageQuery{Source: "loki-querylog", Origin: "query-log (" + q.Component + ")", Expr: q.Query, Count: q.Count, Last: q.Last})
+		qs = append(qs, analyze.UsageQuery{Source: "loki-querylog", Origin: queryLogOrigin(q.Component), Expr: q.Query, Count: q.Count, Last: q.Last})
 	}
 	return qs, gaps
 }

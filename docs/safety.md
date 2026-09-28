@@ -40,7 +40,9 @@ and are not readers; a rule that would empty a stream is blocked instead. Query-
 Loki component count: the frontend, queriers (which log time-split copies, or queries that bypassed the
 frontend) and the ruler; a copy folds into the frontend query it came from, and so does a leg of it
 (each side of a binary operation is logged separately) logged within two minutes of its execution,
-but only when the frontend query reads everything the leg reads.
+but only when the frontend query reads everything the leg reads. The ruler's own executions are
+covered by reading its rules directly: when the ruler is read, its current rules are the readers, and
+executions of rules rewritten or deleted since no longer count.
 Anything else is a reader of its own.
 
 When a query can read a rule's lines, the report shows a sample line it would read. That line is

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -341,5 +342,51 @@ func TestGrafanaGapKeys(t *testing.T) {
 		if got := grafanaGapKey(c.url, c.gap); got != c.want {
 			t.Fatalf("%+v: %s, want %s", c.gap, got, c.want)
 		}
+	}
+}
+
+// The ruler's own executions add nothing to its rules once those are read: a current rule is a
+// stored reader, a rewritten or deleted one no longer runs. Found by the e2e: the ruler evaluated a
+// rewritten rule's old query once after the rewrite was applied (it switches on its next poll), and
+// that execution failed verify for the whole evidence window.
+func TestRulerExecutionsCoveredByItsRules(t *testing.T) {
+	now := time.Now()
+	logLine := func(component, query string) []string {
+		return []string{strconv.FormatInt(now.Add(-time.Minute).UnixNano(), 10),
+			`level=info caller=metrics.go:237 component=` + component + ` org_id=fake query_type=metric query=` + strconv.Quote(query)}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/loki/api/v1/rules":
+			w.Write([]byte("rules.yaml:\n  - name: g\n    rules:\n      - record: current\n        expr: sum(rate({service_name=\"checkout\"} |= \"new\" [1m]))\n"))
+		case "/loki/api/v1/query_range":
+			json.NewEncoder(w).Encode(map[string]any{"status": "success", "data": map[string]any{"resultType": "streams", "result": []any{
+				map[string]any{"stream": map[string]string{"service_name": "loki"}, "values": [][]string{
+					logLine("ruler", `sum(rate({service_name="checkout"} |= "old"[1m]))`),
+					logLine("ruler", `sum(rate({service_name="checkout"} |= "new"[1m]))`),
+					logLine("frontend", `{service_name="checkout"} |= "user"`),
+				}}}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	c := &Config{Loki: LokiConfig{URL: srv.URL}, Scope: ScopeConfig{LokiLabel: "service_name"}, Evidence: EvidenceConfig{
+		Window: Duration{time.Hour}, Ruler: true, QueryLog: QueryLogConfig{Enabled: true, URL: srv.URL, Selector: `{service_name="loki"}`}}}
+	exprs := func() map[string]string {
+		qs, _, _ := c.evidence(context.Background(), now, nil, &Report{})
+		m := map[string]string{}
+		for _, q := range qs {
+			m[q.Expr] = q.Source
+		}
+		return m
+	}
+	got := exprs()
+	if _, ok := got[`sum(rate({service_name="checkout"} |= "old"[1m]))`]; ok || got[`sum(rate({service_name="checkout"} |= "new" [1m]))`] != "loki-ruler" || got[`{service_name="checkout"} |= "user"`] != "loki-querylog" {
+		t.Fatalf("with the ruler read: %v", got)
+	}
+	c.Evidence.Ruler = false
+	if got = exprs(); got[`sum(rate({service_name="checkout"} |= "old"[1m]))`] != "loki-querylog" {
+		t.Fatalf("without the ruler read, its executions are the only evidence of it: %v", got)
 	}
 }
