@@ -181,52 +181,10 @@ func Markdown(rep *Report) string {
 			fmt.Fprintf(&b, "- `%s` (%s %s): %s\n", g.Key, g.Source, g.Origin, g.Reason)
 		}
 	}
-	if s := rep.Readers; s.Readers > 0 {
-		fmt.Fprintf(&b, "\n## Readers\n\n%d readers across all rules. %d read the rule's lines exactly (each shows a line it reads). %d are assumed to read more than they may, because part of the query is not modelled; each of those can block a rule that is in fact safe:\n\n",
-			s.Readers, s.Exact, s.Readers-s.Exact)
-		for _, a := range s.Assumptions {
-			fmt.Fprintf(&b, "- %s: %d\n", a.Kind, a.Readers)
-		}
-	}
+	markdownReaders(&b, rep.Readers)
 	b.WriteString("\n## Rules\n\n")
 	for _, r := range rep.Recommendations {
-		fmt.Fprintf(&b, "### %s `%s` (%s)\n\n", r.ID, r.Candidate.Template, r.Candidate.Service)
-		fmt.Fprintf(&b, "- Action: **%s**", r.Action)
-		if r.Action == "sample" {
-			fmt.Fprintf(&b, " (keep %d%%)", r.Keep)
-		}
-		fmt.Fprintf(&b, "\n- Language: `%s`\n- Volume: %.0f lines, %s over %s\n", r.Candidate.Language, r.Candidate.Lines, humanBytes(r.Candidate.Bytes), r.Candidate.Window)
-		if r.RemovedBytesPerDay > 0 {
-			bound := ""
-			if r.UpperBound {
-				bound = " (upper bound until shadow mode measures it)"
-			}
-			fmt.Fprintf(&b, "- Removes %s/day%s\n", humanBytes(r.RemovedBytesPerDay), bound)
-		}
-		for _, bl := range r.Blockers {
-			fmt.Fprintf(&b, "- Blocked: %s\n", bl)
-		}
-		if len(r.Rewrites) > 0 {
-			b.WriteString("- Rewrites (apply with `sievelog rewrite -apply` before or with enforcing; each returns the same numbers before, during and after the switch):\n")
-			for _, rw := range r.Rewrites {
-				fmt.Fprintf(&b, "  - %s %s\n    - from `%s`\n    - to `%s`\n", rw.Source, rw.Origin, rw.Old, rw.New)
-			}
-		}
-		for _, rd := range r.Readers {
-			kind := "reads"
-			if rd.Counting {
-				kind = "counts"
-			}
-			fmt.Fprintf(&b, "  - %s %s: `%s`", rd.Source, rd.Origin, rd.Expr)
-			if rd.Witness != "" {
-				fmt.Fprintf(&b, " %s e.g. `%s`", kind, rd.Witness)
-			}
-			if len(rd.Widened) > 0 {
-				fmt.Fprintf(&b, " (assumed: %s)", strings.Join(rd.Widened, "; "))
-			}
-			b.WriteString("\n")
-		}
-		b.WriteString("\n")
+		markdownRule(&b, r)
 	}
 	if len(rep.Skipped) > 0 {
 		b.WriteString("## Templates without a rule\n\n")
@@ -238,6 +196,59 @@ func Markdown(rep *Report) string {
 		fmt.Fprintf(&b, "\nNote: %s\n", n)
 	}
 	return b.String()
+}
+
+// markdownReaders is the report's count of exact and assumed readers.
+func markdownReaders(b *strings.Builder, s ReaderSummary) {
+	if s.Readers == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\n## Readers\n\n%d readers across all rules. %d read the rule's lines exactly (each shows a line it reads). %d are assumed to read more than they may, because part of the query is not modelled; each of those can block a rule that is in fact safe:\n\n",
+		s.Readers, s.Exact, s.Readers-s.Exact)
+	for _, a := range s.Assumptions {
+		fmt.Fprintf(b, "- %s: %d\n", a.Kind, a.Readers)
+	}
+}
+
+// markdownRule is one rule's section of the report.
+func markdownRule(b *strings.Builder, r analyze.Recommendation) {
+	fmt.Fprintf(b, "### %s `%s` (%s)\n\n", r.ID, r.Candidate.Template, r.Candidate.Service)
+	fmt.Fprintf(b, "- Action: **%s**", r.Action)
+	if r.Action == "sample" {
+		fmt.Fprintf(b, " (keep %d%%)", r.Keep)
+	}
+	fmt.Fprintf(b, "\n- Language: `%s`\n- Volume: %.0f lines, %s over %s\n", r.Candidate.Language, r.Candidate.Lines, humanBytes(r.Candidate.Bytes), r.Candidate.Window)
+	if r.RemovedBytesPerDay > 0 {
+		bound := ""
+		if r.UpperBound {
+			bound = " (upper bound until shadow mode measures it)"
+		}
+		fmt.Fprintf(b, "- Removes %s/day%s\n", humanBytes(r.RemovedBytesPerDay), bound)
+	}
+	for _, bl := range r.Blockers {
+		fmt.Fprintf(b, "- Blocked: %s\n", bl)
+	}
+	if len(r.Rewrites) > 0 {
+		b.WriteString("- Rewrites (apply with `sievelog rewrite -apply` before or with enforcing; each returns the same numbers before, during and after the switch):\n")
+		for _, rw := range r.Rewrites {
+			fmt.Fprintf(b, "  - %s %s\n    - from `%s`\n    - to `%s`\n", rw.Source, rw.Origin, rw.Old, rw.New)
+		}
+	}
+	for _, rd := range r.Readers {
+		kind := "reads"
+		if rd.Counting {
+			kind = "counts"
+		}
+		fmt.Fprintf(b, "  - %s %s: `%s`", rd.Source, rd.Origin, rd.Expr)
+		if rd.Witness != "" {
+			fmt.Fprintf(b, " %s e.g. `%s`", kind, rd.Witness)
+		}
+		if len(rd.Widened) > 0 {
+			fmt.Fprintf(b, " (assumed: %s)", strings.Join(rd.Widened, "; "))
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
 }
 
 // EmitCollector writes the collector configuration for the rules in the given mode.
