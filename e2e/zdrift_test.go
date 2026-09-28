@@ -37,6 +37,9 @@ func TestZDriftReportedExactly(t *testing.T) {
 			sampled = &rf.Rules[i]
 		}
 	}
+	if sampled == nil {
+		t.Fatalf("needs the sample rule TestFullLoop wrote; its rules.json has %d rules", len(rf.Rules))
+	}
 	driftLine := strings.ReplaceAll(sampled.Template, "<*>", "zz~drift~zz")
 	if langs[sampled.ID].MatchString(driftLine) || !strings.Contains(sampled.Template, "<*>") {
 		t.Fatalf("drift line %q must be in template %q and outside the rule", driftLine, sampled.Template)
