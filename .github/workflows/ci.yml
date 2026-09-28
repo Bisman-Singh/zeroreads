@@ -66,6 +66,8 @@ jobs:
           sudo install /tmp/linux-amd64/helm /usr/local/bin/helm
       - run: go install sigs.k8s.io/kind@v0.31.0
       - run: ./e2e/run.sh
+        env:
+          E2E_GRAFANA_DASHBOARDS: "2000" # the local benchmark uses 5000; this bounds the hosted runner's time
       - name: cluster state after a failure
         if: failure()
         run: ./e2e/diagnose.sh
