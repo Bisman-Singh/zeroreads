@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -136,228 +137,15 @@ type Recommendation struct {
 
 // Decide produces one recommendation per candidate.
 func Decide(cands []Candidate, queries []UsageQuery, scoped []ScopedReader, gaps []Gap, pol Policy) ([]Recommendation, error) {
-	errRe, err := automaton.Compile(pol.ErrorPattern)
+	d, err := newDecision(cands, queries, scoped, gaps, pol)
 	if err != nil {
-		return nil, fmt.Errorf("analyze: error pattern: %w", err)
-	}
-	for _, a := range pol.Actions {
-		switch a {
-		case "aggregate", "dedupe", "sample", "drop", "rollup":
-		default:
-			return nil, fmt.Errorf("analyze: unknown action %q", a)
-		}
-	}
-	var exemptRes []*regexp.Regexp
-	exemptIDs := map[string]bool{}
-	for _, e := range pol.Exempt {
-		if strings.HasPrefix(e, "r-") {
-			exemptIDs[e] = true
-			continue
-		}
-		re, err := regexp.Compile(e)
-		if err != nil {
-			return nil, fmt.Errorf("analyze: exempt %q: %w", e, err)
-		}
-		exemptRes = append(exemptRes, re)
-	}
-	ack := map[string]bool{}
-	for _, k := range pol.Acknowledged {
-		ack[k] = true
-	}
-	var blockingGaps []string
-	for _, g := range gaps {
-		if !ack[g.Key] {
-			blockingGaps = append(blockingGaps, fmt.Sprintf("evidence gap %q (%s %s): %s", g.Key, g.Source, g.Origin, g.Reason))
-		}
-	}
-	sort.Strings(blockingGaps)
-
-	// Parse every query once. A query that does not parse reads everything and counts.
-	type parsed struct {
-		q      UsageQuery
-		parsed *logql.Query
-		sel    []logql.Selection
-		err    error
-	}
-	var pqs []parsed
-	for _, q := range queries {
-		p, err := logql.Parse(q.Expr)
-		if err != nil {
-			pqs = append(pqs, parsed{q: q, err: err})
-			continue
-		}
-		pqs = append(pqs, parsed{q: q, parsed: p, sel: p.Selections})
-	}
-
-	rollup := false
-	for _, a := range pol.Actions {
-		if a == "rollup" {
-			rollup = true
-		}
-	}
-	languages := make(map[string]string, len(cands))
-	for _, c := range cands {
-		languages[c.ID()] = c.Language
+		return nil, err
 	}
 	var out []Recommendation
 	for _, c := range cands {
-		rec := Recommendation{ID: c.ID(), Candidate: c, Action: "none"}
-		lang, err := automaton.Compile(c.Language)
+		rec, err := d.recommend(c)
 		if err != nil {
-			return nil, fmt.Errorf("analyze: %s: language: %w", rec.ID, err)
-		}
-		rule := usage.Rule{ID: rec.ID, Scope: c.Scope, Language: lang, Structured: c.Structured}
-		for _, p := range pqs {
-			if p.err != nil {
-				rec.Readers = append(rec.Readers, Reader{Source: p.q.Source, Origin: p.q.Origin, Expr: p.q.Expr, Counting: true,
-					Reason: "query does not parse (" + p.err.Error() + "); treated as reading and counting every line"})
-				continue
-			}
-			for _, sel := range p.sel {
-				if rewrite.Compensated(p.parsed, sel, rec.ID, languages) {
-					// A sievelog rewrite's raw-line term: summed with the rollup counts, it keeps the
-					// query's numbers only if this rule is rolled up.
-					rec.Readers = append(rec.Readers, Reader{Source: p.q.Source, Origin: p.q.Origin, Expr: p.q.Expr, Counting: true, Compensated: true,
-						Reason: "already rewritten for a rollup of these lines; any other removal changes its count"})
-					break
-				}
-				v := usage.Evaluate(sel, rule)
-				if v.Used {
-					rd := Reader{Source: p.q.Source, Origin: p.q.Origin, Expr: p.q.Expr, Counting: v.Counting, Witness: v.Witness, Reason: v.Reason}
-					if rollup && !c.Structured {
-						rd.Rewrite = rewriteFor(p.q, rec.ID, c)
-					}
-					rec.Readers = append(rec.Readers, rd)
-					break
-				}
-			}
-		}
-		rollupOK := rollup && !c.Structured && len(rec.Readers) > 0
-		for i, rd := range rec.Readers {
-			if rd.Rewrite != nil || rd.Compensated {
-				continue
-			}
-			// An executed query (query log) is covered when it is exactly a stored query being rewritten.
-			if rd.Source == "loki-querylog" {
-				for _, o := range rec.Readers {
-					if o.Rewrite != nil && logql.Canonical(o.Expr) == logql.Canonical(rd.Expr) {
-						cp := *o.Rewrite
-						cp.Source, cp.Origin, cp.Store, cp.Path = rd.Source, rd.Origin, "", ""
-						rec.Readers[i].Rewrite = &cp
-						break
-					}
-				}
-				if rec.Readers[i].Rewrite != nil {
-					continue
-				}
-			}
-			rollupOK = false
-		}
-		// Rollup records are new lines in the rule's streams: any other query that can select them
-		// would count or show them, so it rules a rollup out (and nothing else).
-		var rollupBlockedBy []string
-		replaced := map[string]bool{}
-		for _, rd := range rec.Readers {
-			if rd.Rewrite != nil || rd.Compensated {
-				replaced[logql.Canonical(rd.Expr)] = true
-			}
-		}
-		if rollup && !c.Structured {
-			for _, p := range pqs {
-				if p.err != nil || replaced[logql.Canonical(p.q.Expr)] {
-					continue // already a reader of everything, or replaced by this rule's rewrite
-				}
-				for _, sel := range p.sel {
-					if rewrite.ReadsRollups(sel, rec.ID, c.Scope) {
-						rollupBlockedBy = append(rollupBlockedBy, fmt.Sprintf("%s %s would also select this rule's rollup records: %s", p.q.Source, p.q.Origin, p.q.Expr))
-						break
-					}
-				}
-			}
-		}
-		if len(rollupBlockedBy) > 0 {
-			rollupOK = false
-		}
-		for _, sr := range scoped {
-			if sr.Service == c.Service {
-				rec.Readers = append(rec.Readers, Reader{Source: sr.Source, Origin: sr.Origin, Expr: sr.Expr, Counting: true, Reason: sr.Reason})
-				rollupOK = false // only Loki queries can be rewritten for a rollup
-			}
-		}
-		// Blockers, in the order an operator should read them.
-		rec.Blockers = append(rec.Blockers, blockingGaps...)
-		if len(rec.Readers) > 0 && !rollupOK {
-			rec.Blockers = append(rec.Blockers, fmt.Sprintf("%d quer%s read these lines", len(rec.Readers), plural(len(rec.Readers), "y", "ies")))
-		}
-		if w, found, err := automaton.Intersects(lang, errRe, 0); err != nil || found {
-			if err != nil {
-				rec.Blockers = append(rec.Blockers, "could not prove the lines are not error-like: "+err.Error())
-			} else {
-				rec.Blockers = append(rec.Blockers, fmt.Sprintf("lines can be error-like, e.g. %q", w))
-			}
-		}
-		for _, s := range c.Severities {
-			if severe.MatchString(s) {
-				rec.Blockers = append(rec.Blockers, "sampled lines carry severity "+s)
-			}
-		}
-		if exemptIDs[rec.ID] {
-			rec.Blockers = append(rec.Blockers, "exempt by policy")
-		}
-		for _, re := range exemptRes {
-			if re.MatchString(c.Template) {
-				rec.Blockers = append(rec.Blockers, "template exempt by policy ("+re.String()+")")
-			}
-		}
-		perDay := 0.0
-		if c.Window > 0 {
-			perDay = c.Bytes / c.Window.Hours() * 24
-		}
-		if perDay < pol.MinDailyBytes {
-			rec.Blockers = append(rec.Blockers, fmt.Sprintf("only %.0f bytes/day, under the policy minimum", perDay))
-		}
-		if len(rec.Blockers) == 0 {
-			for _, a := range pol.Actions {
-				if a == "dedupe" && !c.Constant {
-					continue // dedupe only keeps every line's content when all lines are identical
-				}
-				if a == "rollup" && c.Structured {
-					continue // a rollup record replaces the whole line; field rules cannot be rewritten
-				}
-				if len(rec.Readers) > 0 && a != "rollup" {
-					continue // only a rollup with its rewrites keeps readers' numbers
-				}
-				if a == "rollup" && len(rollupBlockedBy) > 0 {
-					continue
-				}
-				rec.Action = a
-				break
-			}
-			if rec.Action == "rollup" {
-				seen := map[string]bool{}
-				for _, rd := range rec.Readers {
-					if rd.Rewrite == nil {
-						continue // already rewritten
-					}
-					if k := rd.Rewrite.Source + "\x00" + rd.Rewrite.Origin; !seen[k] {
-						seen[k] = true
-						rec.Rewrites = append(rec.Rewrites, *rd.Rewrite)
-					}
-				}
-			}
-			switch rec.Action {
-			case "aggregate", "drop", "rollup":
-				rec.RemovedBytesPerDay = perDay
-			case "dedupe":
-				rec.RemovedBytesPerDay = perDay
-				rec.UpperBound = true
-			case "sample":
-				rec.Keep = pol.SamplePercent
-				rec.RemovedBytesPerDay = perDay * float64(100-pol.SamplePercent) / 100
-			case "none":
-				rec.Blockers = append(rec.Blockers, rollupBlockedBy...)
-				rec.Blockers = append(rec.Blockers, "no allowed action applies")
-			}
+			return nil, err
 		}
 		out = append(out, rec)
 	}
@@ -369,6 +157,273 @@ func Decide(cands []Candidate, queries []UsageQuery, scoped []ScopedReader, gaps
 		return out[i].ID < out[j].ID
 	})
 	return out, nil
+}
+
+// decision is what every candidate is decided against: the policy, the evidence and its gaps.
+type decision struct {
+	pol          Policy
+	errorLike    *automaton.Pattern
+	exemptIDs    map[string]bool
+	exemptRes    []*regexp.Regexp
+	blockingGaps []string // gaps not acknowledged, each blocking every rule
+	queries      []parsedQuery
+	scoped       []ScopedReader
+	rollup       bool              // the policy allows rollup
+	languages    map[string]string // every candidate's language, by rule ID
+}
+
+// parsedQuery is a usage query parsed once. One that does not parse (err) reads everything and
+// counts.
+type parsedQuery struct {
+	UsageQuery
+	query *logql.Query
+	err   error
+}
+
+func newDecision(cands []Candidate, queries []UsageQuery, scoped []ScopedReader, gaps []Gap, pol Policy) (*decision, error) {
+	d := &decision{pol: pol, exemptIDs: map[string]bool{}, scoped: scoped, rollup: slices.Contains(pol.Actions, "rollup"),
+		languages: make(map[string]string, len(cands))}
+	var err error
+	if d.errorLike, err = automaton.Compile(pol.ErrorPattern); err != nil {
+		return nil, fmt.Errorf("analyze: error pattern: %w", err)
+	}
+	for _, a := range pol.Actions {
+		switch a {
+		case "aggregate", "dedupe", "sample", "drop", "rollup":
+		default:
+			return nil, fmt.Errorf("analyze: unknown action %q", a)
+		}
+	}
+	for _, e := range pol.Exempt {
+		if strings.HasPrefix(e, "r-") {
+			d.exemptIDs[e] = true
+			continue
+		}
+		re, err := regexp.Compile(e)
+		if err != nil {
+			return nil, fmt.Errorf("analyze: exempt %q: %w", e, err)
+		}
+		d.exemptRes = append(d.exemptRes, re)
+	}
+	for _, g := range gaps {
+		if !slices.Contains(pol.Acknowledged, g.Key) {
+			d.blockingGaps = append(d.blockingGaps, fmt.Sprintf("evidence gap %q (%s %s): %s", g.Key, g.Source, g.Origin, g.Reason))
+		}
+	}
+	sort.Strings(d.blockingGaps)
+	for _, q := range queries {
+		pq := parsedQuery{UsageQuery: q}
+		pq.query, pq.err = logql.Parse(q.Expr)
+		d.queries = append(d.queries, pq)
+	}
+	for _, c := range cands {
+		d.languages[c.ID()] = c.Language
+	}
+	return d, nil
+}
+
+// recommend decides one candidate: who reads its lines, what blocks it, and the least lossy action
+// the policy allows.
+func (d *decision) recommend(c Candidate) (Recommendation, error) {
+	rec := Recommendation{ID: c.ID(), Candidate: c, Action: "none"}
+	lang, err := automaton.Compile(c.Language)
+	if err != nil {
+		return rec, fmt.Errorf("analyze: %s: language: %w", rec.ID, err)
+	}
+	rollupAllowed := d.rollup && !c.Structured
+	rec.Readers = d.readers(rec.ID, c, lang, rollupAllowed)
+	rollupOK := rollupAllowed && len(rec.Readers) > 0
+	if !coverExecutions(rec.Readers) {
+		rollupOK = false
+	}
+	var rollupBlockedBy []string
+	if rollupAllowed {
+		rollupBlockedBy = d.rollupConflicts(rec, c)
+	}
+	if len(rollupBlockedBy) > 0 {
+		rollupOK = false
+	}
+	for _, sr := range d.scoped {
+		if sr.Service == c.Service {
+			rec.Readers = append(rec.Readers, Reader{Source: sr.Source, Origin: sr.Origin, Expr: sr.Expr, Counting: true, Reason: sr.Reason})
+			rollupOK = false // only Loki queries can be rewritten for a rollup
+		}
+	}
+	perDay := 0.0
+	if c.Window > 0 {
+		perDay = c.Bytes / c.Window.Hours() * 24
+	}
+	rec.Blockers = d.blockers(rec, c, lang, rollupOK, perDay)
+	if len(rec.Blockers) == 0 {
+		d.chooseAction(&rec, c, perDay, rollupBlockedBy)
+	}
+	return rec, nil
+}
+
+// readers are the queries that read the candidate's lines, each with its first reading selection.
+func (d *decision) readers(id string, c Candidate, lang *automaton.Pattern, rollupAllowed bool) []Reader {
+	rule := usage.Rule{ID: id, Scope: c.Scope, Language: lang, Structured: c.Structured}
+	var out []Reader
+	for _, p := range d.queries {
+		if p.err != nil {
+			out = append(out, Reader{Source: p.Source, Origin: p.Origin, Expr: p.Expr, Counting: true,
+				Reason: "query does not parse (" + p.err.Error() + "); treated as reading and counting every line"})
+			continue
+		}
+		for _, sel := range p.query.Selections {
+			if rewrite.Compensated(p.query, sel, id, d.languages) {
+				// A sievelog rewrite's raw-line term: summed with the rollup counts, it keeps the
+				// query's numbers only if this rule is rolled up.
+				out = append(out, Reader{Source: p.Source, Origin: p.Origin, Expr: p.Expr, Counting: true, Compensated: true,
+					Reason: "already rewritten for a rollup of these lines; any other removal changes its count"})
+				break
+			}
+			if v := usage.Evaluate(sel, rule); v.Used {
+				rd := Reader{Source: p.Source, Origin: p.Origin, Expr: p.Expr, Counting: v.Counting, Witness: v.Witness, Reason: v.Reason}
+				if rollupAllowed {
+					rd.Rewrite = rewriteFor(p.UsageQuery, id, c)
+				}
+				out = append(out, rd)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// coverExecutions gives every executed query (from the query log) that is exactly a stored query
+// being rewritten that rewrite, and reports whether every reader is then rewritten or compensated.
+func coverExecutions(readers []Reader) bool {
+	all := true
+	for i, rd := range readers {
+		if rd.Rewrite != nil || rd.Compensated {
+			continue
+		}
+		if rd.Source == "loki-querylog" {
+			for _, o := range readers {
+				if o.Rewrite != nil && logql.Canonical(o.Expr) == logql.Canonical(rd.Expr) {
+					cp := *o.Rewrite
+					cp.Source, cp.Origin, cp.Store, cp.Path = rd.Source, rd.Origin, "", ""
+					readers[i].Rewrite = &cp
+					break
+				}
+			}
+			if readers[i].Rewrite != nil {
+				continue
+			}
+		}
+		all = false
+	}
+	return all
+}
+
+// rollupConflicts are the queries other than the candidate's rewritten readers that can select its
+// rollup records: records are new lines in the rule's streams, so any such query would count or
+// show them. They rule a rollup out, and nothing else.
+func (d *decision) rollupConflicts(rec Recommendation, c Candidate) []string {
+	replaced := map[string]bool{}
+	for _, rd := range rec.Readers {
+		if rd.Rewrite != nil || rd.Compensated {
+			replaced[logql.Canonical(rd.Expr)] = true
+		}
+	}
+	var out []string
+	for _, p := range d.queries {
+		if p.err != nil || replaced[logql.Canonical(p.Expr)] {
+			continue // already a reader of everything, or replaced by this rule's rewrite
+		}
+		for _, sel := range p.query.Selections {
+			if rewrite.ReadsRollups(sel, rec.ID, c.Scope) {
+				out = append(out, fmt.Sprintf("%s %s would also select this rule's rollup records: %s", p.Source, p.Origin, p.Expr))
+				break
+			}
+		}
+	}
+	return out
+}
+
+// blockers are the reasons the candidate gets no action, in the order an operator should read them.
+func (d *decision) blockers(rec Recommendation, c Candidate, lang *automaton.Pattern, rollupOK bool, perDay float64) []string {
+	out := append([]string(nil), d.blockingGaps...)
+	if len(rec.Readers) > 0 && !rollupOK {
+		out = append(out, fmt.Sprintf("%d quer%s read these lines", len(rec.Readers), plural(len(rec.Readers), "y", "ies")))
+	}
+	switch w, found, err := automaton.Intersects(lang, d.errorLike, 0); {
+	case err != nil:
+		out = append(out, "could not prove the lines are not error-like: "+err.Error())
+	case found:
+		out = append(out, fmt.Sprintf("lines can be error-like, e.g. %q", w))
+	}
+	for _, s := range c.Severities {
+		if severe.MatchString(s) {
+			out = append(out, "sampled lines carry severity "+s)
+		}
+	}
+	if d.exemptIDs[rec.ID] {
+		out = append(out, "exempt by policy")
+	}
+	for _, re := range d.exemptRes {
+		if re.MatchString(c.Template) {
+			out = append(out, "template exempt by policy ("+re.String()+")")
+		}
+	}
+	if perDay < d.pol.MinDailyBytes {
+		out = append(out, fmt.Sprintf("only %.0f bytes/day, under the policy minimum", perDay))
+	}
+	return out
+}
+
+// chooseAction takes the first action in the policy's order of preference that keeps what the
+// candidate's readers see, with what it removes.
+func (d *decision) chooseAction(rec *Recommendation, c Candidate, perDay float64, rollupBlockedBy []string) {
+	for _, a := range d.pol.Actions {
+		if a == "dedupe" && !c.Constant {
+			continue // dedupe only keeps every line's content when all lines are identical
+		}
+		if a == "rollup" && c.Structured {
+			continue // a rollup record replaces the whole line; field rules cannot be rewritten
+		}
+		if len(rec.Readers) > 0 && a != "rollup" {
+			continue // only a rollup with its rewrites keeps readers' numbers
+		}
+		if a == "rollup" && len(rollupBlockedBy) > 0 {
+			continue
+		}
+		rec.Action = a
+		break
+	}
+	switch rec.Action {
+	case "rollup":
+		rec.RemovedBytesPerDay = perDay
+		rec.Rewrites = uniqueRewrites(rec.Readers)
+	case "aggregate", "drop":
+		rec.RemovedBytesPerDay = perDay
+	case "dedupe":
+		rec.RemovedBytesPerDay = perDay
+		rec.UpperBound = true
+	case "sample":
+		rec.Keep = d.pol.SamplePercent
+		rec.RemovedBytesPerDay = perDay * float64(100-d.pol.SamplePercent) / 100
+	case "none":
+		rec.Blockers = append(rec.Blockers, rollupBlockedBy...)
+		rec.Blockers = append(rec.Blockers, "no allowed action applies")
+	}
+}
+
+// uniqueRewrites are the readers' rewrites, one per stored object and query.
+func uniqueRewrites(readers []Reader) []Rewrite {
+	var out []Rewrite
+	seen := map[string]bool{}
+	for _, rd := range readers {
+		if rd.Rewrite == nil {
+			continue // already rewritten
+		}
+		if k := rd.Rewrite.Source + "\x00" + rd.Rewrite.Origin; !seen[k] {
+			seen[k] = true
+			out = append(out, *rd.Rewrite)
+		}
+	}
+	return out
 }
 
 // combineRewrites rewrites each stored query once for every rolled-up rule it reads, and proves the
