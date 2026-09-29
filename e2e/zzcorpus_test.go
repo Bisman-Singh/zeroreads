@@ -54,14 +54,24 @@ func TestCorpusCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Grafana serves each dashboard in two schema versions, and the reader keeps a query from both when
+	// they name its datasource differently: harmless for decisions, but the measure counts each distinct
+	// query of a dashboard once.
 	var queries []grafana.Query
+	read, seen := 0, map[string]bool{}
 	for _, q := range res.Queries {
-		if q.Org == org {
+		if q.Org != org {
+			continue
+		}
+		read++
+		dashboard, _, _ := strings.Cut(q.Origin, "/")
+		if key := dashboard + "\x00" + q.Expr; !seen[key] {
+			seen[key] = true
 			queries = append(queries, q)
 		}
 	}
-	t.Logf("corpus: %d dashboards downloaded, %d imported; the Grafana reader returned %d Loki queries from them in %s",
-		len(dashboards), imported, len(queries), time.Since(start).Round(time.Millisecond))
+	t.Logf("corpus: %d dashboards downloaded, %d imported; the Grafana reader returned %d Loki queries from them in %s, %d distinct per dashboard",
+		len(dashboards), imported, read, time.Since(start).Round(time.Millisecond), len(queries))
 	if len(queries) < 100 {
 		for _, g := range res.Gaps {
 			if g.Org == org {
