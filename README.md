@@ -122,7 +122,9 @@ go build ./cmd/sievelog
 ./scripts/check-runtimes.sh   # dialect and runtime tests against real Vector, Fluent Bit and the Collector (docker)
 ./e2e/run.sh                  # on kind: Loki, Grafana, OpenSearch and Dashboards; the full loop through
                               # the Collector, Vector and Fluent Bit; rollups with rewrites; the Helm
-                              # chart; a million-line scale run
+                              # chart; a million-line scale run; a Grafana with thousands of dashboards
+E2E_CORPUS=1 ./e2e/run.sh     # also measures the public Loki dashboard corpus (downloaded, not stored)
+./e2e/demo/run.sh             # after e2e/run.sh: the OpenTelemetry demo as a realistic workload
 ```
 
 ## Security

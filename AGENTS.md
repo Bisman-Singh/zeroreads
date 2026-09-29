@@ -32,7 +32,9 @@ a wrong "unread" removes logs someone needs.
 golangci-lint run --build-tags e2e,docker ./...   # v2.14.0 built with the module's Go
 go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 ./scripts/check-runtimes.sh   # real Vector, Fluent Bit and Collector in docker
-./e2e/run.sh                  # everything on kind (about 70 minutes); REUSE=1 E2E_RUN=<regexp> for one suite
+./e2e/run.sh                  # everything on kind (about 90 minutes); REUSE=1 E2E_RUN=<regexp> for one suite;
+                              # E2E_CORPUS=1 also measures the public dashboard corpus (needs the internet)
+./e2e/demo/run.sh             # after e2e/run.sh: the OpenTelemetry demo as a realistic workload (about an hour)
 ```
 
 ## Conventions

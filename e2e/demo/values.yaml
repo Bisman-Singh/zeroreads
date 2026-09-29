@@ -1,0 +1,63 @@
+# The OpenTelemetry demo as a realistic workload for sievelog, on the e2e kind cluster: its own
+# services and load generator, its own OpenTelemetry Collector sending logs to the e2e Loki, and
+# none of its bundled backends (the e2e stack is the backend).
+default:
+  envOverrides:
+    - name: OTEL_COLLECTOR_NAME
+      value: otel-collector
+jaeger: {enabled: false}
+prometheus: {enabled: false}
+grafana: {enabled: false}
+opensearch: {enabled: false}
+components:
+  # The optional AI assistant and the docs site add nothing to the logs being studied.
+  agent: {enabled: false}
+  chatbot: {enabled: false}
+  mcp: {enabled: false}
+  telemetry-docs: {enabled: false}
+  load-generator:
+    envOverrides:
+      - {name: LOCUST_USERS, value: "5"}
+      - {name: LOCUST_SPAWN_RATE, value: "1"}
+      - {name: LOCUST_BROWSER_TRAFFIC_ENABLED, value: "false"}
+    resources:
+      limits: {memory: 600Mi}
+opentelemetry-collector:
+  image:
+    tag: 0.161.0                 # the Collector release sievelog's suites verify
+  mode: deployment
+  presets:
+    hostMetrics: {enabled: false}
+    kubeletMetrics: {enabled: false}
+    clusterMetrics: {enabled: false}
+    annotationDiscovery: {metrics: {enabled: false}}
+    kubernetesAttributes: {enabled: true}
+  resources:
+    limits: {memory: 600Mi}
+  # sievelog's measurement goes to a file on the e2e host mount, as delta sums (a Prometheus exporter
+  # would restart its totals and is refused).
+  securityContext:
+    runAsUser: 0 # writes to the host mount
+  extraVolumes:
+    - name: e2e-out
+      hostPath: {path: /e2e/out, type: DirectoryOrCreate}
+  extraVolumeMounts:
+    - name: e2e-out
+      mountPath: /e2e/out
+  config:
+    exporters:
+      otlp_http/loki:
+        endpoint: http://loki.sievelog-system.svc:3100/otlp
+        tls: {insecure: true}
+      file/sievelog:
+        path: /e2e/out/demo-metrics.json
+    service:
+      pipelines:
+        traces:
+          exporters: [debug, span_metrics]
+        metrics:
+          exporters: [debug]
+        logs:
+          exporters: [otlp_http/loki]
+        profiles:
+          exporters: [debug]
