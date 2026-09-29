@@ -342,7 +342,23 @@ func (t Target) checkExporters(rules []Rule, exporters map[string]any) error {
 			return fmt.Errorf("emit: exporter %s does not exist", e)
 		}
 	}
+	for _, e := range slices.Concat(t.MeasureExporters, t.AggregateExporters) {
+		if keepsTotals(e) {
+			return fmt.Errorf("emit: exporter %s keeps running totals, and the per-rule counts arrive as deltas, one per "+
+				"batch, that it would restart its totals on: its numbers would be wrong. Use an exporter that accepts "+
+				"delta temporality: OTLP to a backend that does, or file", e)
+		}
+	}
 	return nil
+}
+
+// keepsTotals reports an exporter that turns delta sums into running totals by itself. signal_to_metrics
+// stamps each batch's delta with the time the batch began and no start time, so such an exporter
+// restarts its total at nearly every batch (found on a real Collector: 4 where 60 lines were
+// measured), and delta_to_cumulative drops the batches that arrive out of order.
+func keepsTotals(exporter string) bool {
+	typ, _, _ := strings.Cut(exporter, "/")
+	return typ == "prometheus" || typ == "prometheus_remote_write" || typ == "prometheusremotewrite"
 }
 
 // splitAt splits the pipeline's processors after t.After (before all of them when it is empty).

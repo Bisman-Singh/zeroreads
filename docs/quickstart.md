@@ -44,7 +44,8 @@ collector:
   config_files: [collector.yaml]   # your collector config, unchanged
   pipeline: logs
   after: batch                     # rules act after this processor
-  measure_exporters: [prometheus]  # receive the per-rule measurements
+  measure_exporters: [otlp_http/metrics]  # receive the per-rule measurements as delta sums: an
+                                   # exporter that accepts delta temporality (not Prometheus)
   sinks:
     otlp_http/loki: {loki: true}   # every exporter after the enforcement point, accounted for
 ```

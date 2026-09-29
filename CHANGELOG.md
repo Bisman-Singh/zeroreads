@@ -43,6 +43,10 @@ The first release. Everything below is new.
 - Found while measuring: Grafana 13.2.2's dashboard list can answer empty with a success status right
   after writes. Every dashboard the search API finds is now listed, read on its own, or a gap, and
   short links are listed until two lists agree.
+- Found on the realistic run: with no rule to act, emit wrote a measurement step the Collector refuses
+  at startup; the configuration now stays exactly the user's. And a Prometheus exporter restarts its
+  totals at nearly every batch of the per-rule delta counts, so emit refuses it for measurement and
+  aggregate counters; an exporter that accepts delta temporality is required.
 - Rollup rewrites stay linear in size for any number of rules, and count each line once when two
   services share a language.
 - Values from logs are written literally into every runtime's configuration (the Collector and Vector

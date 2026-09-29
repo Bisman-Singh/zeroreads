@@ -294,3 +294,21 @@ func TestNoRulesLeaveTheConfigUnchanged(t *testing.T) {
 		same(t, out, fluentBitUnit)
 	}
 }
+
+// A Prometheus exporter keeps running totals of the per-batch deltas and restarts them at nearly every
+// batch, so emit refuses it for measurement and for aggregate counters, whose counts it would lose.
+func TestMeasurementRefusesTotalKeepingExporters(t *testing.T) {
+	cfg := strings.Replace(userConfig, "  debug: {}\n", "  debug: {}\n  prometheus: {endpoint: \"0.0.0.0:8889\"}\n  prometheus/x: {endpoint: \"0.0.0.0:8890\"}\n", 1)
+	for _, tg := range []Target{
+		{Pipeline: "logs", After: "transform/prep", MeasureExporters: []string{"prometheus"}, AggregateExporters: []string{"file/metrics"}},
+		{Pipeline: "logs", After: "transform/prep", MeasureExporters: []string{"file/metrics"}, AggregateExporters: []string{"prometheus/x"}},
+	} {
+		if _, err := Collector([][]byte{[]byte(cfg)}, tg, testRules, Shadow); err == nil || !strings.Contains(err.Error(), "delta temporality") {
+			t.Fatalf("%+v: %v", tg, err)
+		}
+	}
+	if _, err := Collector([][]byte{[]byte(cfg)}, Target{Pipeline: "logs", After: "transform/prep", MeasureExporters: []string{"file/metrics"},
+		AggregateExporters: []string{"file/metrics"}}, testRules, Shadow); err != nil {
+		t.Fatal(err)
+	}
+}

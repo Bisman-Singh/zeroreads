@@ -72,8 +72,10 @@ collector:
   config_files: [collector.yaml] # merged in order, like repeated --config flags
   pipeline: logs
   after: transform/prep          # rules act after this processor
-  measure_exporters: [prometheus] # receive the per-rule measurement metrics
-  aggregate_exporters: [prometheus] # receive the counters that replace aggregated lines
+  measure_exporters: [otlp_http/metrics] # receive the per-rule measurement metrics, as delta sums
+  aggregate_exporters: [otlp_http/metrics] # receive the counters that replace aggregated lines
+                                 # both must accept delta temporality (OTLP to a backend that does,
+                                 # or file); a Prometheus exporter would restart its totals and is refused
   archive_exporters: []          # receive archived lines (the archive action); never the
                                  # pipeline's own exporters
   dedupe_interval: 10s
