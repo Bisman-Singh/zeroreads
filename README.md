@@ -1,12 +1,54 @@
 # sievelog
 
 sievelog finds the log lines that no logged query, alert, dashboard or stored query reads, proves it
-for each rule, and writes the pipeline configuration that removes or shrinks them.
+for each rule, and writes the pipeline configuration that removes, shrinks or archives them.
 
 > **Before you enforce anything:** deploy the shadow configuration first and let it run, with
 > `sievelog verify` on a schedule, for a period that covers your normal weekly traffic and on-call
 > usage. Shadow mode removes nothing; it measures, per rule, exactly what enforcement would remove.
 > Enforce only rules whose shadow numbers and verify results you have looked at.
+
+## What it is
+
+- An open-source tool that finds the log lines no logged query, alert, dashboard or stored query
+  reads, proves that for each rule, and writes the pipeline configuration that removes, shrinks or
+  archives them, in the OpenTelemetry Collector, Vector or Fluent Bit.
+- It runs on your infrastructure and sends nothing anywhere except to the Loki, Grafana and
+  OpenSearch you configure: no telemetry, no update checks.
+- Default deny: whatever it cannot model counts as reading everything, and missing evidence blocks
+  every rule until it is fixed or deliberately acknowledged.
+
+## What has been measured
+
+Every number below comes from the test suites, run against the real engines listed under [Supported
+versions](#supported-versions).
+
+- **"Nobody reads this" was never wrong.** 9,570 such answers were checked against what Loki
+  actually returned, over three generated query sets (random, fuzzed from real rules, and
+  adversarial members of hard patterns): none was wrong. On those query distributions that bounds
+  the error rate below 0.03% at 95% confidence (3/n). 144 OpenSearch answers were each confirmed by
+  OpenSearch itself; with that few, the bound is only 2.1%.
+- **Over-blocking, the other side, is measured too.** Of the "reads" answers on the same query sets,
+  42% were exact, and every exact one was confirmed (492 of 492: the line shown was stored in Loki
+  and the query returned it). The rest were assumed readers, which can block a rule that is in fact
+  safe; the report names each assumption, so an install can see its own.
+- **Real dashboards.** 357 public Loki dashboards (the Grafana dashboard directory and the Loki
+  mixin, downloaded at test time), 2,363 Loki queries: 88.2% parse, and every one that does not is
+  rejected by Loki 3.7.8 as well; the line filters of 41% are modelled exactly; with the scope label
+  set to the label each query selects by, 31% are exact end to end. 53% pick their streams with
+  template variables, which count as reading every service they could name.
+- **A realistic app.** The OpenTelemetry demo (13 services, its own load generator) on a local kind
+  cluster, logging through its own Collector into Loki, with a small set of dashboards, one alert
+  and a few ad-hoc queries written for it: 17 of 29 rules acted. In a 10-minute shadow window their
+  lines were 24.0% of the stored lines (17.2% of the bytes), and the Collector's own measurement
+  counted 834 of them where Loki stored 832 (the windows' edges differ by seconds); while enforcing,
+  none of them was stored (reconcile: 17 ok), and verify passed. No production cluster has been
+  measured yet.
+- **Scale.** 999,999 log lines and 300,000 query executions analysed in 1m42s at 59 MB peak; a
+  Grafana with 5,000 dashboards (20,008 queries) in 1m55s at 331 MB; 1,000,000 OpenSearch audit
+  entries read in 44s.
+- **Removal is exact.** Each runtime's output, shadow and enforce, archive included, was compared
+  record by record with the prediction on the real Collector, Vector and Fluent Bit.
 
 Most log volume is a handful of repetitive patterns: health checks, heartbeats, cache chatter. Paid
 tools can tell you which ones are safe to drop. sievelog does the same job in the open, on your own
@@ -63,7 +105,8 @@ do when every rule is blocked.
 | Fluent Bit | `modify`, `grep`, `lua`, `log_to_metrics` config | Fluent Bit 5.1.2, full loop on Kubernetes, every record compared |
 | Telemetry Policy | policy file for policy-go based runtimes | policy-go 1.12.1 with teroscan; no severity guard, emitted only with `-allow-no-severity-guard` |
 
-Every regular expression is rewritten for the target engine's dialect and checked against that engine
+The archive action, when chosen, sends a rule's lines to an archive destination you name in all three
+runtimes instead of removing them. Every regular expression is rewritten for the target engine's dialect and checked against that engine
 on thousands of generated strings, including Unicode traps. Sampling is deterministic: each runtime
 keeps a line exactly when a SHA-256 of its text and timestamp falls under a threshold, so the kept
 share is exact and every decision can be reproduced.
