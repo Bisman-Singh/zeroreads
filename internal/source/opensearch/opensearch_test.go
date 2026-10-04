@@ -304,3 +304,20 @@ func TestSavedObjects(t *testing.T) {
 		t.Fatalf("saved query not flagged")
 	}
 }
+
+// A cluster that keeps returning hits cannot keep a scroll going.
+func TestScrollStops(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			return
+		}
+		_, _ = w.Write([]byte(`{"_scroll_id":"s","hits":{"hits":[{"_index":"i","_source":{}}]}}`))
+	}))
+	defer srv.Close()
+	r := &Reader{Client: &Client{Base: srv.URL}, maxPages: 3}
+	pages := 0
+	err := r.scan(context.Background(), "i", map[string]any{"match_all": map[string]any{}}, func(hit) error { pages++; return nil })
+	if err == nil || !strings.Contains(err.Error(), "after 3 pages") || pages != 3 {
+		t.Fatalf("a scroll without end was read: %d pages, %v", pages, err)
+	}
+}

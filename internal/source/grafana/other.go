@@ -23,7 +23,7 @@ func (r *orgReader) loadLibraries(ctx context.Context) {
 				} `json:"elements"`
 			} `json:"result"`
 		}
-		if err := r.c.do(ctx, r.org, fmt.Sprintf("/api/library-elements?kind=1&perPage=100&page=%d", page), &resp); err != nil {
+		if err := r.do(ctx, fmt.Sprintf("/api/library-elements?kind=1&perPage=100&page=%d", page), &resp); err != nil {
 			r.gap("librarypanels", "list: %v", err)
 			return
 		}
@@ -66,7 +66,7 @@ func (r *orgReader) alertRules(ctx context.Context) {
 			Model         map[string]any `json:"model"`
 		} `json:"data"`
 	}
-	if err := r.c.do(ctx, r.org, "/api/v1/provisioning/alert-rules", &rules); err != nil {
+	if err := r.do(ctx, "/api/v1/provisioning/alert-rules", &rules); err != nil {
 		r.gap("alertrules", "list: %v", err)
 		return
 	}
@@ -183,7 +183,7 @@ func (r *orgReader) queryHistory(ctx context.Context) {
 				} `json:"queryHistory"`
 			} `json:"result"`
 		}
-		if err := r.c.do(ctx, r.org, fmt.Sprintf("/api/query-history?limit=100&page=%d", page), &resp); err != nil {
+		if err := r.do(ctx, fmt.Sprintf("/api/query-history?limit=100&page=%d", page), &resp); err != nil {
 			r.gap("queryhistory", "list: %v", err)
 			return
 		}
@@ -214,7 +214,7 @@ func (r *orgReader) correlations(ctx context.Context) {
 			} `json:"correlations"`
 			TotalCount int `json:"totalCount"`
 		}
-		if err := r.c.do(ctx, r.org, fmt.Sprintf("/api/datasources/correlations?limit=100&page=%d", page), &resp); err != nil {
+		if err := r.do(ctx, fmt.Sprintf("/api/datasources/correlations?limit=100&page=%d", page), &resp); err != nil {
 			r.gap("correlations", "list: %v", err)
 			return
 		}

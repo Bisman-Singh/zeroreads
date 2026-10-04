@@ -218,6 +218,25 @@ type orgReader struct {
 	// dsVars are the datasource variables of the dashboard being read: name -> the plugin type whose
 	// datasources it lists. Such a variable only ever holds a datasource of that type.
 	dsVars map[string]string
+
+	requests int // made so far for this org
+	budget   int // the most requests for this org; 0 means maxRequests
+}
+
+// maxRequests bounds the requests one org's read makes, so a server that keeps answering with another
+// page cannot keep the read going without end.
+const maxRequests = 1_000_000
+
+// do sends one request for this org, within its budget.
+func (r *orgReader) do(ctx context.Context, path string, v any) error {
+	limit := r.budget
+	if limit == 0 {
+		limit = maxRequests
+	}
+	if r.requests++; r.requests > limit {
+		return fmt.Errorf("grafana: stopped after %d requests for org %d", limit, r.org)
+	}
+	return r.c.do(ctx, r.org, path, v)
 }
 
 func (r *orgReader) gap(origin, format string, a ...any) {
@@ -243,7 +262,7 @@ func (r *orgReader) datasources(ctx context.Context) error {
 		URL       string `json:"url"`
 		IsDefault bool   `json:"isDefault"`
 	}
-	if err := r.c.do(ctx, r.org, "/api/datasources", &list); err != nil {
+	if err := r.do(ctx, "/api/datasources", &list); err != nil {
 		return err
 	}
 	r.lokiByUID = map[string]bool{}
@@ -361,6 +380,7 @@ func (r *orgReader) defaultLoki() []string {
 func (r *orgReader) listK8s(ctx context.Context, group, version, resource string) ([]json.RawMessage, error) {
 	var out []json.RawMessage
 	cont := ""
+	seen := map[string]bool{}
 	for {
 		path := fmt.Sprintf("/apis/%s/%s/namespaces/%s/%s?limit=100", group, version, namespace(r.org), resource)
 		if cont != "" {
@@ -372,7 +392,7 @@ func (r *orgReader) listK8s(ctx context.Context, group, version, resource string
 				Continue string `json:"continue"`
 			} `json:"metadata"`
 		}
-		if err := r.c.do(ctx, r.org, path, &page); err != nil {
+		if err := r.do(ctx, path, &page); err != nil {
 			return nil, err
 		}
 		out = append(out, page.Items...)
@@ -380,6 +400,10 @@ func (r *orgReader) listK8s(ctx context.Context, group, version, resource string
 			return out, nil
 		}
 		cont = page.Metadata.Continue
+		if seen[cont] {
+			return nil, fmt.Errorf("grafana: listing %s returned a continue token it had returned before", resource)
+		}
+		seen[cont] = true
 	}
 }
 

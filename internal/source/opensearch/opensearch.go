@@ -139,6 +139,8 @@ type Reader struct {
 	// ProveLive sends a marker search and waits until the audit log records it.
 	ProveLive    bool
 	ProveTimeout time.Duration
+
+	maxPages int // the most pages one scroll reads; 0 means maxScrollPages
 }
 
 // probePrefix names the marker index a liveness probe searches; it never exists.
@@ -330,6 +332,10 @@ type hit struct {
 	Source json.RawMessage `json:"_source"`
 }
 
+// maxScrollPages bounds one scroll, so a cluster that keeps returning hits cannot keep a read going
+// without end.
+const maxScrollPages = 1_000_000
+
 // scan reads every hit of a query with the scroll API.
 func (r *Reader) scan(ctx context.Context, index string, query any, fn func(hit) error) error {
 	var page struct {
@@ -346,7 +352,14 @@ func (r *Reader) scan(ctx context.Context, index string, query any, fn func(hit)
 			_ = r.Client.do(context.Background(), http.MethodDelete, "/_search/scroll", map[string]any{"scroll_id": page.ScrollID}, nil)
 		}
 	}()
-	for len(page.Hits.Hits) > 0 {
+	limit := r.maxPages
+	if limit == 0 {
+		limit = maxScrollPages
+	}
+	for pages := 1; len(page.Hits.Hits) > 0; pages++ {
+		if pages > limit {
+			return fmt.Errorf("opensearch: search on %s still had hits after %d pages", index, limit)
+		}
 		for _, h := range page.Hits.Hits {
 			if err := fn(h); err != nil {
 				return err

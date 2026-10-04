@@ -107,7 +107,7 @@ func (r *orgReader) readUnlisted(ctx context.Context, uids []string, into map[st
 	for _, uid := range uids {
 		var d k8sDashboard
 		path := fmt.Sprintf("/apis/dashboard.grafana.app/v1/namespaces/%s/dashboards/%s", namespace(r.org), url.PathEscape(uid))
-		if err := r.c.do(ctx, r.org, path, &d); err != nil {
+		if err := r.do(ctx, path, &d); err != nil {
 			r.gap("dashboard:"+uid, "found by search but not listed, and reading it failed: %v", err)
 			continue
 		}
@@ -123,7 +123,7 @@ func (r *orgReader) searchDashboards(ctx context.Context) (map[string]bool, erro
 		var hits []struct {
 			UID string `json:"uid"`
 		}
-		if err := r.c.do(ctx, r.org, fmt.Sprintf("/api/search?type=dash-db&limit=%d&page=%d", perPage, page), &hits); err != nil {
+		if err := r.do(ctx, fmt.Sprintf("/api/search?type=dash-db&limit=%d&page=%d", perPage, page), &hits); err != nil {
 			return out, err
 		}
 		for _, h := range hits {
