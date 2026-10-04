@@ -2,6 +2,7 @@ package fetch
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -100,5 +101,49 @@ func TestRetryAfterAndExcerpt(t *testing.T) {
 	}
 	if e := Excerpt([]byte("  short\n")); e != "short" {
 		t.Fatalf("%q", e)
+	}
+}
+
+// A read follows a redirect on its own server only; a redirect to another port or host, or of a write,
+// is refused before anything reaches the other end.
+func TestRedirectsStayOnTheConfiguredServer(t *testing.T) {
+	var elsewhere atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		elsewhere.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer other.Close()
+	var writes atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/moved":
+			http.Redirect(w, r, "/here", http.StatusFound)
+		case "/away":
+			http.Redirect(w, r, other.URL+"/steal", http.StatusFound)
+		case "/write":
+			if r.Method != http.MethodGet {
+				writes.Add(1)
+			}
+			http.Redirect(w, r, "/here", http.StatusMovedPermanently)
+		case "/here":
+			if r.Method == http.MethodGet && r.Header.Get("Authorization") != "" {
+				_, _ = w.Write([]byte("ok"))
+			}
+		}
+	}))
+	defer srv.Close()
+	get := func(path, method string) (Response, error) {
+		req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader("x"))
+		req.Header.Set("Authorization", "Bearer secret")
+		return Do(context.Background(), srv.Client(), req)
+	}
+	if res, err := get("/moved", http.MethodGet); err != nil || string(res.Body) != "ok" {
+		t.Fatalf("a redirect on the same server was not followed: %v %q", err, res.Body)
+	}
+	if _, err := get("/away", http.MethodGet); !errors.Is(err, ErrRedirect) || elsewhere.Load() != 0 {
+		t.Fatalf("a redirect to another server was followed: %v, %d requests there", err, elsewhere.Load())
+	}
+	if _, err := get("/write", http.MethodPut); !errors.Is(err, ErrRedirect) || writes.Load() != 1 {
+		t.Fatalf("a redirected write was not refused: %v", err)
 	}
 }

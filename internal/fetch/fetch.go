@@ -31,6 +31,9 @@ const (
 // ErrTooLarge means an answer exceeded MaxBody.
 var ErrTooLarge = fmt.Errorf("fetch: answer larger than %d bytes", MaxBody)
 
+// ErrRedirect means a redirect was refused.
+var ErrRedirect = errors.New("fetch: redirect refused")
+
 // Response is a completed exchange.
 type Response struct {
 	Status int
@@ -44,8 +47,10 @@ func (r Response) OK() bool { return r.Status/100 == 2 }
 // times out: a query that took too long will again) or the answer is 429, 502, 503 or 504. Other
 // methods are sent once: they change state.
 func Do(ctx context.Context, c *http.Client, req *http.Request) (Response, error) {
+	guarded := *c
+	guarded.CheckRedirect = redirect
 	for attempt := 1; ; attempt++ {
-		res, retryAfter, err := once(c, req.Clone(ctx))
+		res, retryAfter, err := once(&guarded, req.Clone(ctx))
 		if attempt == attempts || !transient(req.Method, res.Status, err) {
 			return res, err
 		}
@@ -78,6 +83,22 @@ func once(c *http.Client, req *http.Request) (res Response, retryAfter time.Dura
 	return Response{Status: resp.StatusCode, Body: body}, parseRetryAfter(resp.Header.Get("Retry-After")), nil
 }
 
+// redirect follows a redirect only for a read, and only to the same scheme, host and port. Anywhere else
+// the request's credentials would go to a server nobody configured, or evidence would be read from it;
+// and a redirected write is resent as a GET, whose answer would look like the write succeeded.
+func redirect(req *http.Request, via []*http.Request) error {
+	first := via[0]
+	switch {
+	case first.Method != http.MethodGet:
+		return fmt.Errorf("%w: %s %s was redirected; a write is never redirected", ErrRedirect, first.Method, first.URL.Redacted())
+	case req.URL.Scheme != first.URL.Scheme || req.URL.Host != first.URL.Host:
+		return fmt.Errorf("%w: %s was redirected to another server, %s", ErrRedirect, first.URL.Redacted(), req.URL.Redacted())
+	case len(via) >= 10:
+		return fmt.Errorf("%w: %s was redirected 10 times", ErrRedirect, first.URL.Redacted())
+	}
+	return nil
+}
+
 func transient(method string, status int, err error) bool {
 	if method != http.MethodGet {
 		return false
@@ -85,7 +106,7 @@ func transient(method string, status int, err error) bool {
 	if err != nil {
 		var ne net.Error
 		timedOut := errors.As(err, &ne) && ne.Timeout()
-		return !timedOut && !errors.Is(err, ErrTooLarge) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+		return !timedOut && !errors.Is(err, ErrTooLarge) && !errors.Is(err, ErrRedirect) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 	}
 	switch status {
 	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
