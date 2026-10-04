@@ -45,6 +45,7 @@ func (e *loopEnv) run(dir, name string, args ...string) (string, int) {
 	e.t.Helper()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
+	cmd.Env = clusterSafeEnv()
 	out, err := cmd.CombinedOutput()
 	code := 0
 	if ee, ok := err.(*exec.ExitError); ok {
@@ -53,6 +54,18 @@ func (e *loopEnv) run(dir, name string, args ...string) (string, int) {
 		e.t.Fatalf("%s %v: %v\n%s", name, args, err, out)
 	}
 	return string(out), code
+}
+
+// clusterSafeEnv is this process's environment without Helm's HELM_KUBE* variables: helm applies them
+// over --kube-context, so an exported HELM_KUBEAPISERVER would send the chart to that server instead.
+func clusterSafeEnv() []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "HELM_KUBE") {
+			env = append(env, kv)
+		}
+	}
+	return env
 }
 
 func (e *loopEnv) kubectl(args ...string) string {

@@ -13,6 +13,8 @@ CTX=kind-sievelog
 NS=sievelog-demo
 K="kubectl --kubeconfig ${KUBECONFIG_E2E} --context ${CTX}"
 H="helm --kubeconfig ${KUBECONFIG_E2E} --kube-context ${CTX}"
+# shellcheck source=e2e/lib.sh
+source "${ROOT}/e2e/lib.sh"
 CHART_VERSION=0.42.1
 CHART_SHA256=1f10de3d899fc36385c1b624793c95bc9cd86e436ef728f63f22e1728aeec777
 BASELINE="${DEMO_BASELINE:-1800}" # seconds of traffic before the analysis
@@ -50,12 +52,6 @@ restore() {
     ${K} -n sievelog-system scale deployment/opensearch deployment/opensearch-dashboards --replicas=1 >/dev/null 2>&1 || true
   fi
 }
-PFS=()
-forward() {
-  while true; do ${K} -n "$1" port-forward "svc/$2" "$3" >/dev/null 2>&1; sleep 1; done &
-  PFS+=($!)
-}
-stop_forwards() { for p in "${PFS[@]}"; do pkill -P "${p}" 2>/dev/null || true; kill "${p}" 2>/dev/null || true; done; }
 trap restore EXIT
 
 log "OpenSearch is not an evidence source here: scaled to zero to make room"

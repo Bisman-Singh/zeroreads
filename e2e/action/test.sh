@@ -9,15 +9,22 @@ mkdir -p "${W}"
 sed 's#http://loki.sievelog-system.svc:3100#http://host.docker.internal:13100#; s#http://grafana.sievelog-system.svc:3000#http://host.docker.internal:13000#' e2e/action/sievelog.yaml > "${W}/sievelog.yaml"
 cp .e2e/loop-user.yaml "${W}/collector.yaml"
 cp .e2e/loop-out/rules.json "${W}/rules.json"
-K="kubectl --kubeconfig .e2e/kubeconfig --context kind-sievelog -n sievelog-system"
-${K} port-forward svc/loki 13100:3100 >/dev/null 2>&1 & P1=$!
-${K} port-forward svc/grafana 13000:3000 >/dev/null 2>&1 & P2=$!
-trap 'kill ${P1} ${P2} 2>/dev/null || true; curl -s -X DELETE "http://admin:e2e-only-password@localhost:13000/api/dashboards/uid/act-cache" >/dev/null || true' EXIT
+K="kubectl --kubeconfig .e2e/kubeconfig --context kind-sievelog"
+# shellcheck source=e2e/lib.sh
+source "${ROOT}/e2e/lib.sh"
+forward sievelog-system loki 13100:3100
+forward sievelog-system grafana 13000:3000
+trap 'stop_forwards; curl -s -X DELETE "http://admin:e2e-only-password@localhost:13000/api/dashboards/uid/act-cache" >/dev/null || true' EXIT
 sleep 3
-# The action runs the released image; build this checkout under that tag so act uses it locally.
-IMAGE=$(sed -n 's#.*image: docker://##p' action.yml)
-docker build -q -t "${IMAGE}" . >/dev/null
-run() { act push -W e2e/action/verify.yml --bind -P ubuntu-latest=node:20-bookworm-slim --pull=false 2>&1; }
+# The action runs the released image. This checkout is built under a local name instead, and act runs a
+# copy of the action that names it, so the release tag on this machine always means the released image.
+docker build -q -t sievelog/sievelog:act . >/dev/null
+mkdir -p "${W}/action"
+sed 's#image: docker://.*#image: docker://sievelog/sievelog:act#' action.yml > "${W}/action/action.yml"
+grep -q 'docker://sievelog/sievelog:act' "${W}/action/action.yml" || { echo "FAIL: the action's image line was not rewritten"; exit 1; }
+sed "s#uses: ./\$#uses: ./${W}/action#" e2e/action/verify.yml > "${W}/verify.yml"
+grep -q "uses: ./${W}/action" "${W}/verify.yml" || { echo "FAIL: the workflow does not use the local action copy"; exit 1; }
+run() { act push -W "${W}/verify.yml" --bind -P ubuntu-latest=node:20-bookworm-slim --pull=false 2>&1; }
 out=$(run) || true
 echo "${out}" | grep -q "Job succeeded" || { echo "${out}"; echo "FAIL: expected the action to pass"; exit 1; }
 curl -sf -X POST "http://admin:e2e-only-password@localhost:13000/api/dashboards/db" -H 'Content-Type: application/json' \

@@ -13,6 +13,8 @@ SERVICES=(checkout auth orders)
 COLLECTOR_IMAGE=otel/opentelemetry-collector-contrib:0.161.0
 KUBECONFIG_E2E="${WORK}/kubeconfig" # never touches ~/.kube/config
 K="kubectl --kubeconfig ${KUBECONFIG_E2E} --context ${CTX}"
+# shellcheck source=e2e/lib.sh
+source "${ROOT}/e2e/lib.sh"
 # Each run gets its own namespace and the collector reads only that namespace's pod logs, so log
 # files left behind by earlier runs can never be counted again.
 RUN_NS="sievelog-gen-$(date +%s)"
@@ -154,17 +156,11 @@ fi
 log "port-forwarding loki, grafana, opensearch and dashboards"
 # Each port-forward restarts when it drops (a busy node can reset them), and every service must answer
 # before the assertions start, so a slow start fails here, with its name, instead of as test failures.
-PFS=()
-forward() {
-  while true; do ${K} -n sievelog-system port-forward "svc/$1" "$2" >/dev/null 2>&1; sleep 1; done &
-  PFS+=($!)
-}
-stop_forwards() { for p in "${PFS[@]}"; do pkill -P "${p}" 2>/dev/null || true; kill "${p}" 2>/dev/null || true; done; }
 trap stop_forwards EXIT
-forward loki 13100:3100
-forward grafana 13000:3000
-forward opensearch 19200:9200
-forward opensearch-dashboards 15601:5601
+forward sievelog-system loki 13100:3100
+forward sievelog-system grafana 13000:3000
+forward sievelog-system opensearch 19200:9200
+forward sievelog-system opensearch-dashboards 15601:5601
 wait_for() { # name, seconds, curl arguments
   local name=$1 secs=$2; shift 2
   for _ in $(seq 1 "${secs}"); do curl -sf "$@" >/dev/null 2>&1 && return 0; sleep 1; done
