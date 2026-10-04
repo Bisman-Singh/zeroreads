@@ -3,3 +3,4 @@ PLAN*.md
 *.out
 /.e2e/
 /dist/
+__pycache__/
