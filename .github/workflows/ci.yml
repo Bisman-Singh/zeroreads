@@ -5,10 +5,11 @@ on:
   pull_request:
 permissions:
   contents: read
-# Every action is pinned to a commit, and every tool to the version the suites were verified with.
+# Every action is pinned to a commit, every tool to the version the suites were verified with, and the
+# runner to the Ubuntu release they run on.
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -16,7 +17,7 @@ jobs:
           go-version-file: go.mod # pins the exact Go release the module declares
       - run: ./scripts/check.sh
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -28,7 +29,7 @@ jobs:
           install-mode: goinstall # built with the module's Go: an older build refuses a newer target
           args: --build-tags e2e,docker
   vulnerabilities:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -36,7 +37,7 @@ jobs:
           go-version-file: go.mod
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
   secrets:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -49,7 +50,7 @@ jobs:
           tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
       - run: /tmp/gitleaks git --config .gitleaks.toml --redact --no-banner .
   runtimes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -57,7 +58,7 @@ jobs:
           go-version-file: go.mod
       - run: ./scripts/check-runtimes.sh
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 150
     steps:
       # The runner image ships toolchains this job never uses. The cluster's images and volumes need

@@ -1,0 +1,27 @@
+name: release tools
+description: Go, cosign, syft, goreleaser and buildx at the versions the release is rehearsed with, each one checked.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: go.mod
+        cache: false # a release never reuses a build cache that another run wrote
+    - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+      with:
+        cosign-release: v2.5.2
+    - name: syft v1.52.0, checked against its published SHA-256
+      shell: bash
+      run: |
+        curl -fsSLo /tmp/syft.tgz https://github.com/anchore/syft/releases/download/v1.52.0/syft_1.52.0_linux_amd64.tar.gz
+        echo "caeedb81fb0491615f1ebd1761e4145d41ee86dd2cc7bf80669f9f5ad9d6133d  /tmp/syft.tgz" | sha256sum -c -
+        tar -xzf /tmp/syft.tgz -C /tmp syft
+        sudo install /tmp/syft /usr/local/bin/syft
+    - name: goreleaser v2.15.4, checked by the Go checksum database
+      shell: bash
+      run: |
+        go install github.com/goreleaser/goreleaser/v2@v2.15.4
+        echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      with:
+        driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea # the image builds the published image
