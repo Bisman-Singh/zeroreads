@@ -49,10 +49,32 @@ func TestCorpusCoverage(t *testing.T) {
 	org := corpusOrg(t, base)
 	imported := importDashboards(t, base, org, dashboards)
 
+	// Grafana shows dashboards written seconds ago only after a while: right after the import a read
+	// can miss the last ones. The measure is taken once two reads in a row find the same queries.
 	start := time.Now()
-	res, err := (&grafana.Client{Base: base, Username: grafanaUser, Password: grafanaPass}).Read(context.Background())
-	if err != nil {
-		t.Fatal(err)
+	var res grafana.Result
+	previous := ""
+	for attempt := 1; ; attempt++ {
+		r, err := (&grafana.Client{Base: base, Username: grafanaUser, Password: grafanaPass}).Read(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var keys []string
+		for _, q := range r.Queries {
+			if q.Org == org {
+				keys = append(keys, q.Origin+"\x00"+q.Expr)
+			}
+		}
+		sort.Strings(keys)
+		current := strings.Join(keys, "\n")
+		res = r
+		if current == previous {
+			break
+		}
+		if attempt == 6 {
+			t.Fatalf("the corpus read differently %d times in a row", attempt)
+		}
+		previous = current
 	}
 	// Grafana serves each dashboard in two schema versions, and the reader keeps a query from both when
 	// they name its datasource differently: harmless for decisions, but the measure counts each distinct
