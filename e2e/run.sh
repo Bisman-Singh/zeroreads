@@ -173,4 +173,4 @@ wait_for dashboards 300 -u 'admin:E2e-only-Passw0rd!' localhost:15601/api/status
 
 log "running assertions"
 ( cd "${ROOT}" && E2E_OUT="${WORK}/out" E2E_SEED="${SEED}" E2E_COUNT="${COUNT}" LOKI_URL="http://localhost:13100" GRAFANA_URL="http://localhost:13000" OPENSEARCH_URL="https://localhost:19200" DASHBOARDS_URL="http://localhost:15601" OPENSEARCH_PASSWORD='E2e-only-Passw0rd!' E2E_WORK="${WORK}" E2E_NS="${RUN_NS}" \
-  go test -tags e2e ./e2e/ -count=1 -v -timeout 60m ${E2E_RUN:+-run "${E2E_RUN}"} )
+  go test -tags e2e ./e2e/ -count=1 -v -timeout 100m ${E2E_RUN:+-run "${E2E_RUN}"} ) # about 30 minutes on an idle machine; each suite bounds its own time
