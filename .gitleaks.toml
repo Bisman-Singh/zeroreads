@@ -1,0 +1,7 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "fixed passwords of the throwaway e2e stack on the local kind cluster"
+regexTarget = "line"
+regexes = ['''E2e-only-Passw0rd!''', '''e2e-only-password''']

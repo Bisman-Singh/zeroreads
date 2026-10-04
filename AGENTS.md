@@ -31,6 +31,7 @@ a wrong "unread" removes logs someone needs.
 ./scripts/check.sh            # gofmt, vet (all build tags), unit tests: run before every commit
 golangci-lint run --build-tags e2e,docker ./...   # v2.14.0 built with the module's Go
 go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+gitleaks git --config .gitleaks.toml --redact .   # v8.30.1, every commit, as CI scans them
 ./scripts/check-runtimes.sh   # real Vector, Fluent Bit and Collector in docker
 ./e2e/run.sh                  # everything on kind (about 90 minutes); REUSE=1 E2E_RUN=<regexp> for one suite;
                               # E2E_CORPUS=1 also measures the public dashboard corpus (needs the internet)
