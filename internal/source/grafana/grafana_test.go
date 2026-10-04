@@ -22,7 +22,7 @@ func fakeGrafana(t *testing.T, org2Broken bool) *httptest.Server {
 	docs := map[string]any{
 		"/api/orgs": []any{map[string]any{"id": 2}, map[string]any{"id": 1}},
 		"1 /api/datasources": []any{
-			map[string]any{"uid": "loki", "name": "Loki", "type": "loki", "url": "http://loki:3100", "isDefault": true},
+			map[string]any{"uid": "loki", "name": "Loki", "type": "loki", "url": "http://ops:hunter2@loki:3100", "isDefault": true},
 			map[string]any{"uid": "prom", "name": "Prom", "type": "prometheus"},
 		},
 		"1 /apis/dashboard.grafana.app/v1/namespaces/default/dashboards": map[string]any{"items": []any{
@@ -192,6 +192,7 @@ func TestReadEveryStoredQuery(t *testing.T) {
 			t.Fatalf("%s: note %q, gap %q", origin, notes[origin], gaps[origin])
 		}
 	}
+	// The datasource's credentials never leave the reader: its URL reaches reports and job summaries.
 	if res.LokiDatasources[1]["loki"] != "http://loki:3100" || len(res.Orgs) != 2 || res.Orgs[0] != 1 {
 		t.Fatalf("orgs %v, loki datasources %v", res.Orgs, res.LokiDatasources)
 	}

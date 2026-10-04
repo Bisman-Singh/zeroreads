@@ -256,10 +256,21 @@ func (r *orgReader) datasources(ctx context.Context) error {
 		if d.Type == "loki" {
 			r.lokiByUID[d.UID] = true
 			r.lokiByName[d.Name] = d.UID
-			r.res.LokiDatasources[r.org][d.UID] = d.URL
+			r.res.LokiDatasources[r.org][d.UID] = withoutUserinfo(d.URL)
 		}
 	}
 	return nil
+}
+
+// withoutUserinfo is a datasource URL without a user name or password in it: the URL is compared with
+// loki.url and shown in reports, verify's output and a job's step summary.
+func withoutUserinfo(s string) string {
+	u, err := url.Parse(s)
+	if err != nil {
+		return "(a URL that does not parse)"
+	}
+	u.User = nil
+	return u.String()
 }
 
 func isVariable(s string) bool { return strings.Contains(s, "$") || strings.Contains(s, "[[") }
