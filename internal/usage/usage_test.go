@@ -230,3 +230,41 @@ func TestUnpackRewritesTheLine(t *testing.T) {
 		t.Fatalf("a filter before unpack excludes the packed line: %s", v.Reason)
 	}
 }
+
+// Each of these keeps the rule's line in Loki 3.7.8, which turns the regex into substring filters
+// that mean something else, so none may be decided as not reading it. The controls are shapes whose
+// substring filters mean the same, and stay exact.
+func TestRegexesLokiTurnsIntoSubstringFilters(t *testing.T) {
+	rule := func(line string) Rule {
+		return Rule{ID: "r", Scope: map[string]string{"service_name": "checkout"}, Language: automaton.MustCompile(`\A` + regexp.QuoteMeta(line) + `\z`)}
+	}
+	for _, c := range []struct{ query, line string }{
+		{`{service_name="checkout"} !~ "GET.*(healthz|readyz)"`, "GET /healthz 200 3ms"},
+		{`sum(count_over_time({service_name="checkout"} !~ "GET.*(healthz|readyz)" [5m]))`, "GET /healthz 200 3ms"},
+		{`{service_name="checkout"} !~ "healthz|readyz|"`, "cache refreshed in 12ms"},
+		{`{service_name="checkout"} !~ "probe(?:ok|.*passed)"`, "probe kube passed"},
+		{`{service_name="checkout"} |~ "user(Created|Deleted)(Event|Command)"`, "userCreated id=42"},
+		{`{service_name="checkout"} |~ "(?i:k)(?-i)ey=[0-9]+|K"`, "kafka lag"},
+		{`{service_name="checkout"} |~ ".+"`, "\n"},
+	} {
+		if v := verdict(t, c.query, rule(c.line)); !v.Used {
+			t.Errorf("%s decided as not reading %q: %s", c.query, c.line, v.Reason)
+		}
+	}
+	for _, c := range []struct {
+		query, line string
+		used        bool
+	}{
+		{`{service_name="checkout"} |~ "healthz"`, "GET /readyz", false},
+		{`{service_name="checkout"} |~ ".*healthz.*"`, "GET /readyz", false},
+		{`{service_name="checkout"} |~ "healthz|readyz"`, "GET /livez", false},
+		{`{service_name="checkout"} !~ "healthz|readyz"`, "GET /readyz", false},
+		{`{service_name="checkout"} !~ "(healthz)"`, "GET /healthz", false},
+		{`{service_name="checkout"} !~ "GET /[a-z]+z"`, "GET /readyz", false},
+	} {
+		v := verdict(t, c.query, rule(c.line))
+		if v.Used != c.used || len(v.Widened) > 0 {
+			t.Errorf("%s on %q: used %v (want %v), widened %v", c.query, c.line, v.Used, c.used, v.Widened)
+		}
+	}
+}

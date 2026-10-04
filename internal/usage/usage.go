@@ -212,6 +212,7 @@ var kinds = []struct{ phrase, kind string }{
 	{"structured records", "line filter on structured records"},
 	{"case-insensitive", "case-insensitive filter"},
 	{"re-serialised", "regex that Loki re-serialises with another meaning"},
+	{"substring filters", "regex that Loki turns into substring filters"},
 	{"pattern filter", "pattern filter (|> or !>)"},
 	{"ip filter", "ip() filter"},
 	{"too complex", "too complex to decide"},
@@ -322,12 +323,16 @@ func positiveExprs(f logql.Filter) ([]string, bool, string) {
 		if err != nil {
 			return nil, false, fmt.Sprintf("regex %q does not parse", f.Value)
 		}
+		if lokiRewrites(ast.Simplify()) && !rewriteKeepsMeaning(ast.Simplify()) {
+			return nil, false, rewrittenByLoki(f.Value)
+		}
 		out := []string{f.Value}
 		// Loki re-serialises regexes before compiling them; include that form too.
 		out = append(out, ast.Simplify().String())
 		if hasFold(ast) {
-			// Loki may evaluate case-insensitive literals with unicode.ToLower equality.
-			out = append(out, lowerVariant(ast).String())
+			// Loki may evaluate case-insensitive literals with unicode.ToLower equality, and its regex
+			// parser can carry one alternative's case-insensitivity over to another's shared prefix.
+			out = append(out, lowerVariant(ast).String(), foldAll(ast).String())
 		}
 		return out, true, ""
 	}
@@ -347,6 +352,9 @@ func exactPattern(f logql.Filter) (*automaton.Pattern, bool, string) {
 		ast, err := syntax.Parse(f.Value, syntax.Perl)
 		if err != nil {
 			return nil, false, fmt.Sprintf("regex %q does not parse", f.Value)
+		}
+		if lokiRewrites(ast.Simplify()) && !rewriteKeepsMeaning(ast.Simplify()) {
+			return nil, false, rewrittenByLoki(f.Value)
 		}
 		if hasFold(ast) {
 			return nil, false, fmt.Sprintf("case-insensitive negative regex %q not modelled", f.Value)
@@ -489,4 +497,86 @@ func Covers(sel logql.Selection, r Rule) bool {
 		}
 	}
 	return true
+}
+
+// Loki 3.7.8 turns a line-filter regex into substring filters when its simplified form is made only of
+// literals, alternations, concatenations, groups, .*, .+ and empty matches, and that does not keep
+// every regex's meaning: a .* between a literal and an alternation is dropped, and so is an empty or .*
+// alternative. Such a regex is modelled only in the shapes whose substring filters match the same
+// lines. A regex with any other part stays a regex in Loki and is modelled as one.
+
+// lokiRewrites reports whether Loki may turn the simplified regex re into substring filters.
+func lokiRewrites(re *syntax.Regexp) bool {
+	switch re.Op {
+	case syntax.OpLiteral, syntax.OpEmptyMatch:
+		return true
+	case syntax.OpStar, syntax.OpPlus:
+		return re.Sub[0].Op == syntax.OpAnyCharNotNL
+	case syntax.OpConcat, syntax.OpAlternate, syntax.OpCapture:
+		for _, s := range re.Sub {
+			if !lokiRewrites(s) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// rewriteKeepsMeaning reports whether a regex Loki turns into substring filters is one whose filters
+// match the same lines: one literal, alone or between .*, or an alternation of literals that share
+// their flags.
+func rewriteKeepsMeaning(re *syntax.Regexp) bool {
+	re = uncapture(re)
+	switch re.Op {
+	case syntax.OpLiteral:
+		return true
+	case syntax.OpConcat:
+		literals := 0
+		for _, s := range re.Sub {
+			s = uncapture(s)
+			switch {
+			case s.Op == syntax.OpLiteral:
+				literals++
+			case s.Op == syntax.OpStar && s.Sub[0].Op == syntax.OpAnyCharNotNL:
+			default:
+				return false
+			}
+		}
+		return literals == 1
+	case syntax.OpAlternate:
+		first := uncapture(re.Sub[0])
+		for _, s := range re.Sub {
+			s = uncapture(s)
+			if s.Op != syntax.OpLiteral || s.Flags != first.Flags {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func uncapture(re *syntax.Regexp) *syntax.Regexp {
+	for re.Op == syntax.OpCapture {
+		re = re.Sub[0]
+	}
+	return re
+}
+
+func rewrittenByLoki(expr string) string {
+	return fmt.Sprintf("regex %q is turned by Loki into substring filters that may keep other lines", expr)
+}
+
+// foldAll is re with every literal case-insensitive.
+func foldAll(re *syntax.Regexp) *syntax.Regexp {
+	c := *re
+	c.Sub = nil
+	for _, s := range re.Sub {
+		c.Sub = append(c.Sub, foldAll(s))
+	}
+	if c.Op == syntax.OpLiteral {
+		c.Flags |= syntax.FoldCase
+	}
+	return &c
 }

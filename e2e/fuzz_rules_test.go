@@ -147,6 +147,29 @@ func (g *fzGen) token(fr fzRule) string {
 
 func (g *fzGen) regex(fr fzRule) string {
 	s := regexp.QuoteMeta(g.token(fr))
+	tok := func() string { return regexp.QuoteMeta(g.token(fr)) }
+	// Shapes Loki 3.7.8 turns into substring filters with another meaning: a .* before an alternation,
+	// empty and .* alternatives, two alternations after a literal, mixed case flags, and .+.
+	switch g.r.IntN(26) {
+	case 14:
+		return s + ".*(" + tok() + "|" + tok() + ")"
+	case 15:
+		return "(" + s + "|" + tok() + "|)"
+	case 16:
+		return "(" + s + "|.*" + tok() + ")"
+	case 17:
+		return s + "(" + tok() + "|" + tok() + ")(" + tok() + "|" + tok() + ")"
+	case 18:
+		return ".+"
+	case 19:
+		r := []rune(g.token(fr))
+		first := regexp.QuoteMeta(string(r[:1]))
+		return "(?i:" + first + ")(?-i)" + regexp.QuoteMeta(string(r[1:])) + "|" + strings.ToUpper(first)
+	case 20:
+		return s + "(?:" + tok() + "|.*" + tok() + ")"
+	case 21:
+		return "(" + s + "|" + tok() + ")"
+	}
 	switch g.r.IntN(14) {
 	case 0:
 		return "(?i)" + s

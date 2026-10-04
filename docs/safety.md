@@ -19,6 +19,11 @@ exactly is treated as reading more, never less:
 - label filters and parsers never narrow what a query reads, and a filter after `line_format`,
   `decolorize` or `unpack` (which replace the line) is not used to exclude anything
 - pattern (`|>`) and `ip()` filters, and case-insensitive negative regex filters, are ignored
+- a regex filter that Loki turns into substring filters is ignored unless those mean the same: Loki
+  3.7.8 rewrites a regex made only of literals, alternations, `.*`, `.+` and empty parts, and drops
+  a `.*` before an alternation and an empty or `.*` alternative, so `!~ "GET.*(healthz|readyz)"`
+  keeps health checks there; only one literal, alone or between `.*`, and an alternation of plain
+  literals are modelled, as those rewrites keep the regex's meaning
 - a line filter on a structured (JSON) record reads every line of that service
 
 OpenSearch requests and stored queries are modelled per service, more coarsely. A request reads every
@@ -52,7 +57,8 @@ re-checked with the real regular expression engine before it is shown.
 modelled: the line shown is one the query really returns (the e2e suite stores each such line in Loki
 and checks the query returns it). Any other reader carries the assumptions behind it: a label filter,
 a filter after `line_format`, a template variable, a selector without the scope label, a pattern or
-`ip()` filter, a case-insensitive filter modelled as both of Loki's readings, a query that does not
+`ip()` filter, a case-insensitive filter modelled as both of Loki's readings, a regex Loki turns
+into substring filters, a query that does not
 parse, an OpenSearch request decided per service. Each assumption only widens what the query reads,
 so an assumed reader can block a rule that is in fact safe, never the reverse. The report counts
 exact and assumed readers and names the assumptions, so the over-blocking in an install can be seen

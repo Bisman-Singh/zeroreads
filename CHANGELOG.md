@@ -11,6 +11,8 @@ The first release. Everything below is new.
 - Usage evidence from Loki's query log (queries, live tails and pattern requests, each proven visible
   with a marker), the Loki ruler, every Grafana object that stores a Loki query, and OpenSearch (beta).
 - Every evidence gap blocks every rule until fixed or acknowledged.
+- Line-filter regexes are decided as Loki runs them: a regex Loki turns into substring filters with
+  another meaning, such as `!~ "GET.*(healthz|readyz)"`, counts as reading every line.
 - A Grafana Loki datasource that is not classified counts as the analysed Loki and is reported.
 - Warning and error lines are never acted on: at analysis, and by a runtime guard in every Collector,
   Vector and Fluent Bit rule. Telemetry Policy output cannot carry the guard and needs

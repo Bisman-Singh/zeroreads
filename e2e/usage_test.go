@@ -269,6 +269,18 @@ func (g *queryGen) token() string {
 
 func (g *queryGen) regex() string {
 	s := regexp.QuoteMeta(g.token())
+	tok := func() string { return regexp.QuoteMeta(g.token()) }
+	// Shapes Loki 3.7.8 turns into substring filters, some with another meaning.
+	switch g.r.IntN(14) {
+	case 8:
+		return s + ".*(" + tok() + "|" + tok() + ")"
+	case 9:
+		return "(" + s + "|" + tok() + "|)"
+	case 10:
+		return "(" + s + "|.*" + tok() + ")"
+	case 11:
+		return ".+"
+	}
 	switch g.r.IntN(8) {
 	case 0:
 		return "(?i)" + strings.ToUpper(s)
