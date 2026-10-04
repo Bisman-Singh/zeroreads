@@ -24,7 +24,7 @@ archives:
       - goos: windows
         formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    files: [LICENSE, NOTICE, README.md]
+    files: [LICENSE, NOTICE, THIRD_PARTY_LICENSES, README.md]
 
 checksum:
   name_template: checksums.txt
@@ -48,7 +48,7 @@ dockers_v2:
     tags: ["{{ .Version }}", "v{{ .Major }}"]
     dockerfile: Dockerfile.release
     platforms: [linux/amd64, linux/arm64]
-    extra_files: [LICENSE, NOTICE]
+    extra_files: [LICENSE, NOTICE, THIRD_PARTY_LICENSES]
     labels:
       org.opencontainers.image.source: https://github.com/Bisman-Singh/sievelog
       org.opencontainers.image.version: "{{ .Version }}"

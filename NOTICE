@@ -3,7 +3,8 @@ Copyright the sievelog authors
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
-It includes the following third-party modules, each under its own license:
+It includes the following third-party modules, each under its own license. The Go standard library's
+and each module's license and notice files are reproduced in THIRD_PARTY_LICENSES.
 
 - github.com/cespare/xxhash/v2@v2.3.0 (MIT)
 - github.com/go-logr/logr@v1.4.4 (Apache-2.0)
