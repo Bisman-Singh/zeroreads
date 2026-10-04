@@ -609,7 +609,7 @@ func hasNonEmptyMatcher(ms []Matcher) bool {
 				return true
 			}
 		case "=~":
-			re, err := regexp.Compile(`\A(?:` + m.Value + `)\z`)
+			re, err := regexp.Compile(`\A(?s:` + m.Value + `)\z`)
 			if err != nil || !re.MatchString("") {
 				return true
 			}

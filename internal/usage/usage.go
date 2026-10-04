@@ -265,7 +265,8 @@ func matchLabel(m logql.Matcher, val string) (ok, known bool) {
 		if foldsCase(m.Value) {
 			return false, false
 		}
-		re, err := regexp.Compile(`\A(?:` + m.Value + `)\z`)
+		// Loki anchors a stream matcher's regex as ^(?s:...)$: a dot matches a newline in a value too.
+		re, err := regexp.Compile(`\A(?s:` + m.Value + `)\z`)
 		if err != nil {
 			return false, false
 		}

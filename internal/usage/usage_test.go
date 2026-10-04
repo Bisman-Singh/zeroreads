@@ -268,3 +268,15 @@ func TestRegexesLokiTurnsIntoSubstringFilters(t *testing.T) {
 		}
 	}
 }
+
+// Loki matches a stream matcher's regex with a dot that also matches a newline, so a scope value with a
+// newline in it is selected by check.+.
+func TestStreamMatcherDotMatchesNewline(t *testing.T) {
+	r := Rule{ID: "r", Scope: map[string]string{"service_name": "check\nout"}, Language: automaton.MustCompile(`\Ahello\z`)}
+	if v := verdict(t, `{service_name=~"check.+"}`, r); !v.Used {
+		t.Fatalf("decided as not reading: %s", v.Reason)
+	}
+	if v := verdict(t, `{service_name=~".+", service_name!~"check.+"}`, r); v.Used {
+		t.Fatalf("a negated matcher that excludes the value reads it: %s", v.Reason)
+	}
+}
