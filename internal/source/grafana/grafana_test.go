@@ -354,6 +354,42 @@ func TestDashboardDatasourceVariables(t *testing.T) {
 	}
 }
 
+// Grafana converts a classic panel that names its datasource by a variable or a name into a v2 query
+// with an empty group. Found on a public dashboard whose Loki panels read nothing in v2 and so were
+// missed whenever the classic list lagged: such a query is resolved like a classic panel's.
+func TestV2QueriesWithoutAGroup(t *testing.T) {
+	r := &orgReader{res: &Result{}, lokiByUID: map[string]bool{"l1": true}, lokiByName: map[string]string{"Logs": "l1"}, libraries: map[string]bool{}}
+	r.defaultDS.uid, r.defaultDS.typ = "l1", "loki"
+	query := func(ds any, expr string) any {
+		q := map[string]any{"kind": "DataQuery", "group": "", "spec": map[string]any{"expr": expr}}
+		if ds != nil {
+			q["datasource"] = map[string]any{"name": ds}
+		}
+		return map[string]any{"spec": map[string]any{"query": q}}
+	}
+	r.v2Dashboard("v", map[string]any{
+		"variables": []any{
+			map[string]any{"kind": "DatasourceVariable", "spec": map[string]any{"name": "loki_datasource", "pluginId": "loki"}},
+			map[string]any{"kind": "DatasourceVariable", "spec": map[string]any{"name": "datasource", "pluginId": "prometheus"}},
+		},
+		"elements": map[string]any{"panel-1": map[string]any{"kind": "Panel", "spec": map[string]any{"data": map[string]any{"spec": map[string]any{"queries": []any{
+			query("$loki_datasource", `{a="b"} |= "x"`),
+			query("$datasource", `up`),
+			query("Logs", `{c="d"}`),
+			query("prom-uid", `rate(x[1m])`),
+			query(nil, `{e="f"}`),
+		}}}}}},
+	})
+	var got []string
+	for _, q := range r.res.Queries {
+		got = append(got, q.Origin+"="+strings.Join(q.Datasources, ","))
+	}
+	sort.Strings(got)
+	if want := []string{"dashboard:v/panel-1/0=*", "dashboard:v/panel-1/2=l1", "dashboard:v/panel-1/4=l1"}; !slices.Equal(got, want) {
+		t.Fatalf("%v, want %v", got, want)
+	}
+}
+
 // flakyGrafana serves one Loki dashboard that the search API always finds, while the list answers
 // empty for the first emptyLists calls (as Grafana 13.2.2 did right after an import) and the single
 // read answers with getStatus.

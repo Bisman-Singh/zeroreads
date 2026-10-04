@@ -301,9 +301,18 @@ func (r *orgReader) v2Query(q map[string]any) ([]string, string) {
 	}
 	spec, _ := q["spec"].(map[string]any)
 	expr, _ := spec["expr"].(string)
-	if group != "loki" && !isVariable(group) {
-		return nil, ""
+	switch {
+	case group == "loki" || isVariable(group):
+		uids, _ := r.resolve(map[string]any{"uid": uid, "type": "loki"})
+		return uids, expr
+	case group == "":
+		// Grafana leaves the group empty when converting a panel that names its datasource by a
+		// variable or a name. It is resolved as a classic panel's datasource is: a declared variable
+		// by its plugin type, a name by the org's datasources, nothing by the default datasource.
+		if uids, inherit := r.resolve(uid); !inherit {
+			return uids, expr
+		}
+		return r.defaultLoki(), expr
 	}
-	uids, _ := r.resolve(map[string]any{"uid": uid, "type": "loki"})
-	return uids, expr
+	return nil, ""
 }

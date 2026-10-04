@@ -79,6 +79,9 @@ The first release. Everything below is new.
 - A server answering with pages without end is stopped and read as a gap. Output is written through a
   link only when the user running sievelog owns it, and an existing file never gets wider permissions.
 - Every Grafana gap key names its Grafana and, when it is about one organisation, that org.
+- A Grafana v2 query that names its datasource by a variable or a name, as Grafana writes it when it
+  converts an older panel, is read like the classic panel; it used to read nothing, so its dashboard
+  was missed whenever the classic list lagged.
 - Grafana template variables are read wherever Grafana fills them in: as whole matchers, a grouping
   label, a label filter's value or a whole pipeline stage. Such queries in public dashboards failed to
   parse and so blocked every rule; now each only widens what the query reads.
