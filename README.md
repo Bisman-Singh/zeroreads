@@ -153,6 +153,9 @@ why, and prints the rules that remain safe: emit and deploy those to revert. It 
 lines of a rule's template that the rule no longer covers. Those pass through untouched, so drift never
 fails `verify`; it means the template is worth re-analysing.
 
+Run the Action on pushes and on a schedule, not on pull requests with your credentials: the Action
+reads `sievelog.yaml` from the checkout, and a pull request can change where it sends them.
+
 See [docs/configuration.md](docs/configuration.md) for every setting,
 [docs/safety.md](docs/safety.md) for exactly what is guaranteed and what is not, and
 [CHANGELOG.md](CHANGELOG.md) for what changed.

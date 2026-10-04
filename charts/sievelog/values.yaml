@@ -13,6 +13,9 @@ failedJobsHistoryLimit: 5
 backoffLimit: 0
 activeDeadlineSeconds: 900
 
+# config, rules, files and deployed are stored in a ConfigMap: keep credentials out of them and pass
+# them through env or envFrom instead, as the *_env settings and the pipelines' ${env:...} expect.
+
 # sievelog.yaml, verbatim. Paths inside it must point under /etc/sievelog.
 config: ""
 # rules.json produced by `sievelog analyze` and currently enforced, verbatim.
