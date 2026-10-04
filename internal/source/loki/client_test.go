@@ -456,3 +456,29 @@ func TestOpenTailOverTLS(t *testing.T) {
 		t.Fatalf("cancelled tail: %v", err)
 	}
 }
+
+// Only the marker query is the analyzer's own. A query that mentions the marker prefix, the natural way
+// to watch the query log without the probes, is a reader.
+func TestQueryLogSkipsOnlyMarkerQueries(t *testing.T) {
+	base := time.Now().Add(-time.Minute).UnixNano()
+	line := func(query string) string {
+		return `level=info caller=metrics.go:340 component=frontend org_id=fake query_type=filter query=` + strconv.Quote(query)
+	}
+	lines := []fakeLine{
+		{"loki", base, line(`{sievelog_probe="sievelog_probe_0a1b2c"}`)},
+		{"loki", base + 1, line(`{service_name="loki"} |= "caller=metrics.go" != "sievelog_probe_"`)},
+		{"loki", base + 2, `level=info msg="starting to tail logs" selectors="{sievelog_probe=\"sievelog_probe_0a1b2c\"}"`},
+		{"loki", base + 3, `level=info msg="starting to tail logs" selectors="{service_name=\"loki\"} != \"sievelog_probe_\""`},
+	}
+	calls := 0
+	srv := fakeLoki(t, lines, &calls)
+	defer srv.Close()
+	ql := &QueryLog{Logs: &Client{Base: srv.URL}, Selector: `{s="loki"}`}
+	res, err := ql.Read(context.Background(), time.Unix(0, base-1), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Queries) != 2 || res.Tails != 1 {
+		t.Fatalf("want the filtered query and the filtered tail as readers, got tails %d, queries %+v", res.Tails, res.Queries)
+	}
+}

@@ -116,13 +116,13 @@ func (r *logReader) line(e Entry) error {
 	switch {
 	case m["msg"] == "starting to tail logs" && m["selectors"] != "":
 		r.seen(e.TS)
-		if !strings.Contains(m["selectors"], probePrefix) {
+		if !isProbe(m["selectors"]) {
 			r.res.Tails++
 			r.other.add(m["selectors"], "tail", "tail", e.TS) // a person watching lines arrive
 		}
 	case m["path"] == "/loki/api/v1/patterns" && m["param_query"] != "":
 		r.seen(e.TS)
-		if !strings.Contains(m["param_query"], probePrefix) {
+		if !isProbe(m["param_query"]) {
 			r.res.Patterns++
 			r.other.add(m["param_query"], "patterns", "patterns", e.TS) // pattern counts change with the lines
 		}
@@ -142,7 +142,7 @@ func (r *logReader) seen(ts time.Time) {
 
 // query records one range or instant query line.
 func (r *logReader) query(m map[string]string, ts time.Time) {
-	if isOwnQuery(m["source"]) || strings.Contains(m["query"], probePrefix) {
+	if isOwnQuery(m["source"]) || isProbe(m["query"]) {
 		return // the analyzer's own reads and liveness markers are not usage
 	}
 	switch m["query_type"] {
@@ -269,6 +269,28 @@ func selectionsWithin(leg, query []logql.Selection) bool {
 // probePrefix starts every liveness marker. The marker selects a label no stream carries, so it
 // reads nothing, and it is never counted as usage.
 const probePrefix = "sievelog_probe_"
+
+// isProbe reports whether a logged query is a liveness marker: every selection names the marker label
+// with a marker value, so it reads no stream. A query that only mentions the prefix, in a line filter
+// say, is usage like any other.
+func isProbe(query string) bool {
+	q, err := logql.Parse(query)
+	if err != nil || len(q.Selections) == 0 {
+		return false
+	}
+	for _, sel := range q.Selections {
+		marked := false
+		for _, m := range sel.Matchers {
+			if m.Name == "sievelog_probe" && m.Op == "=" && strings.HasPrefix(m.Value, probePrefix) {
+				marked = true
+			}
+		}
+		if !marked {
+			return false
+		}
+	}
+	return true
+}
 
 // isOwnQuery recognises the analyzer's tag. Loki lower-cases query-tag values in its log line.
 func isOwnQuery(source string) bool { return strings.EqualFold(source, "sievelog") }
