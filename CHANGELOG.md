@@ -55,7 +55,7 @@ The first release. Everything below is new.
   expand `${...}`, VRL reads `{{ }}`), and emitters refuse unsafe rule IDs and actions they cannot
   enforce.
 - Default deny tightened: only the ruler's own 404 means no rules; credentials that cannot list
-  Grafana organisations leave a `grafana-orgs` gap; OpenSearch requests on names the cluster no longer
+  Grafana organisations leave a `grafana-orgs:<grafana>` gap; OpenSearch requests on names the cluster no longer
   has count as reads, and cross-cluster reads are a gap; a gap about one Grafana object names that
   object, so acknowledging it accepts nothing else; configured level fields add to the defaults, so an
   empty list can never switch the severity guard off.

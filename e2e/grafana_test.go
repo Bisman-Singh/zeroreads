@@ -283,3 +283,9 @@ func anyContains(m map[string]bool, sub string) bool {
 	}
 	return false
 }
+
+// grafanaGap is the key the report gives a gap that holds for a whole Grafana, such as other users'
+// query history: the kind and the Grafana's host.
+func grafanaGap(kind, url string) string {
+	return "grafana-" + kind + ":" + strings.TrimRight(strings.TrimPrefix(strings.TrimPrefix(url, "https://"), "http://"), "/")
+}

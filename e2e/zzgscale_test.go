@@ -165,8 +165,8 @@ collector:
     otlp_http/loki: {loki: true}
 policy:
   actions: [aggregate]
-  acknowledge: [ruler-not-checked, querylog-window, querylog-not-proven, grafana-orgs, grafana-queryhistory]
-`, run, lokiURL, gen.IPMaskName, gen.IPMaskPattern, base, collector)), 0o644)
+  acknowledge: [ruler-not-checked, querylog-window, querylog-not-proven, "%[7]s", "%[8]s"]
+`, run, lokiURL, gen.IPMaskName, gen.IPMaskPattern, base, collector, grafanaGap("orgs", base), grafanaGap("queryhistory", base))), 0o644)
 	t.Setenv("E2E_GSCALE_TOKEN", token)
 	outDir := filepath.Join(work, "gscale-out")
 	start = time.Now()
@@ -182,7 +182,7 @@ policy:
 	}
 	if len(rep.Gaps) > 0 {
 		for _, g := range rep.Gaps {
-			if !slices.Contains([]string{"ruler-not-checked", "querylog-window", "querylog-not-proven", "grafana-orgs", "grafana-queryhistory"}, g.Key) {
+			if !slices.Contains([]string{"ruler-not-checked", "querylog-window", "querylog-not-proven", grafanaGap("orgs", base), grafanaGap("queryhistory", base)}, g.Key) {
 				t.Fatalf("unexpected gap %s: %s", g.Key, g.Reason)
 			}
 		}

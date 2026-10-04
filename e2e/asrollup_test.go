@@ -107,8 +107,8 @@ collector:
 policy:
   actions: [rollup]
   experimental_rollup: true
-  acknowledge: [grafana-queryhistory, querylog-window]
-`, e.loki, gen.IPMaskName, gen.IPMaskPattern, grafanaURL, userPath)), 0o644)
+  acknowledge: ["%s", querylog-window]
+`, e.loki, gen.IPMaskName, gen.IPMaskPattern, grafanaURL, userPath, grafanaGap("queryhistory", grafanaURL))), 0o644)
 	os.Setenv("E2E_GRAFANA_PASSWORD", grafanaPass)
 	e.bin = filepath.Join(e.work, "sievelog")
 	if out, code := e.run(e.root, "go", "build", "-o", e.bin, "./cmd/sievelog"); code != 0 {

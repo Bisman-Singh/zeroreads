@@ -94,11 +94,11 @@ matter; write down why.
 | `querylog-unreadable`, `querylog-unparsed` | the query log could not be read or parsed | check the Loki URL and credentials in `evidence.query_log` |
 | `ruler-not-checked`, `ruler-unreadable` | Loki ruler rules were not read | set `evidence.ruler: true`, check ruler API access |
 | `grafana-not-configured` | no Grafana is configured | add every Grafana under `evidence.grafana`, or acknowledge if none reads this Loki |
-| `grafana-unreadable` | a Grafana could not be read | check its URL and credentials; the token needs read access to every org |
+| `grafana-unreadable:<grafana>` | that Grafana could not be read | check its URL and credentials; the token needs read access to every org |
 | `grafana-datasource-unmapped` | a Grafana Loki datasource is in neither `datasources` nor `other_datasources` | list it in `datasources` if it points at `loki.url`, otherwise in `other_datasources` |
-| `grafana-queryhistory` | only the credentials' own Explore history is readable | acknowledge, or accept that other users' history is invisible through the API |
-| `grafana-orgs` | only the credentials' own organisation was read | use a server admin's credentials, or acknowledge if this Grafana has one organisation |
-| `grafana-<kind>` | one kind of Grafana object could not be listed | grant the credentials access to it |
+| `grafana-queryhistory:<grafana>` | only the credentials' own Explore history is readable | acknowledge, or accept that other users' history is invisible through the API |
+| `grafana-orgs:<grafana>` | only the credentials' own organisation was read | use a server admin's credentials, or acknowledge if this Grafana has one organisation |
+| `grafana-<kind>:<grafana>/org<n>` | one kind of Grafana object could not be listed in that org | grant the credentials access to it |
 | `grafana-<kind>:<grafana>/org<n>/<object>` | one Grafana object could not be read | fix the object, or acknowledge exactly this one: the key names it, so a later broken object is a new gap |
 | `sink:<id>` | an exporter after the enforcement point has no evidence | map it under `collector.sinks` as `loki: true`, `opensearch: <name>`, or `exempt: <reason>` |
 | `derived:<id>` | a connector turns these logs into metrics | removing lines changes that metric; exempt it only if that is acceptable |

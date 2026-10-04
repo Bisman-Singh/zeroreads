@@ -112,7 +112,7 @@ collector:
   sinks:
     otlp_http/loki: {loki: true}
 policy:
-  acknowledge: [grafana-orgs, grafana-queryhistory]
+  acknowledge: ["grafana-orgs:localhost:13000", "grafana-queryhistory:localhost:13000"]
 EOF
 ( cd "${WORK}" && "${BIN}" analyze -c sievelog.yaml -o out ) | tail -3
 

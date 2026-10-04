@@ -162,9 +162,12 @@ price from your own invoice.
 ## Evidence gap keys
 
 Acknowledging a key in `policy.acknowledge` accepts every gap with exactly that key. A gap about one
-object names the object in its key, so acknowledging it never accepts another object's gap. A gap
-about a whole source (a query log that is not proven, query history, OpenSearch plugins) is accepted
-for every instance of that source.
+object names the object in its key, so acknowledging it never accepts another object's gap. Every
+Grafana gap names its Grafana (`<grafana>` is the host and port of its URL) and, when it is about one
+organisation, that org, so acknowledging it never accepts the same gap in another Grafana or org. Other
+gaps about a whole source (a query log that is not proven, OpenSearch plugins) are accepted for every
+instance of that source. Keys can hold colons, so quote them:
+`acknowledge: ["grafana-queryhistory:grafana.example:3000"]`.
 
 | Key | Meaning |
 |---|---|
@@ -177,10 +180,10 @@ for every instance of that source.
 | `querylog-window` | the query log starts after the evidence window starts |
 | `querylog-unreadable`, `querylog-unparsed` | the query log could not be read, or lines did not parse |
 | `ruler-not-checked`, `ruler-unreadable` | Loki ruler rules were not read |
-| `grafana-not-configured`, `grafana-unreadable` | no Grafana, or it could not be read |
-| `grafana-queryhistory` | only the credentials' own Explore history is readable |
-| `grafana-orgs` | the credentials cannot list organisations (a service account token never can), so only their own org was read |
-| `grafana-<kind>` | a kind of Grafana object (alert rules, library panels, ...) could not be listed |
+| `grafana-not-configured`, `grafana-unreadable:<grafana>` | no Grafana, or that one could not be read |
+| `grafana-queryhistory:<grafana>` | only the credentials' own Explore history is readable |
+| `grafana-orgs:<grafana>` | the credentials cannot list organisations (a service account token never can), so only their own org was read |
+| `grafana-<kind>:<grafana>/org<n>` | a kind of Grafana object (alert rules, library panels, ...) could not be listed in that org |
 | `grafana-<kind>:<grafana>/org<n>/<object>` | one Grafana object could not be read; the key names it, so acknowledging it accepts only that object |
 | `opensearch-unreadable` | the cluster, or its index catalog, could not be read |
 | `opensearch-audit-config-unreadable` | the audit configuration could not be read |

@@ -287,7 +287,7 @@ collector:
     otlp_http/loki: {loki: true}
     file/logs: {exempt: "e2e local copy"}
 policy:
-  acknowledge: [grafana-queryhistory, querylog-window]
+  acknowledge: ["grafana-queryhistory:grafana.sievelog-system.svc:3000", querylog-window]
 `, gen.IPMaskName, gen.IPMaskPattern)
 	values := map[string]any{
 		"image":  map[string]any{"repository": "sievelog/sievelog", "tag": "e2e", "pullPolicy": "Never"},
@@ -385,8 +385,8 @@ collector:
 policy:
   actions: [dedupe, sample]
   sample_percent: 30
-  acknowledge: [grafana-queryhistory, querylog-window]
-`, e.loki, gen.IPMaskName, gen.IPMaskPattern, grafanaURL, userPath)), 0o644)
+  acknowledge: ["%s", querylog-window]
+`, e.loki, gen.IPMaskName, gen.IPMaskPattern, grafanaURL, userPath, grafanaGap("queryhistory", grafanaURL))), 0o644)
 	os.Setenv("E2E_GRAFANA_PASSWORD", grafanaPass)
 	e.bin = filepath.Join(e.work, "sievelog")
 	if out, code := e.run(e.root, "go", "build", "-o", e.bin, "./cmd/sievelog"); code != 0 {

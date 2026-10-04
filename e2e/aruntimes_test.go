@@ -245,8 +245,8 @@ evidence:
 `+rc.section+`policy:
   actions: %s
   sample_percent: 30
-  acknowledge: [grafana-queryhistory, querylog-window]
-`, e.loki, gen.IPMaskName, gen.IPMaskPattern, grafanaURL, userPath, rc.actions)), 0o644)
+  acknowledge: ["%s", querylog-window]
+`, e.loki, gen.IPMaskName, gen.IPMaskPattern, grafanaURL, userPath, rc.actions, grafanaGap("queryhistory", grafanaURL))), 0o644)
 
 	// 1. Analyze.
 	outDir := filepath.Join(e.work, rc.name+"-out")

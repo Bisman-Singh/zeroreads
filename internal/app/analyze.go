@@ -731,7 +731,7 @@ func (c *Config) grafanaEvidence(ctx context.Context, rep *Report) ([]analyze.Us
 
 func (c *Config) readGrafana(ctx context.Context, g GrafanaConfig, rep *Report) ([]analyze.UsageQuery, []analyze.Gap) {
 	unreadable := func(err error) []analyze.Gap {
-		return []analyze.Gap{{Source: "grafana", Origin: g.URL, Key: "grafana-unreadable", Reason: err.Error()}}
+		return []analyze.Gap{{Source: "grafana", Origin: g.URL, Key: "grafana-unreadable:" + grafanaHost(g.URL), Reason: err.Error()}}
 	}
 	gc, err := g.client()
 	if err != nil {
@@ -760,18 +760,28 @@ func (c *Config) readGrafana(ctx context.Context, g GrafanaConfig, rep *Report) 
 	return qs, gaps
 }
 
-// grafanaGapKey names what a Grafana gap is about. A gap about one object (dashboard:uid/panel:3,
-// shorturl:id) names that object, with its Grafana and org, so acknowledging it accepts that object
-// only and not the next one that fails. A gap about a whole kind (every alert rule, query history)
-// is named by the kind.
+// grafanaGapKey names what a Grafana gap is about and where, so acknowledging it never accepts the same
+// failure in another Grafana or org. A gap about one object (dashboard:uid/panel:3, shorturl:id) names
+// that object, with its Grafana and org. A gap about a whole kind in one org (every alert rule, the
+// dashboards) names the kind, the Grafana and the org. The two that are limits of the credentials or the
+// API for a whole Grafana, organisations that cannot be listed and other users' query history, name the
+// kind and the Grafana.
 func grafanaGapKey(grafanaURL string, g grafana.Gap) string {
 	kind, _, object := strings.Cut(g.Origin, ":")
 	kind, _, _ = strings.Cut(kind, "/")
-	if !object {
-		return "grafana-" + kind
+	host := grafanaHost(grafanaURL)
+	switch {
+	case object:
+		return fmt.Sprintf("grafana-%s:%s/org%d/%s", kind, host, g.Org, g.Origin)
+	case kind == "orgs" || kind == "queryhistory":
+		return "grafana-" + kind + ":" + host
 	}
-	host := strings.TrimRight(strings.TrimPrefix(strings.TrimPrefix(grafanaURL, "https://"), "http://"), "/")
-	return fmt.Sprintf("grafana-%s:%s/org%d/%s", kind, host, g.Org, g.Origin)
+	return fmt.Sprintf("grafana-%s:%s/org%d", kind, host, g.Org)
+}
+
+// grafanaHost is a Grafana URL without its scheme and trailing slash, as gap keys name it.
+func grafanaHost(url string) string {
+	return strings.TrimRight(strings.TrimPrefix(strings.TrimPrefix(url, "https://"), "http://"), "/")
 }
 
 // analysedDatasources returns the Loki datasources whose queries read the analysed Loki: listed in

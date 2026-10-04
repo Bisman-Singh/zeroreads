@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "${ROOT}"
 W=.e2e/act
 mkdir -p "${W}"
-sed 's#http://loki.sievelog-system.svc:3100#http://host.docker.internal:13100#; s#http://grafana.sievelog-system.svc:3000#http://host.docker.internal:13000#' e2e/action/sievelog.yaml > "${W}/sievelog.yaml"
+sed 's#loki.sievelog-system.svc:3100#host.docker.internal:13100#g; s#grafana.sievelog-system.svc:3000#host.docker.internal:13000#g' e2e/action/sievelog.yaml > "${W}/sievelog.yaml"
 cp .e2e/loop-user.yaml "${W}/collector.yaml"
 cp .e2e/loop-out/rules.json "${W}/rules.json"
 K="kubectl --kubeconfig .e2e/kubeconfig --context kind-sievelog"

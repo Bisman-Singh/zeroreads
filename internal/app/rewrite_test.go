@@ -336,9 +336,11 @@ func TestGrafanaGapKeys(t *testing.T) {
 	}{
 		{"https://grafana.example:3000/", grafana.Gap{Org: 2, Origin: "dashboard:abc/panel:3"}, "grafana-dashboard:grafana.example:3000/org2/dashboard:abc/panel:3"},
 		{"http://g", grafana.Gap{Org: 1, Origin: "shorturl:s4"}, "grafana-shorturl:g/org1/shorturl:s4"},
-		{"http://g", grafana.Gap{Org: 1, Origin: "alertrules"}, "grafana-alertrules"},
-		{"http://g", grafana.Gap{Org: 1, Origin: "dashboards/v1"}, "grafana-dashboards"},
-		{"http://g", grafana.Gap{Org: 1, Origin: "queryhistory"}, "grafana-queryhistory"},
+		{"http://g", grafana.Gap{Org: 1, Origin: "alertrules"}, "grafana-alertrules:g/org1"},
+		{"http://g", grafana.Gap{Org: 7, Origin: "dashboards/v1"}, "grafana-dashboards:g/org7"},
+		{"http://g", grafana.Gap{Org: 1, Origin: "datasources"}, "grafana-datasources:g/org1"},
+		{"https://h:3000/", grafana.Gap{Org: 1, Origin: "queryhistory"}, "grafana-queryhistory:h:3000"},
+		{"http://g", grafana.Gap{Org: 3, Origin: "orgs"}, "grafana-orgs:g"},
 	} {
 		if got := grafanaGapKey(c.url, c.gap); got != c.want {
 			t.Fatalf("%+v: %s, want %s", c.gap, got, c.want)

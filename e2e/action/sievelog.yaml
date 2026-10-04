@@ -21,4 +21,4 @@ collector:
     otlp_http/loki: {loki: true}
     file/logs: {exempt: "e2e local copy"}
 policy:
-  acknowledge: [grafana-queryhistory, querylog-window]
+  acknowledge: ["grafana-queryhistory:grafana.sievelog-system.svc:3000", querylog-window]
