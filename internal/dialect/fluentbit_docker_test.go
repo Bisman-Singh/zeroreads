@@ -64,6 +64,8 @@ func TestOnigmoDialectAgreesWithFluentBit(t *testing.T) {
 		`^a.b$`,
 		`(?m)^a$`,
 		`\A(?:[^ ]{1,4})\z`,
+		`\AGET /api/[a-z]{4,264}/ 200\z`,
+		`\A[^ ]{1,1000}\z`,
 	}
 	traps := append(append([]string(nil), unicodeTraps...), "straße", "STRASSE", "ſtrasse", "a\nb", "x\na\ny")
 	for i, expr := range exprs {

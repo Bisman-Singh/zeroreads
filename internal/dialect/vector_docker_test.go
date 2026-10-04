@@ -64,6 +64,8 @@ func TestRustDialectAgreesWithVector(t *testing.T) {
 		`\bword\b`,
 		`^a.b$`,
 		`\A(?:[^ ]{1,4})\z`,
+		`\AGET /api/[a-z]{4,264}/ 200\z`,
+		`\A[^ ]{1,1000}\z`,
 	}
 	for i, expr := range exprs {
 		pat, err := Rust(expr)

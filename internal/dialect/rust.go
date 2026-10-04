@@ -62,8 +62,10 @@ func (e engine) translate(expr string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// The parsed tree is printed as it is: Simplify would expand x{n,m} into m-n nested groups, and
+	// Rust's regex refuses a pattern nested deeper than 250 levels.
 	var b strings.Builder
-	if err := e.print(&b, re.Simplify()); err != nil {
+	if err := e.print(&b, re); err != nil {
 		return "", err
 	}
 	return b.String(), nil
