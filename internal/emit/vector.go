@@ -80,8 +80,8 @@ func vrlString(s string) string {
 func (t VectorTarget) severityPaths() []string {
 	parents := []string{""}
 	for _, svc := range slices.Sorted(maps.Keys(t.FieldPaths)) {
-		if fp := t.FieldPaths[svc]; strings.LastIndex(fp, ".") > 0 {
-			parents = append(parents, fp[:strings.LastIndex(fp, ".")])
+		if p := vrlParent(t.FieldPaths[svc]); p != "" {
+			parents = append(parents, p)
 		}
 	}
 	var defaults []string
@@ -91,6 +91,24 @@ func (t VectorTarget) severityPaths() []string {
 		}
 	}
 	return withDefaults(defaults, t.SeverityPaths, sameString)
+}
+
+// vrlParent is a VRL path without its last segment, or "" for a path of one segment. A dot inside a
+// quoted segment, as in .body."log.level", does not separate segments.
+func vrlParent(path string) string {
+	last, quoted := -1, false
+	for i, r := range path {
+		switch {
+		case r == '"':
+			quoted = !quoted
+		case r == '.' && !quoted:
+			last = i
+		}
+	}
+	if last <= 0 {
+		return ""
+	}
+	return path[:last]
 }
 
 // vrlField quotes a field name for a VRL path when it is not a plain identifier.

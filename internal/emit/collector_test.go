@@ -859,3 +859,12 @@ func TestSeverityGuardKeepsDefaults(t *testing.T) {
 		}
 	}
 }
+
+// A quoted segment's dots belong to the segment: the severity fields sit next to the whole field.
+func TestVRLParentKeepsQuotedSegments(t *testing.T) {
+	for path, want := range map[string]string{".msg": "", ".body.msg": ".body", `.body."log.msg"`: ".body", `."a.b".c`: `."a.b"`} {
+		if got := vrlParent(path); got != want {
+			t.Fatalf("parent of %s is %q, want %q", path, got, want)
+		}
+	}
+}

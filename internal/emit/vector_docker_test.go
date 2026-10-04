@@ -349,3 +349,18 @@ func TestVectorWritesValuesLiterally(t *testing.T) {
 		}
 	}
 }
+
+// Vector runs a configuration whose field path has a quoted segment holding a dot.
+func TestVectorAcceptsQuotedFieldPaths(t *testing.T) {
+	target := vectorTarget()
+	target.FieldPaths = map[string]string{"orders": `.body."log.msg"`}
+	rules := []Rule{{ID: "r-field", ScopeAttr: "service.name", ScopeValue: "orders", Language: `\Ahandled route in 5ms\z`, Field: "msg", Action: "drop"}}
+	cfg, err := Vector([][]byte{[]byte(vectorUserConfig)}, target, rules, Enforce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, _ := runVector(t, cfg, []record{{service: "checkout", text: "INFO hello", ts: 1790000000000000000}})
+	if len(events) != 1 {
+		t.Fatalf("vector passed %d events", len(events))
+	}
+}
