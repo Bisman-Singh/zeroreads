@@ -13,7 +13,7 @@ modules() {
       GOOS=${os} GOARCH=${arch} CGO_ENABLED=0 go list -deps \
         -f '{{with .Module}}{{if not .Main}}{{.Path}}@{{.Version}}{{end}}{{end}}' ./cmd/zeroreads
     done
-  done | sort -u
+  done | LC_ALL=C sort -u # byte order, so the file is the same whichever machine writes it
 }
 
 section() { # title, file
@@ -53,9 +53,9 @@ if [ "${1:-}" = "--check" ]; then
     echo "${OUT} is out of date: run scripts/third-party.sh" >&2
     exit 1
   fi
-  if [ "$(sed -n 's/^- \([^ ]*\) (.*/\1/p' NOTICE | sort)" != "$(modules)" ]; then
+  if [ "$(sed -n 's/^- \([^ ]*\) (.*/\1/p' NOTICE | LC_ALL=C sort)" != "$(modules)" ]; then
     echo "NOTICE does not list exactly the linked modules:" >&2
-    diff <(sed -n 's/^- \([^ ]*\) (.*/\1/p' NOTICE | sort) <(modules) >&2 || true
+    diff <(sed -n 's/^- \([^ ]*\) (.*/\1/p' NOTICE | LC_ALL=C sort) <(modules) >&2 || true
     exit 1
   fi
   exit 0
