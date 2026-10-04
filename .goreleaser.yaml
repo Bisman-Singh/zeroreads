@@ -24,7 +24,13 @@ archives:
       - goos: windows
         formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    files: [LICENSE, NOTICE, THIRD_PARTY_LICENSES, README.md]
+    # The same files, owners and times on every machine, so an archive is the same bytes wherever it is built.
+    builds_info: {owner: root, group: root, mtime: "{{ .CommitDate }}"}
+    files:
+      - {src: LICENSE, info: {owner: root, group: root, mtime: "{{ .CommitDate }}"}}
+      - {src: NOTICE, info: {owner: root, group: root, mtime: "{{ .CommitDate }}"}}
+      - {src: THIRD_PARTY_LICENSES, info: {owner: root, group: root, mtime: "{{ .CommitDate }}"}}
+      - {src: README.md, info: {owner: root, group: root, mtime: "{{ .CommitDate }}"}}
 
 checksum:
   name_template: checksums.txt
