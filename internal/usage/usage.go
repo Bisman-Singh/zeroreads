@@ -241,6 +241,9 @@ func matcherAssumption(m logql.Matcher) string {
 
 // labelVariableAssumption names a matcher whose label name is a template variable.
 func labelVariableAssumption(m logql.Matcher) string {
+	if m.Op == "" {
+		return fmt.Sprintf("stream matchers %s are a template variable", m.Name)
+	}
 	return fmt.Sprintf("stream matcher %s%s%q uses a template variable as its label name", m.Name, m.Op, m.Value)
 }
 
@@ -457,6 +460,9 @@ func Covers(sel logql.Selection, r Rule) bool {
 		return false
 	}
 	for _, m := range sel.Matchers {
+		if hasVariable(m.Name) {
+			return false // Grafana may fill in matchers that select only some of the rule's streams
+		}
 		val, scoped := r.Scope[m.Name]
 		if !scoped {
 			continue

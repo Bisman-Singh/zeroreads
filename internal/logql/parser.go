@@ -235,7 +235,7 @@ func (p *parser) labelList() error {
 		return err
 	}
 	for !p.isOp(")") {
-		if p.peek().kind != tIdent {
+		if k := p.peek().kind; k != tIdent && k != tVariable { // Grafana fills a variable in with label names
 			return p.errf("expected label, got %s", p.peek())
 		}
 		p.i++
@@ -416,7 +416,8 @@ func (p *parser) groupingSpec() (string, []string, error) {
 	}
 	var labels []string
 	for !p.isOp(")") {
-		if p.peek().kind != tIdent {
+		// A variable is filled in with label names; it is no stream label, so no rollup rewrites over it.
+		if k := p.peek().kind; k != tIdent && k != tVariable {
 			return "", nil, p.errf("expected label, got %s", p.peek())
 		}
 		labels = append(labels, p.next().text)
@@ -619,13 +620,17 @@ func hasNonEmptyMatcher(ms []Matcher) bool {
 }
 
 // matcher parses one matcher. Its label name may be a Grafana template variable, which Grafana
-// replaces before Loki runs the query; such a matcher cannot be evaluated here.
+// replaces before Loki runs the query; such a matcher cannot be evaluated here. A variable can also
+// stand for whole matchers (an ad hoc filter): it has no operator, and only narrows the selector.
 func (p *parser) matcher() (Matcher, error) {
 	name := p.peek()
 	if name.kind != tIdent && name.kind != tVariable {
 		return Matcher{}, p.errf("expected label name, got %s", name)
 	}
 	p.i++
+	if name.kind == tVariable && (p.isOp(",") || p.isOp("}")) {
+		return Matcher{Name: name.text}, nil
+	}
 	op := p.peek()
 	if op.kind != tOp || (op.text != "=" && op.text != "!=" && op.text != "=~" && op.text != "!~") {
 		return Matcher{}, p.errf("expected matcher operator, got %s", op)
@@ -717,6 +722,14 @@ func (p *parser) filterValue(kind string) (Filter, error) {
 func (p *parser) pipeStage(sel *Selection, inRange bool) error {
 	p.i++ // |
 	t := p.peek()
+	if t.kind == tVariable {
+		// Grafana fills in a stage, a parser like json for example. It may rewrite the line, so no line
+		// filter after it is trusted to exclude anything.
+		p.i++
+		sel.Rewritten = true
+		sel.Unmodelled = append(sel.Unmodelled, "pipeline stage "+t.text+" is a template variable")
+		return nil
+	}
 	if t.kind != tIdent && (t.kind != tOp || t.text != "(") {
 		return p.errf("unexpected %s after |", t)
 	}
@@ -918,7 +931,7 @@ func (p *parser) labelFilterTerm() error {
 	p.i++
 	v := p.peek()
 	switch {
-	case v.kind == tString || v.kind == tNumber || v.kind == tDuration || v.kind == tBytes:
+	case v.kind == tString || v.kind == tNumber || v.kind == tDuration || v.kind == tBytes || v.kind == tVariable:
 		p.i++
 	case v.kind == tOp && v.text == "-" && (p.peekAt(1).kind == tNumber || p.peekAt(1).kind == tDuration):
 		p.i += 2

@@ -15,7 +15,9 @@ case-insensitive shortcut and its rewriting of regular expressions. Whatever can
 exactly is treated as reading more, never less:
 
 - a query that does not parse reads and counts every line
-- a template variable in a filter or matcher reads every line
+- a template variable reads every line it could stand for: in a filter or matcher value, as a
+  matcher's label name or as whole matchers (which only narrow), as a grouping label, and as a whole
+  pipeline stage, after which no line filter is trusted to exclude anything
 - label filters and parsers never narrow what a query reads, and a filter after `line_format`,
   `decolorize` or `unpack` (which replace the line) is not used to exclude anything
 - pattern (`|>`) and `ip()` filters, and case-insensitive negative regex filters, are ignored

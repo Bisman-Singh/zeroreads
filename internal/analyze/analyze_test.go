@@ -51,7 +51,7 @@ func TestDecide(t *testing.T) {
 }
 
 func TestUnparsedQueryBlocksEverything(t *testing.T) {
-	recs, err := Decide([]Candidate{heartbeat, cache}, []UsageQuery{{Source: "grafana", Origin: "p", Expr: `{service_name="checkout"} | $unknown_syntax`}}, nil, nil, DefaultPolicy())
+	recs, err := Decide([]Candidate{heartbeat, cache}, []UsageQuery{{Source: "grafana", Origin: "p", Expr: `{service_name="checkout"} | {Application="ASM-OAP"}`}}, nil, nil, DefaultPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}

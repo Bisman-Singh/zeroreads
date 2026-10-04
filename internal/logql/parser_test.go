@@ -42,9 +42,31 @@ func TestVariableLabelNames(t *testing.T) {
 	if q, err := Parse(`{${lbl}="x"} |= "y"`); err != nil || q.Selections[0].Matchers[0].Name != "${lbl}" {
 		t.Fatalf("%v %+v", err, q)
 	}
-	for _, bad := range []string{`{$="x"}`, `{a="b"} | $x`, `{a="b"} |= $x`, `${}`, `sum by ($l) (rate({a="b"}[1m]))`} {
+	for _, bad := range []string{`{$="x"}`, `{a="b"} |= $x`, `${}`, `{$x}`} {
 		if _, err := Parse(bad); err == nil {
 			t.Fatalf("%s parsed", bad)
+		}
+	}
+}
+
+// Grafana also fills variables in for whole matchers (ad hoc filters), a pipeline stage, a grouping
+// label and a label filter's value. Queries of each kind in the public dashboard corpus failed to
+// parse, and so blocked every rule. Each is read now as an assumption that only widens.
+func TestVariablesGrafanaFillsIn(t *testing.T) {
+	q, err := Parse(`{$filter_falco_logs,priority=~"$priority"} |= "x"`)
+	if err != nil || q.Selections[0].Matchers[0] != (Matcher{Name: "$filter_falco_logs"}) {
+		t.Fatalf("a variable as whole matchers: %v %+v", err, q)
+	}
+	q, err = Parse(`{a="b"} | $logparser | flow=~"$dir" |= "x"`)
+	if err != nil || !q.Selections[0].Rewritten || len(q.Selections[0].Unmodelled) == 0 || !strings.Contains(q.Selections[0].Unmodelled[0], "$logparser") {
+		t.Fatalf("a variable as a stage must make later line filters untrusted: %v %+v", err, q)
+	}
+	for _, ok := range []string{
+		`sort_desc(topk(10, sum by ($AggregateBy) (count_over_time({a="b"}[5m]))))`,
+		`sum by (species)(count_over_time({species="$bird"} | unpack | confidence > $threshold [$__auto]))`,
+	} {
+		if _, err := Parse(ok); err != nil {
+			t.Fatalf("%s: %v", ok, err)
 		}
 	}
 }

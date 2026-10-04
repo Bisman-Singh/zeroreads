@@ -280,3 +280,22 @@ func TestStreamMatcherDotMatchesNewline(t *testing.T) {
 		t.Fatalf("a negated matcher that excludes the value reads it: %s", v.Reason)
 	}
 }
+
+// After a variable stage, which may rewrite the line, a line filter excludes nothing; variable matchers
+// only narrow, so the rest of the selector still decides; neither lets a rollup cover the query.
+func TestVariablesGrafanaFillsIn(t *testing.T) {
+	r := Rule{ID: "r", Scope: map[string]string{"service_name": "checkout"}, Language: automaton.MustCompile(`\Ahello\z`)}
+	if v := verdict(t, `{service_name="checkout"} | $parser |= "zzz"`, r); !v.Used {
+		t.Fatalf("a line filter after a variable stage excluded the rule: %s", v.Reason)
+	}
+	if v := verdict(t, `{$adhoc, service_name="checkout"} |= "zzz"`, r); v.Used {
+		t.Fatalf("variable matchers made a filter that excludes the rule read it: %s", v.Reason)
+	}
+	if v := verdict(t, `{$adhoc, service_name="checkout"}`, r); !v.Used || len(v.Widened) == 0 {
+		t.Fatalf("variable matchers must read as an assumption: %+v", v)
+	}
+	q, _ := logql.Parse(`sum(count_over_time({$adhoc, service_name="checkout"}[5m]))`)
+	if Covers(q.Selections[0], r) {
+		t.Fatal("a query with variable matchers covers every line of the rule")
+	}
+}
