@@ -173,12 +173,12 @@ func Markdown(rep *Report) string {
 		fmt.Fprintf(&b, "- OpenSearch: %d audit entries read, %d requests and stored queries that may read documents\n", rep.Evidence.OpenSearchAuditLines, rep.Evidence.OpenSearchUses)
 	}
 	for _, s := range rep.Evidence.Sinks {
-		fmt.Fprintf(&b, "- Sink %s\n", s)
+		fmt.Fprintf(&b, "- Sink %s\n", Code(s))
 	}
 	if len(rep.Gaps) > 0 {
 		b.WriteString("\n## Evidence gaps\n\nEach blocks every rule until fixed or acknowledged in `policy.acknowledge`.\n\n")
 		for _, g := range rep.Gaps {
-			fmt.Fprintf(&b, "- `%s` (%s %s): %s\n", g.Key, g.Source, g.Origin, g.Reason)
+			fmt.Fprintf(&b, "- %s (%s %s): %s\n", Code(g.Key), g.Source, Code(g.Origin), Code(g.Reason))
 		}
 	}
 	markdownReaders(&b, rep.Readers)
@@ -189,11 +189,11 @@ func Markdown(rep *Report) string {
 	if len(rep.Skipped) > 0 {
 		b.WriteString("## Templates without a rule\n\n")
 		for _, s := range rep.Skipped {
-			fmt.Fprintf(&b, "- %s `%s`: %s\n", s.Service, s.Template, s.Reason)
+			fmt.Fprintf(&b, "- %s %s: %s\n", Code(s.Service), Code(s.Template), Code(s.Reason))
 		}
 	}
 	for _, n := range rep.Notes {
-		fmt.Fprintf(&b, "\nNote: %s\n", n)
+		fmt.Fprintf(&b, "\nNote: %s\n", Code(n))
 	}
 	return b.String()
 }
@@ -212,12 +212,12 @@ func markdownReaders(b *strings.Builder, s ReaderSummary) {
 
 // markdownRule is one rule's section of the report.
 func markdownRule(b *strings.Builder, r analyze.Recommendation) {
-	fmt.Fprintf(b, "### %s `%s` (%s)\n\n", r.ID, r.Candidate.Template, r.Candidate.Service)
+	fmt.Fprintf(b, "### %s %s (%s)\n\n", r.ID, Code(r.Candidate.Template), Code(r.Candidate.Service))
 	fmt.Fprintf(b, "- Action: **%s**", r.Action)
 	if r.Action == "sample" {
 		fmt.Fprintf(b, " (keep %d%%)", r.Keep)
 	}
-	fmt.Fprintf(b, "\n- Language: `%s`\n- Volume: %.0f lines, %s over %s\n", r.Candidate.Language, r.Candidate.Lines, humanBytes(r.Candidate.Bytes), r.Candidate.Window)
+	fmt.Fprintf(b, "\n- Language: %s\n- Volume: %.0f lines, %s over %s\n", Code(r.Candidate.Language), r.Candidate.Lines, humanBytes(r.Candidate.Bytes), r.Candidate.Window)
 	if r.RemovedBytesPerDay > 0 {
 		bound := ""
 		if r.UpperBound {
@@ -226,12 +226,12 @@ func markdownRule(b *strings.Builder, r analyze.Recommendation) {
 		fmt.Fprintf(b, "- Removes %s/day%s\n", humanBytes(r.RemovedBytesPerDay), bound)
 	}
 	for _, bl := range r.Blockers {
-		fmt.Fprintf(b, "- Blocked: %s\n", bl)
+		fmt.Fprintf(b, "- Blocked: %s\n", Code(bl))
 	}
 	if len(r.Rewrites) > 0 {
 		b.WriteString("- Rewrites (apply with `sievelog rewrite -apply` before or with enforcing; each returns the same numbers before, during and after the switch):\n")
 		for _, rw := range r.Rewrites {
-			fmt.Fprintf(b, "  - %s %s\n    - from `%s`\n    - to `%s`\n", rw.Source, rw.Origin, rw.Old, rw.New)
+			fmt.Fprintf(b, "  - %s %s\n    - from %s\n    - to %s\n", rw.Source, Code(rw.Origin), Code(rw.Old), Code(rw.New))
 		}
 	}
 	for _, rd := range r.Readers {
@@ -239,12 +239,12 @@ func markdownRule(b *strings.Builder, r analyze.Recommendation) {
 		if rd.Counting {
 			kind = "counts"
 		}
-		fmt.Fprintf(b, "  - %s %s: `%s`", rd.Source, rd.Origin, rd.Expr)
+		fmt.Fprintf(b, "  - %s %s: %s", rd.Source, Code(rd.Origin), Code(rd.Expr))
 		if rd.Witness != "" {
-			fmt.Fprintf(b, " %s e.g. `%s`", kind, rd.Witness)
+			fmt.Fprintf(b, " %s e.g. %s", kind, Code(rd.Witness))
 		}
 		if len(rd.Widened) > 0 {
-			fmt.Fprintf(b, " (assumed: %s)", strings.Join(rd.Widened, "; "))
+			fmt.Fprintf(b, " (assumed: %s)", Code(strings.Join(rd.Widened, "; ")))
 		}
 		b.WriteString("\n")
 	}
@@ -475,4 +475,22 @@ func EmitFluentBit(c *Config, rf *RulesFile, mode emit.Mode) ([]byte, error) {
 	f := c.FluentBit
 	return emit.FluentBit(files, emit.FluentBitTarget{Match: f.Match, After: f.After, ScopeKey: f.ScopeKey, TextKey: f.TextKey,
 		FieldKeys: f.FieldKeys, MetricsTag: f.MetricsTag, SeverityKeys: f.SeverityKeys, ArchiveOutputs: f.ArchiveOutputs}, rules, mode)
+}
+
+// StepSummary is the verify result as Markdown for a GitHub job's step summary; every reason is a code
+// span, so a query or origin cannot add headings, links, comments or HTML to the page.
+func StepSummary(res *VerifyResult, total int) string {
+	var b strings.Builder
+	if len(res.Violations) == 0 {
+		fmt.Fprintf(&b, "### sievelog verify\n\nAll %d enforced rules are still safe.\n", total)
+		return b.String()
+	}
+	fmt.Fprintf(&b, "### sievelog verify\n\n%d of %d enforced rules are no longer safe.\n\n", len(res.Violations), total)
+	for _, v := range res.Violations {
+		fmt.Fprintf(&b, "- %s\n", Code(v.RuleID))
+		for _, r := range v.Reasons {
+			fmt.Fprintf(&b, "  - %s\n", Code(r))
+		}
+	}
+	return b.String()
 }

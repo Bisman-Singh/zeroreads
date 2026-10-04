@@ -37,7 +37,7 @@ func TestReaderSummaryCountsAssumptions(t *testing.T) {
 		"5 readers across all rules. 1 read the rule's lines exactly",
 		"4 are assumed to read more than they may",
 		"- label filter: 2\n",
-		"`two kinds` (assumed: label filter level = \"x\"; line filter |= \"z\" after the line is rewritten)",
+		"`two kinds` (assumed: `label filter level = \"x\"; line filter |= \"z\" after the line is rewritten`)",
 	} {
 		if !strings.Contains(md, w) {
 			t.Fatalf("report.md lacks %q:\n%s", w, md)

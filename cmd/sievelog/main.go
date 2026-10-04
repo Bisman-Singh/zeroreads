@@ -79,7 +79,7 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "sievelog:", err)
+		fmt.Fprintln(os.Stderr, "sievelog:", app.Printable(err.Error()))
 		os.Exit(1)
 	}
 	os.Exit(code)
@@ -140,7 +140,7 @@ func runEmit(args []string) error {
 			return err
 		}
 		for _, s := range skips {
-			fmt.Fprintf(os.Stderr, "not emitted as a policy: %s: %s\n", s.RuleID, s.Reason)
+			fmt.Fprintf(os.Stderr, "not emitted as a policy: %s: %s\n", s.RuleID, app.Printable(s.Reason))
 		}
 		fmt.Fprintf(os.Stderr, "policies verified against %s\n", emit.PolicyRuntime)
 		return writeOutput(*out, b)
@@ -212,7 +212,7 @@ func runRewrite(ctx context.Context, args []string) (int, error) {
 		if r.Replaced == 1 {
 			queries = "query"
 		}
-		fmt.Printf("rewrite %s %s: %d %s replaced, %s (%s)\n", r.Store, r.Target, r.Replaced, queries, state, r.File)
+		fmt.Printf("rewrite %s %s: %d %s replaced, %s (%s)\n", r.Store, app.Printable(r.Target), r.Replaced, queries, app.Printable(state), r.File)
 	}
 	if *apply && failed == 0 {
 		if err := app.SaveRules(*rulesPath, rf); err != nil {
@@ -285,7 +285,7 @@ func runVerify(ctx context.Context, args []string) (int, error) {
 	for _, v := range res.Violations {
 		fmt.Printf("verify: rule %s is no longer safe:\n", v.RuleID)
 		for _, r := range v.Reasons {
-			fmt.Printf("  - %s\n", r)
+			fmt.Printf("  - %s\n", app.Printable(r))
 		}
 	}
 	fmt.Printf("verify: %d of %d rules must be reverted; %d remain safe\n", len(res.Violations), len(rf.Rules), len(res.Keep.Rules))
@@ -306,23 +306,11 @@ func writeStepSummary(res *app.VerifyResult, total int) error {
 	if path == "" {
 		return nil
 	}
-	var b strings.Builder
-	if len(res.Violations) == 0 {
-		fmt.Fprintf(&b, "### sievelog verify\n\nAll %d enforced rules are still safe.\n", total)
-	} else {
-		fmt.Fprintf(&b, "### sievelog verify\n\n%d of %d enforced rules are no longer safe.\n\n", len(res.Violations), total)
-		for _, v := range res.Violations {
-			fmt.Fprintf(&b, "- `%s`\n", v.RuleID)
-			for _, r := range v.Reasons {
-				fmt.Fprintf(&b, "  - %s\n", r)
-			}
-		}
-	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, app.PrivateFile)
 	if err != nil {
 		return err
 	}
-	if _, err := f.WriteString(b.String()); err != nil {
+	if _, err := f.WriteString(app.StepSummary(res, total)); err != nil {
 		_ = f.Close() // the write error is the one to report
 		return err
 	}
@@ -384,10 +372,10 @@ func runReconcile(ctx context.Context, args []string) (int, error) {
 		}
 	}
 	for _, r := range res.Rules {
-		fmt.Printf("reconcile: %s %s (%s): before %.0f lines, after %.0f lines: %s, %s\n", r.RuleID, r.Service, r.Action, r.BeforeLines, r.AfterLines, r.Status, r.Detail)
+		fmt.Printf("reconcile: %s %s (%s): before %.0f lines, after %.0f lines: %s, %s\n", r.RuleID, app.Printable(r.Service), r.Action, r.BeforeLines, r.AfterLines, r.Status, app.Printable(r.Detail))
 	}
 	for _, s := range res.Services {
-		fmt.Printf("reconcile: service %s stored %.0f B/h before, %.0f B/h after\n", s.Service, s.BeforeBytesRate, s.AfterBytesRate)
+		fmt.Printf("reconcile: service %s stored %.0f B/h before, %.0f B/h after\n", app.Printable(s.Service), s.BeforeBytesRate, s.AfterBytesRate)
 	}
 	if !res.OK {
 		return 4, nil

@@ -223,7 +223,7 @@ func TestReportFiles(t *testing.T) {
 		t.Fatalf("%v %+v", err, rf)
 	}
 	md, _ := os.ReadFile(dir + "/report.md")
-	for _, want := range []string{"`k`", "Blocked: because", "counts e.g. `w`", "to `{a=\"c\"}`", "a note"} {
+	for _, want := range []string{"`k`", "Blocked: `because`", "counts e.g. `w`", "to `{a=\"c\"}`", "a note"} {
 		if !strings.Contains(string(md), want) {
 			t.Fatalf("report.md lacks %q:\n%s", want, md)
 		}
