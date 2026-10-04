@@ -170,6 +170,26 @@ E2E_CORPUS=1 ./e2e/run.sh     # also measures the public Loki dashboard corpus (
 ./e2e/demo/run.sh             # after e2e/run.sh: the OpenTelemetry demo as a realistic workload
 ```
 
+## Verify a release
+
+Each release's checksums and image are signed keylessly by the release workflow at the release's tag.
+With cosign:
+
+```sh
+V=0.1.0
+ID=https://github.com/Bisman-Singh/sievelog/.github/workflows/release.yml@refs/tags/v$V
+ISSUER=https://token.actions.githubusercontent.com
+cosign verify-blob --certificate checksums.txt.pem --signature checksums.txt.sig \
+  --certificate-identity "$ID" --certificate-oidc-issuer "$ISSUER" checksums.txt
+sha256sum -c checksums.txt --ignore-missing
+cosign verify --certificate-identity "$ID" --certificate-oidc-issuer "$ISSUER" ghcr.io/bisman-singh/sievelog:$V
+```
+
+The archives also hold `THIRD_PARTY_LICENSES`, and rebuilding a commit gives the same archive bytes. To
+run exactly the verified image, set `image.digest` in the Helm chart,
+and in a workflow use the image by digest (`uses: docker://ghcr.io/bisman-singh/sievelog@sha256:...`
+with the `verify` arguments) instead of the Action's tag.
+
 ## Security
 
 Report vulnerabilities privately, as described in [SECURITY.md](SECURITY.md).

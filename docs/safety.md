@@ -153,5 +153,12 @@ under, and, given `-deployed`, when the deployed pipeline config is not exactly 
   the transport layer and are not in the REST audit log, which is a gap as well. OpenSearch keeps no
   alias history, so a wildcard request that matched an alias removed since is judged against today's
   names.
+- **rules.json is policy.** `emit`, `verify` and `rewrite -apply` act on what it says, and `rewrite
+  -apply` writes the rewritten queries it holds with the credentials it is given. Review a change to it
+  like a change to code.
+- **Memory follows the largest answer.** One answer from Loki, Grafana or OpenSearch is read up to
+  512 MiB, the size a single timestamp's page of Loki lines can reach, and reading one that large takes
+  about twice that. The chart's 512Mi limit fits normal answers; raise it if a page that large is
+  expected.
 - **Other log services are not evidence sources:** only Loki and OpenSearch are read. A pipeline that
   also sends logs to another service reports it as a gap until it is exempted.

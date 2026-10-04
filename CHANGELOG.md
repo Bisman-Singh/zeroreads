@@ -71,6 +71,22 @@ The first release. Everything below is new.
   images pinned to digests.
 - Money is reported only at your own prices (`pricing.per_gb`, `pricing.per_million_lines`,
   `pricing.currency`); no list prices are built in, since region, plan and discounts change them.
+- Text from queries, logs and remote answers is escaped wherever it is printed: it cannot start a new
+  line, a workflow command or a terminal sequence, nor change the Markdown of a report or step summary.
+- A read follows redirects only on its own server and a write follows none, so credentials never go
+  elsewhere and a redirected write is never taken for a success. Grafana datasource URLs are kept
+  without their user and password.
+- A server answering with pages without end is stopped and read as a gap. Output is written through a
+  link only when the user running sievelog owns it, and an existing file never gets wider permissions.
+- Every Grafana gap key names its Grafana and, when it is about one organisation, that org.
+- A stream matcher's dot matches a newline in a label value, as Loki's does; a query that only
+  mentions the liveness marker's prefix is a reader; a term added to a rewritten query needs its own
+  rewrite before a rollup.
+- Vector accepts rules for values of any observed length, and field paths with dotted quoted names.
+- Releases: only a commit on main that passed CI is released, by the one job with write rights, with
+  pinned and checked tools; the job verifies the signatures and image it published; archives carry
+  every module's licence and notice files and are the same bytes when a commit is rebuilt; every
+  commit is scanned for secrets.
 
 ### Supported versions
 

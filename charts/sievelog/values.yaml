@@ -1,6 +1,7 @@
 image:
   repository: ghcr.io/bisman-singh/sievelog
   tag: ""          # defaults to the chart appVersion
+  digest: ""       # sha256:... runs exactly the image a release published and signed, whatever the tag
   pullPolicy: IfNotPresent
 
 # How often enforced rules are re-checked. A failed Job (exit code 3) means a rule is no longer safe;
