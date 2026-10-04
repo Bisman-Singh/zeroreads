@@ -50,7 +50,8 @@ func TestCorpusCoverage(t *testing.T) {
 	imported := importDashboards(t, base, org, dashboards)
 
 	// Grafana shows dashboards written seconds ago only after a while: right after the import a read
-	// can miss the last ones. The measure is taken once two reads in a row find the same queries.
+	// can miss the last ones. The measure is taken once two reads in a row find the same queries. On a
+	// busy machine Grafana has taken over two minutes to settle, so the wait is bounded by time.
 	start := time.Now()
 	var res grafana.Result
 	previous := ""
@@ -71,10 +72,11 @@ func TestCorpusCoverage(t *testing.T) {
 		if current == previous {
 			break
 		}
-		if attempt == 6 {
-			t.Fatalf("the corpus read differently %d times in a row", attempt)
+		if time.Since(start) > 10*time.Minute {
+			t.Fatalf("the corpus read differently %d times in a row over %s; the last two reads: %s", attempt, time.Since(start).Round(time.Second), readDiff(previous, current))
 		}
 		previous = current
+		time.Sleep(2 * time.Second)
 	}
 	// Grafana serves each dashboard in two schema versions, and the reader keeps a query from both when
 	// they name its datasource differently: harmless for decisions, but the measure counts each distinct
@@ -205,6 +207,35 @@ func ownLabel(sel logql.Selection) []string {
 		return []string{sel.Matchers[0].Name}
 	}
 	return nil
+}
+
+// readDiff says how two corpus reads differ: their sizes and the first few queries only one of them
+// returned, so an unstable read can be told apart from a slow one.
+func readDiff(a, b string) string {
+	in := func(s string) map[string]bool {
+		m := map[string]bool{}
+		for _, k := range strings.Split(s, "\n") {
+			if k != "" {
+				m[k] = true
+			}
+		}
+		return m
+	}
+	ma, mb := in(a), in(b)
+	only := func(x, y map[string]bool) []string {
+		var out []string
+		for k := range x {
+			if !y[k] {
+				out = append(out, strings.ReplaceAll(k, "\x00", " "))
+			}
+		}
+		sort.Strings(out)
+		if len(out) > 5 {
+			out = append(out[:5], fmt.Sprintf("and %d more", len(out)-5))
+		}
+		return out
+	}
+	return fmt.Sprintf("%d then %d queries; only in the first %q; only in the second %q", len(ma), len(mb), only(ma, mb), only(mb, ma))
 }
 
 // corpusGet fetches a public URL, retrying transient failures, identifying itself politely.
