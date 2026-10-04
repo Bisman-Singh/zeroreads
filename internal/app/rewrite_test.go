@@ -406,3 +406,18 @@ func TestReportMoneyAtOwnPrices(t *testing.T) {
 		t.Fatalf("report:\n%s", md)
 	}
 }
+
+// A rule group whose name holds a slash is still the group that is rewritten.
+func TestRulerGroupWithASlash(t *testing.T) {
+	q := `sum(count_over_time({service_name="checkout"} |= "GET" [5m]))`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "prod:\n  - name: team/alerts\n    rules:\n      - alert: HighGets\n        expr: '"+q+"'\n")
+	}))
+	defer srv.Close()
+	c := &Config{Loki: LokiConfig{URL: srv.URL}}
+	rw := analyze.Rewrite{Store: "loki-ruler", Path: rulerPath("prod", "team/alerts", "HighGets"), Old: q, New: "NEW"}
+	res, err := c.rewriteRuler(context.Background(), objectPath(rw), map[string]string{q: "NEW"}, t.TempDir()+"/00-loki-ruler.yaml", false)
+	if err != nil || res.Replaced != 1 {
+		t.Fatalf("group team/alerts was not rewritten: %v %+v", err, res)
+	}
+}

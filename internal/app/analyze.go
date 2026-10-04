@@ -710,7 +710,7 @@ func (c *Config) rulerEvidence(ctx context.Context, rep *Report) ([]analyze.Usag
 	var qs []analyze.UsageQuery
 	for _, r := range rules {
 		qs = append(qs, analyze.UsageQuery{Source: "loki-ruler", Origin: fmt.Sprintf("%s/%s/%s (%s)", r.Namespace, r.Group, r.Name, r.Kind), Expr: r.Expr,
-			Store: "loki-ruler", StoreURL: c.Loki.URL, Path: r.Namespace + "/" + r.Group + "/" + r.Name})
+			Store: "loki-ruler", StoreURL: c.Loki.URL, Path: rulerPath(r.Namespace, r.Group, r.Name)})
 	}
 	return qs, nil
 }

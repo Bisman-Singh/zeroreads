@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -94,6 +95,12 @@ func Rewrites(ctx context.Context, c *Config, rf *RulesFile, dir string, apply b
 		rf.RewritesAppliedAt = now.UTC()
 	}
 	return out, nil
+}
+
+// rulerPath names a ruler rule as namespace/group/name, each part escaped, so a slash in a group's name
+// never moves the split to another group.
+func rulerPath(namespace, group, name string) string {
+	return url.PathEscape(namespace) + "/" + url.PathEscape(group) + "/" + url.PathEscape(name)
 }
 
 // objectPath is the object a stored query lives in: the dashboard, library panel or alert rule, or
@@ -298,7 +305,12 @@ func (c *Config) rewriteGrafana(ctx context.Context, base string, org int64, pat
 
 func (c *Config) rewriteRuler(ctx context.Context, path string, edits map[string]string, file string, apply bool) (RewriteOutcome, error) {
 	res := RewriteOutcome{File: file}
-	ns, group, _ := strings.Cut(path, "/")
+	escNS, escGroup, _ := strings.Cut(path, "/")
+	ns, err1 := url.PathUnescape(escNS)
+	group, err2 := url.PathUnescape(escGroup)
+	if err := errors.Join(err1, err2); err != nil {
+		return RewriteOutcome{}, fmt.Errorf("ruler path %s: %w", path, err)
+	}
 	lc, err := c.lokiClient()
 	if err != nil {
 		return res, err
