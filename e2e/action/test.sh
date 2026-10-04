@@ -24,7 +24,7 @@ sed 's#image: docker://.*#image: docker://zeroreads/zeroreads:act#' action.yml >
 grep -q 'docker://zeroreads/zeroreads:act' "${W}/action/action.yml" || { echo "FAIL: the action's image line was not rewritten"; exit 1; }
 sed "s#uses: ./\$#uses: ./${W}/action#" e2e/action/verify.yml > "${W}/verify.yml"
 grep -q "uses: ./${W}/action" "${W}/verify.yml" || { echo "FAIL: the workflow does not use the local action copy"; exit 1; }
-run() { act push -W "${W}/verify.yml" --bind -P ubuntu-latest=node:20-bookworm-slim --pull=false 2>&1; }
+run() { act push -W "${W}/verify.yml" --bind --rm -P ubuntu-latest=node:20-bookworm-slim --pull=false 2>&1; } # --rm: the second run fails on purpose, and act keeps a failed job's container
 out=$(run) || true
 echo "${out}" | grep -q "Job succeeded" || { echo "${out}"; echo "FAIL: expected the action to pass"; exit 1; }
 curl -sf -X POST "http://admin:e2e-only-password@localhost:13000/api/dashboards/db" -H 'Content-Type: application/json' \
