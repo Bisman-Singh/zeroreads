@@ -12,8 +12,11 @@ require (
 	github.com/usetero/policy-go/policy v1.12.1
 	go.opentelemetry.io/collector/component v1.67.0
 	go.opentelemetry.io/collector/component/componenttest v0.161.0
-	go.opentelemetry.io/collector/confmap v1.67.0
+	go.opentelemetry.io/collector/confmap v1.68.0
+	go.opentelemetry.io/collector/confmap/provider/envprovider v1.67.0
+	go.opentelemetry.io/collector/confmap/provider/yamlprovider v1.67.0
 	go.opentelemetry.io/collector/connector/connectortest v0.161.0
+	go.opentelemetry.io/collector/consumer v1.67.0
 	go.opentelemetry.io/collector/consumer/consumertest v0.161.0
 	go.opentelemetry.io/collector/pdata v1.67.0
 	go.opentelemetry.io/collector/processor v1.67.0
@@ -68,16 +71,13 @@ require (
 	go.opentelemetry.io/collector/client v1.67.0 // indirect
 	go.opentelemetry.io/collector/component/componentstatus v0.161.0 // indirect
 	go.opentelemetry.io/collector/config/configoptional v1.67.0 // indirect
-	go.opentelemetry.io/collector/confmap/provider/envprovider v1.67.0 // indirect
-	go.opentelemetry.io/collector/confmap/provider/yamlprovider v1.67.0 // indirect
 	go.opentelemetry.io/collector/connector v0.161.0 // indirect
 	go.opentelemetry.io/collector/connector/xconnector v0.161.0 // indirect
-	go.opentelemetry.io/collector/consumer v1.67.0 // indirect
 	go.opentelemetry.io/collector/consumer/consumererror v0.161.0 // indirect
 	go.opentelemetry.io/collector/consumer/xconsumer v0.161.0 // indirect
 	go.opentelemetry.io/collector/extension v1.67.0 // indirect
 	go.opentelemetry.io/collector/extension/xextension v0.161.0 // indirect
-	go.opentelemetry.io/collector/featuregate v1.67.0 // indirect
+	go.opentelemetry.io/collector/featuregate v1.68.0 // indirect
 	go.opentelemetry.io/collector/internal/componentalias v0.161.0 // indirect
 	go.opentelemetry.io/collector/internal/fanoutconsumer v0.161.0 // indirect
 	go.opentelemetry.io/collector/pdata/pprofile v0.161.0 // indirect
