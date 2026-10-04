@@ -282,13 +282,10 @@ func (d *decision) readers(id string, c Candidate, lang *automaton.Pattern, roll
 		for _, sel := range p.query.Selections {
 			if rewrite.Compensated(p.query, sel, id, d.languages) {
 				// A sievelog rewrite's raw-line term: summed with the rollup counts, it keeps the
-				// query's numbers only if this rule is rolled up.
-				if chosen == nil {
-					out = append(out, Reader{Source: p.Source, Origin: p.Origin, Expr: p.Expr, Counting: true, Compensated: true,
-						Reason: "already rewritten for a rollup of these lines; any other removal changes its count"})
-					compensated = true
-				}
-				break
+				// query's numbers only if this rule is rolled up. The query's other selections are
+				// still read: one edited in after the rewrite can count the same lines again.
+				compensated = true
+				continue
 			}
 			if v := usage.Evaluate(sel, rule); v.Used && (chosen == nil || len(chosen.Widened) > 0 && len(v.Widened) == 0) {
 				if first == nil {
@@ -300,7 +297,11 @@ func (d *decision) readers(id string, c Candidate, lang *automaton.Pattern, roll
 				}
 			}
 		}
-		if chosen != nil && !compensated {
+		if chosen == nil && compensated {
+			out = append(out, Reader{Source: p.Source, Origin: p.Origin, Expr: p.Expr, Counting: true, Compensated: true,
+				Reason: "already rewritten for a rollup of these lines; any other removal changes its count"})
+		}
+		if chosen != nil {
 			// Counting comes from the first reading selection, as the decision has always used it.
 			rd := Reader{Source: p.Source, Origin: p.Origin, Expr: p.Expr, Counting: first.Counting, Witness: chosen.Witness, Reason: chosen.Reason, Widened: chosen.Widened}
 			if rollupAllowed {
