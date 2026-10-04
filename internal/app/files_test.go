@@ -49,3 +49,17 @@ func TestWriteFile(t *testing.T) {
 		t.Fatalf("device: %v", err)
 	}
 }
+
+// Writing never widens an existing file's permissions, through a link or not.
+func TestWriteFileKeepsStricterModes(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "report.md")
+	if err := os.WriteFile(p, []byte("mine"), PrivateFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteFile(p, []byte("report"), SharedFile); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(p); fi.Mode().Perm() != PrivateFile {
+		t.Fatalf("a private file became %v", fi.Mode().Perm())
+	}
+}

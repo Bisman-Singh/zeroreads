@@ -20,12 +20,24 @@ const (
 // WriteFile writes data through a temporary file in the same directory and a rename, so a reader
 // never sees half a file and a failed write leaves the previous file whole. That matters most for
 // rules.json, which rewrite -apply updates in place.
+//
+// A link is written through, so the file it points to is replaced and the link stays, but only a link
+// the user running sievelog owns: one that someone else planted in a shared directory would make
+// sievelog overwrite a file of their choosing. An existing file never gets wider permissions.
 func WriteFile(path string, data []byte, perm os.FileMode) error {
-	if target, err := filepath.EvalSymlinks(path); err == nil {
-		path = target // replace the file a link points to, not the link
+	if li, err := os.Lstat(path); err == nil && li.Mode()&os.ModeSymlink != 0 {
+		if !ownedByUs(li) {
+			return fmt.Errorf("%s is a link someone else owns; not writing through it", path)
+		}
+		if target, err := filepath.EvalSymlinks(path); err == nil {
+			path = target
+		}
 	}
-	if fi, err := os.Stat(path); err == nil && !fi.Mode().IsRegular() {
-		return os.WriteFile(path, data, perm) // a device or pipe, such as /dev/stdout, cannot be replaced
+	if fi, err := os.Stat(path); err == nil {
+		if !fi.Mode().IsRegular() {
+			return os.WriteFile(path, data, perm) // a device or pipe, such as /dev/stdout, cannot be replaced
+		}
+		perm &= fi.Mode().Perm()
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
