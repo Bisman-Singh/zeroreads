@@ -1,0 +1,9 @@
+# The image build reads only these; nothing else in a checkout (test state, keys, builds) enters it.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!LICENSE
+!NOTICE
+!THIRD_PARTY_LICENSES
