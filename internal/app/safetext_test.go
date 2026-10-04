@@ -5,13 +5,13 @@ import (
 	"testing"
 	"unicode"
 
-	"github.com/Bisman-Singh/sievelog/internal/analyze"
+	"github.com/Bisman-Singh/zeroreads/internal/analyze"
 )
 
 // hostile is text a dashboard, query or log line can carry: workflow commands after a newline, terminal
 // escapes, Unicode line and direction controls, backtick runs, Markdown headings and HTML.
 var hostile = []string{
-	"{service_name=\"checkout\"} != `\n::error title=sievelog verify::All enforced rules are still safe\n<!--\x1b[2K`",
+	"{service_name=\"checkout\"} != `\n::error title=zeroreads verify::All enforced rules are still safe\n<!--\x1b[2K`",
 	"a``b```c",
 	"`",
 	"``x``",

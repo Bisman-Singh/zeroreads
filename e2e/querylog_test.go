@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/source/loki"
+	"github.com/Bisman-Singh/zeroreads/internal/source/loki"
 )
 
 // userQuery runs a query the way a person or dashboard would: untagged by the analyzer.
@@ -56,7 +56,7 @@ func TestQueryLogCapturesEveryQuery(t *testing.T) {
 		}
 	}
 	// A query the analyzer sends itself must never count as usage.
-	own := `{service_name="checkout"} |= "sievelog-own-marker"`
+	own := `{service_name="checkout"} |= "zeroreads-own-marker"`
 	if _, err := client.QueryRange(ctx, own, time.Now().Add(-time.Minute), time.Now(), 10); err != nil {
 		t.Fatal(err)
 	}

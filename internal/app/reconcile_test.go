@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/emit"
+	"github.com/Bisman-Singh/zeroreads/internal/emit"
 )
 
 // fakeLokiInstant answers instant metric queries from a table keyed by a substring of the query and
@@ -52,8 +52,8 @@ func TestReconcileStatuses(t *testing.T) {
 		"count_over_time({service_name=\"svc\"} |~ `\\Aroll-lost\\z`":  {100, 0},
 		"count_over_time({service_name=\"svc\"} |~ `\\Aarch-ok\\z`":    {100, 0},
 		"count_over_time({service_name=\"svc\"} |~ `\\Aarch-kept\\z`":  {100, 2},
-		"`sievelog rollup r-roll-ok`":                                  {0, 97},
-		"`sievelog rollup r-roll-raw`":                                 {0, 90},
+		"`zeroreads rollup r-roll-ok`":                                 {0, 97},
+		"`zeroreads rollup r-roll-raw`":                                {0, 90},
 	})
 	defer srv.Close()
 	c := &Config{Loki: LokiConfig{URL: srv.URL}, Scope: ScopeConfig{LokiLabel: "service_name"}}

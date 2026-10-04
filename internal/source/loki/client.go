@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/fetch"
+	"github.com/Bisman-Singh/zeroreads/internal/fetch"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -50,7 +50,7 @@ func (c *Client) chunk() time.Duration { return cmp.Or(c.Chunk, 24*time.Hour) }
 
 // Tag is sent as X-Query-Tags on every request, so the analyzer's own queries can be told apart in
 // Loki's query log and never counted as usage.
-const Tag = "Source=sievelog"
+const Tag = "Source=zeroreads"
 
 // Entry is one log line with its stream labels.
 type Entry struct {

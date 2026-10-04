@@ -11,8 +11,8 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/Bisman-Singh/sievelog/internal/automaton"
-	"github.com/Bisman-Singh/sievelog/internal/topology"
+	"github.com/Bisman-Singh/zeroreads/internal/automaton"
+	"github.com/Bisman-Singh/zeroreads/internal/topology"
 )
 
 // Rule is one decided rule, ready to enforce.
@@ -95,35 +95,35 @@ const (
 
 // Component and pipeline names this package adds.
 const (
-	nameForward        = "forward/sievelog"
-	nameEnforceForward = "forward/sievelog_enforce"
-	pipeEnforce        = "logs/sievelog_enforce"
-	nameMeasure        = "signal_to_metrics/sievelog"
-	nameFilter         = "filter/sievelog"
-	nameDedupe         = "logdedup/sievelog"
-	nameRollup         = "transform/sievelog_rollup"
-	pipeSplit          = "logs/sievelog"
-	pipeMetrics        = "metrics/sievelog"
-	nameArchiveMark    = "transform/sievelog_archive"
-	nameArchiveForward = "forward/sievelog_archive"
-	nameArchiveFilter  = "filter/sievelog_archive"
-	pipeArchive        = "logs/sievelog_archive"
-	RuleAttr           = "sievelog.rule"
+	nameForward        = "forward/zeroreads"
+	nameEnforceForward = "forward/zeroreads_enforce"
+	pipeEnforce        = "logs/zeroreads_enforce"
+	nameMeasure        = "signal_to_metrics/zeroreads"
+	nameFilter         = "filter/zeroreads"
+	nameDedupe         = "logdedup/zeroreads"
+	nameRollup         = "transform/zeroreads_rollup"
+	pipeSplit          = "logs/zeroreads"
+	pipeMetrics        = "metrics/zeroreads"
+	nameArchiveMark    = "transform/zeroreads_archive"
+	nameArchiveForward = "forward/zeroreads_archive"
+	nameArchiveFilter  = "filter/zeroreads_archive"
+	pipeArchive        = "logs/zeroreads_archive"
+	RuleAttr           = "zeroreads.rule"
 	// ArchiveAttr carries, on an archived record, the rule that archived it.
-	ArchiveAttr  = "sievelog.archive"
-	DedupCounter = "sievelog.dedup_count"
+	ArchiveAttr  = "zeroreads.archive"
+	DedupCounter = "zeroreads.dedup_count"
 )
 
 // MeasureLines and MeasureBytes name the per-rule measurement metrics.
-func MeasureLines(id string) string { return "sievelog.rule.lines." + id }
-func MeasureBytes(id string) string { return "sievelog.rule.bytes." + id }
+func MeasureLines(id string) string { return "zeroreads.rule.lines." + id }
+func MeasureBytes(id string) string { return "zeroreads.rule.bytes." + id }
 
 // RollupMarker is the body of a rolled-up rule's records: one per dedupe interval, carrying the
 // number of lines it replaces in DedupCounter and the rule in RuleAttr.
-func RollupMarker(id string) string { return "sievelog rollup " + id }
+func RollupMarker(id string) string { return "zeroreads rollup " + id }
 
 // AggregateLines names the counter that replaces an aggregated rule's lines.
-func AggregateLines(id string) string { return "sievelog.aggregate.lines." + id }
+func AggregateLines(id string) string { return "zeroreads.aggregate.lines." + id }
 
 // ottlString quotes s as an OTTL string literal inside the Collector's configuration. The Collector
 // expands ${...} in every configuration string before OTTL parses it, and $$ is its escape, so a

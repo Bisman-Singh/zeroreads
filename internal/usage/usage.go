@@ -17,8 +17,8 @@ import (
 	"sync"
 	"unicode"
 
-	"github.com/Bisman-Singh/sievelog/internal/automaton"
-	"github.com/Bisman-Singh/sievelog/internal/logql"
+	"github.com/Bisman-Singh/zeroreads/internal/automaton"
+	"github.com/Bisman-Singh/zeroreads/internal/logql"
 )
 
 // Rule is what a rule removes: lines in streams with these scope labels whose stored text is in

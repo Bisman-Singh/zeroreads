@@ -105,12 +105,12 @@ func TestArchiveSplitsExactly(t *testing.T) {
 		t.Fatal(err)
 	}
 	pipes := m["service"].(map[string]any)["pipelines"].(map[string]any)
-	split := pipes["logs/sievelog"].(map[string]any)
-	if p := toStrings(split["processors"].([]any)); p[len(p)-1] != "transform/sievelog_archive" {
+	split := pipes["logs/zeroreads"].(map[string]any)
+	if p := toStrings(split["processors"].([]any)); p[len(p)-1] != "transform/zeroreads_archive" {
 		t.Fatalf("split processors %v: the mark must run last", p)
 	}
-	arch := pipes["logs/sievelog_archive"].(map[string]any)
-	if strings.Join(toStrings(arch["exporters"].([]any)), ",") != "file/archive" || strings.Join(toStrings(arch["processors"].([]any)), ",") != "filter/sievelog_archive" {
+	arch := pipes["logs/zeroreads_archive"].(map[string]any)
+	if strings.Join(toStrings(arch["exporters"].([]any)), ",") != "file/archive" || strings.Join(toStrings(arch["processors"].([]any)), ",") != "filter/zeroreads_archive" {
 		t.Fatalf("archive pipeline %v", arch)
 	}
 
@@ -124,9 +124,9 @@ func TestArchiveSplitsExactly(t *testing.T) {
 			severe[int64(lr.Timestamp())] = true
 		}
 	}
-	marked := processLogs(t, m, transformprocessor.NewFactory(), "transform/sievelog_archive", in)
-	main := byTime(processLogs(t, m, filterprocessor.NewFactory(), "filter/sievelog", marked))
-	toArchive := byTime(processLogs(t, m, filterprocessor.NewFactory(), "filter/sievelog_archive", marked))
+	marked := processLogs(t, m, transformprocessor.NewFactory(), "transform/zeroreads_archive", in)
+	main := byTime(processLogs(t, m, filterprocessor.NewFactory(), "filter/zeroreads", marked))
+	toArchive := byTime(processLogs(t, m, filterprocessor.NewFactory(), "filter/zeroreads_archive", marked))
 
 	// The fate of every record without the archive: the same rules minus the archived ones.
 	var others []Rule
@@ -136,7 +136,7 @@ func TestArchiveSplitsExactly(t *testing.T) {
 		}
 	}
 	plain := emittedRules(t, others, Enforce)
-	withoutArchive := byTime(processLogs(t, plain, filterprocessor.NewFactory(), "filter/sievelog", in))
+	withoutArchive := byTime(processLogs(t, plain, filterprocessor.NewFactory(), "filter/zeroreads", in))
 
 	var nArchived int
 	for _, rec := range recs {
@@ -168,7 +168,7 @@ func TestArchiveShadowRoutesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s := string(out); strings.Contains(s, "sievelog_archive") || !strings.Contains(s, MeasureLines("r-health")) {
+	if s := string(out); strings.Contains(s, "zeroreads_archive") || !strings.Contains(s, MeasureLines("r-health")) {
 		t.Fatalf("shadow config:\n%s", s)
 	}
 }
@@ -204,7 +204,7 @@ func TestVectorArchive(t *testing.T) {
 	}
 	tr, sinks := m["transforms"].(map[string]any), m["sinks"].(map[string]any)
 	route := tr[vArchive].(map[string]any)["route"].(map[string]any)["archive"].(string)
-	if route != `.sievelog_rule == "r-health" || .sievelog_rule == "r-route"` {
+	if route != `.zeroreads_rule == "r-health" || .zeroreads_rule == "r-route"` {
 		t.Fatalf("route %q", route)
 	}
 	if in := toStrings(sinks["archive"].(map[string]any)["inputs"].([]any)); strings.Join(in, ",") != "in,"+vArchiveClean {
@@ -231,14 +231,14 @@ func TestFluentBitArchive(t *testing.T) {
 			rules = append(rules, r)
 		}
 	}
-	cfg := strings.Replace(fluentBitUnit, "  outputs:\n", "  outputs:\n    - {name: stdout, alias: archive, match: sievelog.archive}\n", 1)
+	cfg := strings.Replace(fluentBitUnit, "  outputs:\n", "  outputs:\n    - {name: stdout, alias: archive, match: zeroreads.archive}\n", 1)
 	target := fbTarget()
 	target.ArchiveOutputs = []string{"archive"}
 	out, err := FluentBit([][]byte{[]byte(cfg)}, target, rules, Enforce)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s := string(out); !strings.Contains(s, "rewrite_tag") || !strings.Contains(s, `sievelog.archive false`) {
+	if s := string(out); !strings.Contains(s, "rewrite_tag") || !strings.Contains(s, `zeroreads.archive false`) {
 		t.Fatalf("no archive rewrite:\n%s", s)
 	}
 	target.ArchiveOutputs = nil

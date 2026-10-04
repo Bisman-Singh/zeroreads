@@ -39,7 +39,7 @@ func TestVectorArchivesExactly(t *testing.T) {
 	main := map[key]int{}
 	for _, ev := range events {
 		svc, text, _ := eventText(ev)
-		if _, counted := ev["sievelog_count"]; counted {
+		if _, counted := ev["zeroreads_count"]; counted {
 			continue // dedupe output, checked by TestVectorEnforcesExactly
 		}
 		ts, _ := ev["tsn"].(float64)
@@ -60,12 +60,12 @@ func TestVectorArchivesExactly(t *testing.T) {
 		}
 		svc, text, _ := eventText(ev)
 		ts, _ := ev["tsn"].(float64)
-		rule, _ := ev["sievelog_archive"].(string)
+		rule, _ := ev["zeroreads_archive"].(string)
 		if _, twice := archived[key{svc, text, ts}]; twice {
 			t.Fatalf("archived twice: %v", ev)
 		}
 		archived[key{svc, text, ts}] = rule
-		if _, ok := ev["sievelog_rule"]; ok {
+		if _, ok := ev["zeroreads_rule"]; ok {
 			t.Fatalf("internal field in the archive: %v", ev)
 		}
 	}
@@ -93,7 +93,7 @@ func TestVectorArchivesExactly(t *testing.T) {
 // Real Fluent Bit moves exactly the archived rules' records to the archive output, each naming its
 // rule, and delivers every other record as without the archive.
 func TestFluentBitArchivesExactly(t *testing.T) {
-	cfg := strings.Replace(fluentBitUserConfig, "  outputs:\n", "  outputs:\n    - name: stdout\n      alias: archive\n      match: sievelog.archive\n      format: otlp_json\n", 1)
+	cfg := strings.Replace(fluentBitUserConfig, "  outputs:\n", "  outputs:\n    - name: stdout\n      alias: archive\n      match: zeroreads.archive\n      format: otlp_json\n", 1)
 	target := fluentBitTarget()
 	target.ArchiveOutputs = []string{"archive"}
 	var rules []Rule
@@ -197,7 +197,7 @@ service:
 		t.Fatal(err)
 	}
 	os.WriteFile(filepath.Join(dir, "in.json"), append(in, '\n'), 0o644)
-	name := fmt.Sprintf("sievelog-archive-%d", time.Now().UnixNano())
+	name := fmt.Sprintf("zeroreads-archive-%d", time.Now().UnixNano())
 	if b, err := exec.Command("docker", "run", "-d", "--name", name, "-v", dir+":/w", "otel/opentelemetry-collector-contrib:0.161.0",
 		"--config", "/w/c.yaml").CombinedOutput(); err != nil {
 		t.Fatalf("collector: %v %s", err, b)

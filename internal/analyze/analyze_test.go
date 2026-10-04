@@ -186,7 +186,7 @@ func TestRollupRewritesCountingReaders(t *testing.T) {
 		}
 	}
 	for _, n := range news {
-		if n != news[0] || !strings.Contains(n, "sievelog rollup "+recs[0].ID) || !strings.Contains(n, "sievelog rollup "+recs[1].ID) {
+		if n != news[0] || !strings.Contains(n, "zeroreads rollup "+recs[0].ID) || !strings.Contains(n, "zeroreads rollup "+recs[1].ID) {
 			t.Fatalf("one combined rewrite for both rules expected:\n%s", strings.Join(news, "\n"))
 		}
 	}
@@ -221,8 +221,8 @@ func TestCompensatedQueryOnlyAllowsRollup(t *testing.T) {
 	c := cache
 	c.StreamLabels = map[string]bool{"service_name": true}
 	id := c.ID()
-	rewritten := "(sum(count_over_time({service_name=\"checkout\"} |= \"DEBUG cache\" !~ `" + c.Language + "` [5m])) + sum(sum_over_time({service_name=\"checkout\"} |= `sievelog rollup " + id +
-		"` | sievelog_rule=\"" + id + "\" | unwrap sievelog_dedup_count [5m])) + sum(count_over_time({service_name=\"checkout\"} |~ `" + c.Language + "` [5m])))"
+	rewritten := "(sum(count_over_time({service_name=\"checkout\"} |= \"DEBUG cache\" !~ `" + c.Language + "` [5m])) + sum(sum_over_time({service_name=\"checkout\"} |= `zeroreads rollup " + id +
+		"` | zeroreads_rule=\"" + id + "\" | unwrap zeroreads_dedup_count [5m])) + sum(count_over_time({service_name=\"checkout\"} |~ `" + c.Language + "` [5m])))"
 	q := UsageQuery{Source: "loki-querylog", Origin: "query-log", Expr: rewritten}
 	pol := DefaultPolicy()
 	pol.Actions = []string{"sample"}

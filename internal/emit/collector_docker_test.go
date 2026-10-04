@@ -21,15 +21,15 @@ import (
 // The real Collector resolves the emitted configuration with every value from the logs intact and
 // no environment variable read.
 func TestCollectorResolvesValuesLiterally(t *testing.T) {
-	svc := "svc${env:SIEVELOG_TEST_SECRET}$${SIEVELOG_TEST_SECRET}$HOME"
-	rules := []Rule{{ID: "r-dollar", ScopeAttr: "service.name", ScopeValue: svc, Language: `\Acost ` + regexp.QuoteMeta("${SIEVELOG_TEST_SECRET}") + `\z`, Action: "drop"}}
+	svc := "svc${env:ZEROREADS_TEST_SECRET}$${ZEROREADS_TEST_SECRET}$HOME"
+	rules := []Rule{{ID: "r-dollar", ScopeAttr: "service.name", ScopeValue: svc, Language: `\Acost ` + regexp.QuoteMeta("${ZEROREADS_TEST_SECRET}") + `\z`, Action: "drop"}}
 	cfg, err := Collector([][]byte{[]byte(userConfig)}, Target{Pipeline: "logs", After: "transform/prep", MeasureExporters: []string{"file/metrics"}}, rules, Enforce)
 	if err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "c.yaml"), cfg, 0o644)
-	out, err := exec.Command("docker", "run", "--rm", "-e", "SIEVELOG_TEST_SECRET=leaked", "-v", dir+":/w",
+	out, err := exec.Command("docker", "run", "--rm", "-e", "ZEROREADS_TEST_SECRET=leaked", "-v", dir+":/w",
 		"otel/opentelemetry-collector-contrib:0.161.0", "print-config", "--mode", "unredacted", "--config", "/w/c.yaml").CombinedOutput()
 	if err != nil {
 		t.Fatalf("print-config: %v\n%s", err, out)
@@ -38,7 +38,7 @@ func TestCollectorResolvesValuesLiterally(t *testing.T) {
 	if strings.Contains(resolved, "leaked") {
 		t.Fatalf("the Collector expanded an environment variable in the emitted rules:\n%s", resolved)
 	}
-	for _, want := range []string{`resource.attributes["service.name"] == "` + svc + `"`, `\\$\\{SIEVELOG_TEST_SECRET\\}`} {
+	for _, want := range []string{`resource.attributes["service.name"] == "` + svc + `"`, `\\$\\{ZEROREADS_TEST_SECRET\\}`} {
 		if !strings.Contains(resolved, want) {
 			t.Fatalf("resolved configuration lacks %s:\n%s", want, resolved)
 		}
@@ -77,7 +77,7 @@ service:
 	dir := t.TempDir()
 	os.Chmod(dir, 0o777) // the Collector image runs as a non-root user
 	os.WriteFile(filepath.Join(dir, "c.yaml"), out, 0o644)
-	name := fmt.Sprintf("sievelog-measure-%d", time.Now().UnixNano())
+	name := fmt.Sprintf("zeroreads-measure-%d", time.Now().UnixNano())
 	if b, err := exec.Command("docker", "run", "-d", "--name", name, "-v", dir+":/w",
 		"otel/opentelemetry-collector-contrib:0.161.0", "--config", "/w/c.yaml").CombinedOutput(); err != nil {
 		t.Fatalf("collector: %v %s", err, b)
@@ -102,13 +102,13 @@ service:
 	var got map[string]float64
 	for deadline := time.Now().Add(60 * time.Second); time.Now().Before(deadline); time.Sleep(2 * time.Second) {
 		if _, err := os.Stat(filepath.Join(dir, "metrics.json")); err == nil {
-			if got = deltaTotals(t, filepath.Join(dir, "metrics.json"), "sievelog.rule.lines."); maps.Equal(got, want) {
+			if got = deltaTotals(t, filepath.Join(dir, "metrics.json"), "zeroreads.rule.lines."); maps.Equal(got, want) {
 				break
 			}
 		}
 	}
 	exec.Command("docker", "stop", "-t", "20", name).Run()
-	if got = deltaTotals(t, filepath.Join(dir, "metrics.json"), "sievelog.rule.lines."); !maps.Equal(got, want) {
+	if got = deltaTotals(t, filepath.Join(dir, "metrics.json"), "zeroreads.rule.lines."); !maps.Equal(got, want) {
 		t.Fatalf("measured %v, want %v", got, want)
 	}
 	t.Logf("collector: every rule's measurement exact over three separate batches: %v", want)

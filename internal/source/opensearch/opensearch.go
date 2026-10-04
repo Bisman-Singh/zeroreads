@@ -25,11 +25,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/fetch"
+	"github.com/Bisman-Singh/zeroreads/internal/fetch"
 )
 
 // Header marks the analyzer's own requests; audit entries carrying it are not usage.
-const Header = "X-Sievelog"
+const Header = "X-Zeroreads"
 
 // Client talks to one OpenSearch cluster.
 type Client struct {
@@ -144,7 +144,7 @@ type Reader struct {
 }
 
 // probePrefix names the marker index a liveness probe searches; it never exists.
-const probePrefix = "sievelog-probe-"
+const probePrefix = "zeroreads-probe-"
 
 // Read collects uses in [start, end).
 func (r *Reader) Read(ctx context.Context, start, end time.Time) Result {

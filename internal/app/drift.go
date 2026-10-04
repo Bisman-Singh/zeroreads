@@ -14,9 +14,9 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/Bisman-Singh/sievelog/internal/emit"
-	"github.com/Bisman-Singh/sievelog/internal/logql"
-	"github.com/Bisman-Singh/sievelog/internal/templating"
+	"github.com/Bisman-Singh/zeroreads/internal/emit"
+	"github.com/Bisman-Singh/zeroreads/internal/logql"
+	"github.com/Bisman-Singh/zeroreads/internal/templating"
 )
 
 // DrainConfigHash identifies everything template identity depends on: the embedded drain version,
@@ -111,7 +111,7 @@ func (c *Config) Drift(ctx context.Context, rf *RulesFile, now time.Time) ([]Rul
 		inTpl := c.linesIn(r.Service, r.Field, tl)
 		outRule := inTpl + " !~ " + logql.Quote(r.Language)
 		if r.Field != "" {
-			outRule = inTpl + " | sievelog_field!~" + logql.Quote(r.Language)
+			outRule = inTpl + " | zeroreads_field!~" + logql.Quote(r.Language)
 		}
 		var err error
 		if d.TemplateLines, err = c.scalar(ctx, lc, "sum(count_over_time("+inTpl+" "+rng+"))", now); err != nil {

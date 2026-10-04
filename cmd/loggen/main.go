@@ -11,7 +11,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/gen"
+	"github.com/Bisman-Singh/zeroreads/internal/gen"
 )
 
 func main() {

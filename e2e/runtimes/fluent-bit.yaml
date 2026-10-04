@@ -1,5 +1,5 @@
 # The "user" Fluent Bit config the runtime loop analyses, emits from and deploys: pod logs of every
-# sievelog-fbloop-* namespace go to Loki; a second, independent tail keeps a raw copy of every record
+# zeroreads-fbloop-* namespace go to Loki; a second, independent tail keeps a raw copy of every record
 # with its exact timestamp so removal can be checked line by line. Measurement metrics go to stdout.
 service:
   flush: 1
@@ -15,13 +15,13 @@ parsers:
 pipeline:
   inputs:
     - name: tail
-      path: /var/log/pods/sievelog-fbloop-*_*/*/*.log
+      path: /var/log/pods/zeroreads-fbloop-*_*/*/*.log
       tag_regex: '^/var/log/pods/(?<ns>[^_]+)_[^/]+/(?<container>[^/]+)/'
       tag: kube.<ns>.<container>
       parser: cri_e2e
       refresh_interval: 1
     - name: tail
-      path: /var/log/pods/sievelog-fbloop-*_*/*/*.log
+      path: /var/log/pods/zeroreads-fbloop-*_*/*/*.log
       tag_regex: '^/var/log/pods/(?<ns>[^_]+)_[^/]+/(?<container>[^/]+)/'
       tag: raw.<ns>.<container>
       parser: cri_e2e
@@ -61,7 +61,7 @@ pipeline:
     - name: loki
       alias: loki
       match: kube.*
-      host: loki.sievelog-system.svc
+      host: loki.zeroreads-system.svc
       port: 3100
       labels: service_name=$service, k8s_namespace_name=$ns
       remove_keys: service, ns, stream, logtag, level, msg, route, status
@@ -80,4 +80,4 @@ pipeline:
       format: plain
     - name: stdout
       alias: metrics
-      match: sievelog.metrics
+      match: zeroreads.metrics

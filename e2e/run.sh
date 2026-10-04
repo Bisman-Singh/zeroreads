@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CLUSTER=sievelog
+CLUSTER=zeroreads
 CTX="kind-${CLUSTER}"
 WORK="${ROOT}/.e2e"
 SEED="${SEED:-11}"
@@ -17,7 +17,7 @@ K="kubectl --kubeconfig ${KUBECONFIG_E2E} --context ${CTX}"
 source "${ROOT}/e2e/lib.sh"
 # Each run gets its own namespace and the collector reads only that namespace's pod logs, so log
 # files left behind by earlier runs can never be counted again.
-RUN_NS="sievelog-gen-$(date +%s)"
+RUN_NS="zeroreads-gen-$(date +%s)"
 
 log() { printf '[e2e] %s\n' "$*"; }
 
@@ -51,57 +51,57 @@ FROM scratch
 COPY loggen /loggen
 ENTRYPOINT ["/loggen"]
 EOF
-docker build -q -t sievelog/loggen:e2e "${WORK}" >/dev/null
-kind load docker-image --name "${CLUSTER}" sievelog/loggen:e2e >/dev/null
-log "building sievelog image"
-docker build -q -t sievelog/sievelog:e2e "${ROOT}" >/dev/null
-kind load docker-image --name "${CLUSTER}" sievelog/sievelog:e2e >/dev/null
+docker build -q -t zeroreads/loggen:e2e "${WORK}" >/dev/null
+kind load docker-image --name "${CLUSTER}" zeroreads/loggen:e2e >/dev/null
+log "building zeroreads image"
+docker build -q -t zeroreads/zeroreads:e2e "${ROOT}" >/dev/null
+kind load docker-image --name "${CLUSTER}" zeroreads/zeroreads:e2e >/dev/null
 # The multi-platform collector image fails "kind load" (ctr digest not found); the node pulls it.
 
 log "resetting previous run"
-for ns in $(${K} get ns -o name | grep '^namespace/sievelog-gen' || true); do ${K} delete "${ns}" --wait=true >/dev/null; done
-${K} delete daemonset collector -n sievelog-system --ignore-not-found --wait=true >/dev/null
-${K} wait --for=delete pod -l app=collector -n sievelog-system --timeout=60s >/dev/null 2>&1 || true
+for ns in $(${K} get ns -o name | grep '^namespace/zeroreads-gen' || true); do ${K} delete "${ns}" --wait=true >/dev/null; done
+${K} delete daemonset collector -n zeroreads-system --ignore-not-found --wait=true >/dev/null
+${K} wait --for=delete pod -l app=collector -n zeroreads-system --timeout=60s >/dev/null 2>&1 || true
 rm -f "${WORK}/out/"*.json
 
 log "deploying loki"
 ${K} apply -f "${ROOT}/e2e/k8s/collector.yaml" >/dev/null # creates the namespace
 ${K} apply -f "${ROOT}/e2e/k8s/loki.yaml" >/dev/null
-${K} rollout restart deployment/loki -n sievelog-system >/dev/null
-${K} rollout status deployment/loki -n sievelog-system --timeout=180s >/dev/null
+${K} rollout restart deployment/loki -n zeroreads-system >/dev/null
+${K} rollout status deployment/loki -n zeroreads-system --timeout=180s >/dev/null
 
 log "deploying grafana"
 ${K} apply -f "${ROOT}/e2e/k8s/grafana.yaml" >/dev/null
-${K} rollout restart deployment/grafana -n sievelog-system >/dev/null
-${K} rollout status deployment/grafana -n sievelog-system --timeout=240s >/dev/null
+${K} rollout restart deployment/grafana -n zeroreads-system >/dev/null
+${K} rollout status deployment/grafana -n zeroreads-system --timeout=240s >/dev/null
 
 log "deploying opensearch"
 ${K} apply -f "${ROOT}/e2e/k8s/opensearch.yaml" >/dev/null
 # A fresh cluster every run: audit indices and scale data from earlier runs would otherwise pile up.
-${K} rollout restart deployment/opensearch deployment/opensearch-dashboards -n sievelog-system >/dev/null
-${K} rollout status deployment/opensearch -n sievelog-system --timeout=600s >/dev/null
-${K} rollout status deployment/opensearch-dashboards -n sievelog-system --timeout=900s >/dev/null
+${K} rollout restart deployment/opensearch deployment/opensearch-dashboards -n zeroreads-system >/dev/null
+${K} rollout status deployment/opensearch -n zeroreads-system --timeout=600s >/dev/null
+${K} rollout status deployment/opensearch-dashboards -n zeroreads-system --timeout=900s >/dev/null
 
 log "deploying vector and fluent bit"
-${K} -n sievelog-system create configmap vector-config --from-file=vector.yaml="${ROOT}/e2e/runtimes/vector.yaml" --dry-run=client -o yaml | ${K} apply -f - >/dev/null
-${K} -n sievelog-system create configmap fluent-bit-config --from-file=fluent-bit.yaml="${ROOT}/e2e/runtimes/fluent-bit.yaml" --dry-run=client -o yaml | ${K} apply -f - >/dev/null
+${K} -n zeroreads-system create configmap vector-config --from-file=vector.yaml="${ROOT}/e2e/runtimes/vector.yaml" --dry-run=client -o yaml | ${K} apply -f - >/dev/null
+${K} -n zeroreads-system create configmap fluent-bit-config --from-file=fluent-bit.yaml="${ROOT}/e2e/runtimes/fluent-bit.yaml" --dry-run=client -o yaml | ${K} apply -f - >/dev/null
 ${K} apply -f "${ROOT}/e2e/k8s/vector.yaml" -f "${ROOT}/e2e/k8s/fluent-bit.yaml" >/dev/null
-${K} rollout restart daemonset/vector daemonset/fluent-bit -n sievelog-system >/dev/null
-${K} rollout status daemonset/vector -n sievelog-system --timeout=300s >/dev/null
-${K} rollout status daemonset/fluent-bit -n sievelog-system --timeout=300s >/dev/null
+${K} rollout restart daemonset/vector daemonset/fluent-bit -n zeroreads-system >/dev/null
+${K} rollout status daemonset/vector -n zeroreads-system --timeout=300s >/dev/null
+${K} rollout status daemonset/fluent-bit -n zeroreads-system --timeout=300s >/dev/null
 
 log "deploying collector"
 # Only the current Loki pod's logs: kubelet keeps earlier pods' log files, and their query-log
 # lines would otherwise be re-shipped as usage evidence from a previous run.
-LOKI_POD=$(${K} get pods -n sievelog-system -l app=loki --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.name}')
+LOKI_POD=$(${K} get pods -n zeroreads-system -l app=loki --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.name}')
 ( cd "${ROOT}" && go run ./e2e/render "${RUN_NS}" "${LOKI_POD}" ) > "${WORK}/config.yaml"
 docker run --rm -v "${WORK}:/cfg" "${COLLECTOR_IMAGE}" validate --config=/cfg/config.yaml
 ${K} apply -f "${ROOT}/e2e/k8s/collector.yaml" >/dev/null
 ${K} create namespace "${RUN_NS}" >/dev/null
-${K} create configmap collector-config -n sievelog-system --from-file=config.yaml="${WORK}/config.yaml" \
+${K} create configmap collector-config -n zeroreads-system --from-file=config.yaml="${WORK}/config.yaml" \
   --dry-run=client -o yaml | ${K} apply -f - >/dev/null
-${K} rollout restart daemonset/collector -n sievelog-system >/dev/null
-${K} rollout status daemonset/collector -n sievelog-system --timeout=120s >/dev/null
+${K} rollout restart daemonset/collector -n zeroreads-system >/dev/null
+${K} rollout status daemonset/collector -n zeroreads-system --timeout=120s >/dev/null
 
 log "running generators (seed=${SEED}, count=${COUNT} per service)"
 for s in "${SERVICES[@]}"; do
@@ -118,7 +118,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: ${s}
-          image: sievelog/loggen:e2e
+          image: zeroreads/loggen:e2e
           imagePullPolicy: Never
           args: ["--service=${s}", "--seed=${SEED}", "--count=${COUNT}", "--rate=2000"]
 EOF
@@ -157,10 +157,10 @@ log "port-forwarding loki, grafana, opensearch and dashboards"
 # Each port-forward restarts when it drops (a busy node can reset them), and every service must answer
 # before the assertions start, so a slow start fails here, with its name, instead of as test failures.
 trap stop_forwards EXIT
-forward sievelog-system loki 13100:3100
-forward sievelog-system grafana 13000:3000
-forward sievelog-system opensearch 19200:9200
-forward sievelog-system opensearch-dashboards 15601:5601
+forward zeroreads-system loki 13100:3100
+forward zeroreads-system grafana 13000:3000
+forward zeroreads-system opensearch 19200:9200
+forward zeroreads-system opensearch-dashboards 15601:5601
 wait_for() { # name, seconds, curl arguments
   local name=$1 secs=$2; shift 2
   for _ in $(seq 1 "${secs}"); do curl -sf "$@" >/dev/null 2>&1 && return 0; sleep 1; done

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Runs sievelog against the OpenTelemetry demo, a multi-service app with its own load generator, on
+# Runs zeroreads against the OpenTelemetry demo, a multi-service app with its own load generator, on
 # the e2e kind cluster: the demo's own Collector sends its logs to the e2e Loki, readers written for
-# the app are stored in a Grafana org of their own, and sievelog analyses, shadows and enforces
+# the app are stored in a Grafana org of their own, and zeroreads analyses, shadows and enforces
 # inside that Collector. It needs a finished ./e2e/run.sh (the cluster and its stack). Every kubectl
 # and helm call names the e2e kubeconfig and context; no other cluster is touched.
 set -euo pipefail
@@ -9,8 +9,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORK="${ROOT}/.e2e/demo"
 KUBECONFIG_E2E="${ROOT}/.e2e/kubeconfig"
-CTX=kind-sievelog
-NS=sievelog-demo
+CTX=kind-zeroreads
+NS=zeroreads-demo
 K="kubectl --kubeconfig ${KUBECONFIG_E2E} --context ${CTX}"
 H="helm --kubeconfig ${KUBECONFIG_E2E} --kube-context ${CTX}"
 # shellcheck source=e2e/lib.sh
@@ -25,14 +25,14 @@ EVIDENCE="${DEMO_EVIDENCE:-600}"
 SHADOW="${DEMO_SHADOW:-900}"
 ENFORCE="${DEMO_ENFORCE:-900}"
 GRAFANA_PASSWORD='e2e-only-password'
-BIN="${WORK}/sievelog"
+BIN="${WORK}/zeroreads"
 
 log() { printf '[demo] %s %s\n' "$(date +%H:%M:%S)" "$*"; }
 iso() { python3 -c 'import datetime,sys;print(datetime.datetime.fromtimestamp(int(sys.argv[1]),datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$1"; }
 sha256() { if command -v sha256sum >/dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 
 mkdir -p "${WORK}/out"
-${K} -n sievelog-system get deployment/loki deployment/grafana >/dev/null
+${K} -n zeroreads-system get deployment/loki deployment/grafana >/dev/null
 
 log "chart opentelemetry-demo ${CHART_VERSION}, checked against its SHA-256"
 CHART="${WORK}/opentelemetry-demo-${CHART_VERSION}.tgz"
@@ -49,13 +49,13 @@ restore() {
   if [ "${DEMO_KEEP:-${DEMO_REUSE:-0}}" != "1" ]; then
     ${H} -n "${NS}" uninstall demo >/dev/null 2>&1 || true
     ${K} delete namespace "${NS}" --wait=false >/dev/null 2>&1 || true
-    ${K} -n sievelog-system scale deployment/opensearch deployment/opensearch-dashboards --replicas=1 >/dev/null 2>&1 || true
+    ${K} -n zeroreads-system scale deployment/opensearch deployment/opensearch-dashboards --replicas=1 >/dev/null 2>&1 || true
   fi
 }
 trap restore EXIT
 
 log "OpenSearch is not an evidence source here: scaled to zero to make room"
-${K} -n sievelog-system scale deployment/opensearch deployment/opensearch-dashboards --replicas=0 >/dev/null
+${K} -n zeroreads-system scale deployment/opensearch deployment/opensearch-dashboards --replicas=0 >/dev/null
 
 if [ "${DEMO_REUSE:-0}" != "1" ]; then
   log "installing the demo into ${NS}"
@@ -63,8 +63,8 @@ if [ "${DEMO_REUSE:-0}" != "1" ]; then
 fi
 ${K} -n "${NS}" get pods --no-headers | awk '{print $3}' | sort | uniq -c | sed 's/^/[demo]   /'
 
-forward sievelog-system loki 13100:3100
-forward sievelog-system grafana 13000:3000
+forward zeroreads-system loki 13100:3100
+forward zeroreads-system grafana 13000:3000
 for url in localhost:13100/ready localhost:13000/api/health; do
   for _ in $(seq 1 120); do curl -sf "${url}" >/dev/null && break; sleep 1; done
 done
@@ -80,13 +80,13 @@ export DEMO_GRAFANA_TOKEN="${TOKEN}"
 sleep 60 # the ad-hoc queries reach the query log
 
 log "analyze"
-( cd "${ROOT}" && go build -o "${BIN}" ./cmd/sievelog )
+( cd "${ROOT}" && go build -o "${BIN}" ./cmd/zeroreads )
 [ "${DEMO_REUSE:-0}" = "1" ] || ${K} -n "${NS}" get configmap otel-collector -o jsonpath='{.data.relay}' > "${WORK}/collector.yaml"
 # The app's own services, as they appear in Loki; Loki's own logs are evidence, not the app.
 SERVICES=$(curl -sf "localhost:13100/loki/api/v1/label/service_name/values" --data-urlencode "query={k8s_namespace_name=\"${NS}\"}" \
   --data-urlencode "start=$(( ($(date +%s) - BASELINE) * 1000000000 ))" | python3 -c 'import json,sys;print(", ".join(json.load(sys.stdin)["data"]))')
 log "services: ${SERVICES}"
-cat > "${WORK}/sievelog.yaml" <<EOF
+cat > "${WORK}/zeroreads.yaml" <<EOF
 loki:
   url: http://localhost:13100
 scope:
@@ -107,23 +107,23 @@ collector:
   config_files: [${WORK}/collector.yaml]
   pipeline: logs
   after: transform/sanitize_logs
-  measure_exporters: [file/sievelog]
-  aggregate_exporters: [file/sievelog]
+  measure_exporters: [file/zeroreads]
+  aggregate_exporters: [file/zeroreads]
   sinks:
     otlp_http/loki: {loki: true}
 policy:
   acknowledge: ["grafana-orgs:localhost:13000", "grafana-queryhistory:localhost:13000"]
 EOF
-( cd "${WORK}" && "${BIN}" analyze -c sievelog.yaml -o out ) | tail -3
+( cd "${WORK}" && "${BIN}" analyze -c zeroreads.yaml -o out ) | tail -3
 
-# The Collector writes sievelog's measurement, as delta sums, to the e2e host mount.
+# The Collector writes zeroreads's measurement, as delta sums, to the e2e host mount.
 MEASURE="${ROOT}/.e2e/out/demo-metrics.json"
 measured() { # copy to: fails unless the Collector has measured something
   for _ in $(seq 1 30); do
-    grep -q 'sievelog.rule.lines' "${MEASURE}" 2>/dev/null && cp "${MEASURE}" "$1" && return 0
+    grep -q 'zeroreads.rule.lines' "${MEASURE}" 2>/dev/null && cp "${MEASURE}" "$1" && return 0
     sleep 2
   done
-  log "no sievelog measurement from the Collector in ${MEASURE}"
+  log "no zeroreads measurement from the Collector in ${MEASURE}"
   return 1
 }
 deploy() { # config file
@@ -138,7 +138,7 @@ loki_total() { # function (count_over_time or bytes_over_time), window seconds, 
 }
 
 log "shadow: ${SHADOW}s measuring what enforcement would remove"
-( cd "${WORK}" && "${BIN}" emit -c sievelog.yaml -rules out/rules.json -mode shadow -o shadow.yaml )
+( cd "${WORK}" && "${BIN}" emit -c zeroreads.yaml -rules out/rules.json -mode shadow -o shadow.yaml )
 rm -f "${MEASURE}"
 deploy "${WORK}/shadow.yaml"
 S0=$(date +%s)
@@ -149,7 +149,7 @@ S1=$(date +%s)
 measured "${WORK}/metrics-shadow.json"
 
 log "enforce: ${ENFORCE}s"
-( cd "${WORK}" && "${BIN}" emit -c sievelog.yaml -rules out/rules.json -mode enforce -o enforce.yaml )
+( cd "${WORK}" && "${BIN}" emit -c zeroreads.yaml -rules out/rules.json -mode enforce -o enforce.yaml )
 deploy "${WORK}/enforce.yaml"
 E0=$(date +%s); sleep "${ENFORCE}"; E1=$(date +%s)
 sleep 30 # the last batches reach Loki
@@ -157,10 +157,10 @@ sleep 30 # the last batches reach Loki
 # verify first: every query after it (reconcile's, the totals below) would be a reader of its own.
 log "verify and reconcile"
 set +e
-( cd "${WORK}" && "${BIN}" verify -c sievelog.yaml -rules out/rules.json -deployed enforce.yaml -json verify.json >/dev/null )
+( cd "${WORK}" && "${BIN}" verify -c zeroreads.yaml -rules out/rules.json -deployed enforce.yaml -json verify.json >/dev/null )
 echo $? > "${WORK}/verify.exit"
 set -e
-( cd "${WORK}" && "${BIN}" reconcile -c sievelog.yaml -rules out/rules.json -before "$(iso "${S0}"),$(iso "${S1}")" \
+( cd "${WORK}" && "${BIN}" reconcile -c zeroreads.yaml -rules out/rules.json -before "$(iso "${S0}"),$(iso "${S1}")" \
   -after "$(iso "${E0}"),$(iso "${E1}")" -o reconcile.json >/dev/null ) || true
 
 python3 - "${WORK}/totals.json" "$((S1 - S0))" "$((E1 - E0))" \

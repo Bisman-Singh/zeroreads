@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/source/grafana"
+	"github.com/Bisman-Singh/zeroreads/internal/source/grafana"
 )
 
 const grafanaUser, grafanaPass = "admin", "e2e-only-password"
@@ -128,7 +128,7 @@ func dropOrg(t *testing.T, base string, org int64) {
 	switch {
 	case s == http.StatusOK:
 	case s == http.StatusInternalServerError && strings.Contains(string(b), "Failed to delete organization"):
-		s, b = grafanaCall(t, base, "PUT", fmt.Sprintf("/api/orgs/%d", org), 0, map[string]any{"name": fmt.Sprintf("sievelog-emptied-%d", org)})
+		s, b = grafanaCall(t, base, "PUT", fmt.Sprintf("/api/orgs/%d", org), 0, map[string]any{"name": fmt.Sprintf("zeroreads-emptied-%d", org)})
 		must(t, s, b, http.StatusOK)
 		t.Logf("grafana refused to delete org %d; it is empty and renamed", org)
 	default:
@@ -203,7 +203,7 @@ func setupGrafanaFixtures(t *testing.T, base string) {
 		ID int64 `json:"id"`
 	}
 	json.Unmarshal(b, &second)
-	s, b = grafanaCall(t, base, "POST", "/api/datasources", second.ID, map[string]any{"name": "Loki2", "uid": "loki2", "type": "loki", "access": "proxy", "url": "http://loki.sievelog-system.svc:3100", "isDefault": true})
+	s, b = grafanaCall(t, base, "POST", "/api/datasources", second.ID, map[string]any{"name": "Loki2", "uid": "loki2", "type": "loki", "access": "proxy", "url": "http://loki.zeroreads-system.svc:3100", "isDefault": true})
 	must(t, s, b, 200, 409)
 	s, b = grafanaCall(t, base, "POST", "/api/dashboards/db", second.ID, map[string]any{"overwrite": true, "dashboard": map[string]any{
 		"uid": "org2-dash", "title": "Org 2", "schemaVersion": 41,

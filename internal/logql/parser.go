@@ -55,8 +55,8 @@ type Selection struct {
 	Counting bool
 	// Rewritten is true when the pipeline rewrites the line at some point.
 	Rewritten bool
-	// NoRollups is true when a stage keeps only lines without a sievelog rollup rule
-	// (| sievelog_rule=""), so the selection reads no rollup record.
+	// NoRollups is true when a stage keeps only lines without a zeroreads rollup rule
+	// (| zeroreads_rule=""), so the selection reads no rollup record.
 	NoRollups bool
 	// Unmodelled lists the stages that can narrow what the selection reads but are not modelled:
 	// label filters and line filters after a rewrite. Ignoring them only widens the selection, so a
@@ -770,8 +770,8 @@ func (p *parser) pipeStage(sel *Selection, inRange bool) error {
 	if err := p.labelFilter(); err != nil {
 		return err
 	}
-	// sievelog_rule="" keeps only lines without a rollup rule: it excludes every rollup record.
-	if p.i-start == 3 && p.toks[start].text == "sievelog_rule" && p.isOp2(start+1, "=") && p.toks[start+2].kind == tString && p.toks[start+2].text == "" {
+	// zeroreads_rule="" keeps only lines without a rollup rule: it excludes every rollup record.
+	if p.i-start == 3 && p.toks[start].text == "zeroreads_rule" && p.isOp2(start+1, "=") && p.toks[start+2].kind == tString && p.toks[start+2].text == "" {
 		sel.NoRollups = true
 		return nil
 	}

@@ -172,7 +172,7 @@ func TestVectorEnforcesExactly(t *testing.T) {
 	dedupeGot := map[string]int{}
 	for _, ev := range events {
 		svc, text, structured := eventText(ev)
-		if c, ok := ev["sievelog_count"]; ok {
+		if c, ok := ev["zeroreads_count"]; ok {
 			x := matched(record{service: svc, text: text, mapBody: structured})
 			if x == nil || x.Action != "dedupe" {
 				t.Fatalf("count on a non-dedupe event: %v", ev)
@@ -180,7 +180,7 @@ func TestVectorEnforcesExactly(t *testing.T) {
 			dedupeGot[x.ID] += int(c.(float64))
 			continue
 		}
-		for _, f := range []string{"sievelog_rule", "sievelog_bytes", "sievelog_aggregate"} {
+		for _, f := range []string{"zeroreads_rule", "zeroreads_bytes", "zeroreads_aggregate"} {
 			if _, ok := ev[f]; ok {
 				t.Fatalf("internal field %s leaked downstream: %v", f, ev)
 			}
@@ -207,13 +207,13 @@ func TestVectorEnforcesExactly(t *testing.T) {
 		if r.Action != "aggregate" {
 			continue
 		}
-		if metrics["sievelog_aggregate_lines|"+r.ID] != wantLines[r.ID] {
-			t.Fatalf("aggregate counter %s: %v want %v", r.ID, metrics["sievelog_aggregate_lines|"+r.ID], wantLines[r.ID])
+		if metrics["zeroreads_aggregate_lines|"+r.ID] != wantLines[r.ID] {
+			t.Fatalf("aggregate counter %s: %v want %v", r.ID, metrics["zeroreads_aggregate_lines|"+r.ID], wantLines[r.ID])
 		}
 	}
 	for id, n := range wantLines {
-		if metrics["sievelog_rule_lines|"+id] != n || metrics["sievelog_rule_bytes|"+id] != wantBytes[id] {
-			t.Fatalf("measurement %s: %v lines %v bytes, want %v / %v", id, metrics["sievelog_rule_lines|"+id], metrics["sievelog_rule_bytes|"+id], n, wantBytes[id])
+		if metrics["zeroreads_rule_lines|"+id] != n || metrics["zeroreads_rule_bytes|"+id] != wantBytes[id] {
+			t.Fatalf("measurement %s: %v lines %v bytes, want %v / %v", id, metrics["zeroreads_rule_lines|"+id], metrics["zeroreads_rule_bytes|"+id], n, wantBytes[id])
 		}
 	}
 	t.Logf("vector: %d events out of %d records exactly as predicted; dedupe %v", len(events), len(recs), dedupeGot)
@@ -236,8 +236,8 @@ func TestVectorShadowChangesNothing(t *testing.T) {
 		}
 	}
 	for id, n := range want {
-		if metrics["sievelog_rule_lines|"+id] != n {
-			t.Fatalf("shadow measurement %s: %v want %v", id, metrics["sievelog_rule_lines|"+id], n)
+		if metrics["zeroreads_rule_lines|"+id] != n {
+			t.Fatalf("shadow measurement %s: %v want %v", id, metrics["zeroreads_rule_lines|"+id], n)
 		}
 	}
 }
@@ -303,7 +303,7 @@ func TestVectorSeverityGuard(t *testing.T) {
 			t.Fatalf("case %d %v (%s): kept=%v, want removed=%v", i, c.extra, c.svc, kept[i], c.removed)
 		}
 		if c.removed {
-			want["sievelog_rule_lines|r-"+map[string]string{"checkout": "plain", "orders": "field"}[c.svc]]++
+			want["zeroreads_rule_lines|r-"+map[string]string{"checkout": "plain", "orders": "field"}[c.svc]]++
 		}
 	}
 	for k, v := range want {

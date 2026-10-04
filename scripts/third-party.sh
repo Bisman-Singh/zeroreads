@@ -11,7 +11,7 @@ modules() {
   for os in linux darwin windows; do
     for arch in amd64 arm64; do
       GOOS=${os} GOARCH=${arch} CGO_ENABLED=0 go list -deps \
-        -f '{{with .Module}}{{if not .Main}}{{.Path}}@{{.Version}}{{end}}{{end}}' ./cmd/sievelog
+        -f '{{with .Module}}{{if not .Main}}{{.Path}}@{{.Version}}{{end}}{{end}}' ./cmd/zeroreads
     done
   done | sort -u
 }
@@ -23,7 +23,7 @@ section() { # title, file
 }
 
 generate() {
-  printf 'sievelog includes the Go standard library and runtime, and the modules below. Each one is listed\n'
+  printf 'zeroreads includes the Go standard library and runtime, and the modules below. Each one is listed\n'
   printf 'with its version, followed by its licence and notice files as published.\n\n'
   local goroot golicense
   goroot=$(go env GOROOT)

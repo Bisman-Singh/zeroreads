@@ -23,17 +23,17 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Bisman-Singh/sievelog/internal/automaton"
-	"github.com/Bisman-Singh/sievelog/internal/emit"
-	"github.com/Bisman-Singh/sievelog/internal/logql"
-	"github.com/Bisman-Singh/sievelog/internal/usage"
+	"github.com/Bisman-Singh/zeroreads/internal/automaton"
+	"github.com/Bisman-Singh/zeroreads/internal/emit"
+	"github.com/Bisman-Singh/zeroreads/internal/logql"
+	"github.com/Bisman-Singh/zeroreads/internal/usage"
 )
 
-// CountLabel is the label Loki exposes for the rollup count attribute (sievelog.dedup_count).
-const CountLabel = "sievelog_dedup_count"
+// CountLabel is the label Loki exposes for the rollup count attribute (zeroreads.dedup_count).
+const CountLabel = "zeroreads_dedup_count"
 
-// RuleLabel is the label Loki exposes for the rollup rule attribute (sievelog.rule).
-const RuleLabel = "sievelog_rule"
+// RuleLabel is the label Loki exposes for the rollup rule attribute (zeroreads.rule).
+const RuleLabel = "zeroreads_rule"
 
 // Marker is the body of a rule's rollup records.
 func Marker(id string) string { return emit.RollupMarker(id) }
@@ -245,7 +245,7 @@ func seconds(r string) (float64, bool) {
 // MarkerLanguage is the anchored language of a rule's rollup record text.
 func MarkerLanguage(id string) string { return `\A` + regexp.QuoteMeta(Marker(id)) + `\z` }
 
-// ReadsRollups reports whether sel can select rule id's rollup records other than as a sievelog
+// ReadsRollups reports whether sel can select rule id's rollup records other than as a zeroreads
 // rollup term: such a query's numbers or lines change once the rule rolls up.
 func ReadsRollups(sel logql.Selection, id string, scope map[string]string) bool {
 	if sel.NoRollups {
@@ -259,7 +259,7 @@ func ReadsRollups(sel logql.Selection, id string, scope map[string]string) bool 
 	return usage.Evaluate(sel, usage.Rule{ID: id, Scope: scope, Language: automaton.MustCompile(MarkerLanguage(id))}).Used
 }
 
-// Compensated reports whether sel is a sievelog raw-line term (Z) covering rule id inside a
+// Compensated reports whether sel is a zeroreads raw-line term (Z) covering rule id inside a
 // rewritten query: a count of exactly the alternation of the languages whose rollup records the
 // same query reads through the same selector, with id among them. Such a term counts removed lines
 // only until enforcement starts and is summed with the rollup counts, so it is not a reader that
@@ -289,7 +289,7 @@ func Compensated(q *logql.Query, sel logql.Selection, id string, languages map[s
 	return false
 }
 
-// markerIDs returns the rules whose rollup records st selects when st is a sievelog rollup term's
+// markerIDs returns the rules whose rollup records st selects when st is a zeroreads rollup term's
 // marker filter (every alternative a rollup marker), otherwise nil.
 func markerIDs(st logql.Stage) []string {
 	if st.Negative || len(st.Alternatives) == 0 {

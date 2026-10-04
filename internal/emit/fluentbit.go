@@ -12,8 +12,8 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/Bisman-Singh/sievelog/internal/dialect"
-	"github.com/Bisman-Singh/sievelog/internal/topology"
+	"github.com/Bisman-Singh/zeroreads/internal/dialect"
+	"github.com/Bisman-Singh/zeroreads/internal/topology"
 )
 
 // FluentBitTarget is where in a Fluent Bit YAML configuration rules are enforced.
@@ -72,7 +72,7 @@ func accessor(path []string) string {
 
 // ArchiveTag is the tag archived records carry once rewrite_tag moves them off their stream. Only the
 // archive outputs may match it.
-const ArchiveTag = "sievelog.archive"
+const ArchiveTag = "zeroreads.archive"
 
 func metricName(prefix, id string) string {
 	return prefix + "_" + strings.NewReplacer("-", "_").Replace(id)
@@ -117,13 +117,13 @@ func FluentBit(files [][]byte, t FluentBitTarget, rules []Rule, mode Mode) ([]by
 		}
 		added = append(added, f...)
 	}
-	added = append(added, map[string]any{"name": "modify", "alias": "sievelog_clean", "match": t.Match, "remove": "sievelog_rule"})
+	added = append(added, map[string]any{"name": "modify", "alias": "zeroreads_clean", "match": t.Match, "remove": "zeroreads_rule"})
 	pipeline["filters"] = append(append(append([]any(nil), filters[:pos]...), added...), filters[pos:]...)
 	return yaml.Marshal(cfg)
 }
 
 // insertAt is where the rules' filters go: after the filter aliased t.After, or first. A
-// configuration that already holds sievelog filters is refused rather than wired twice.
+// configuration that already holds zeroreads filters is refused rather than wired twice.
 func (t FluentBitTarget) insertAt(filters []any) (int, error) {
 	pos := 0
 	if t.After != "" {
@@ -138,8 +138,8 @@ func (t FluentBitTarget) insertAt(filters []any) (int, error) {
 		}
 	}
 	for _, f := range filters {
-		if fm, _ := f.(map[string]any); strings.HasPrefix(fmt.Sprint(property(fm, "alias")), "sievelog_") {
-			return 0, fmt.Errorf("emit: the configuration already has sievelog filters")
+		if fm, _ := f.(map[string]any); strings.HasPrefix(fmt.Sprint(property(fm, "alias")), "zeroreads_") {
+			return 0, fmt.Errorf("emit: the configuration already has zeroreads filters")
 		}
 	}
 	return pos, nil
@@ -177,9 +177,9 @@ func (t FluentBitTarget) tagFilters(rules []Rule, mode Mode) ([]any, error) {
 			return nil, err
 		}
 		out = append(out, map[string]any{
-			"name": "modify", "alias": "sievelog_tag_" + strings.ReplaceAll(r.ID, "-", "_"), "match": t.Match,
+			"name": "modify", "alias": "zeroreads_tag_" + strings.ReplaceAll(r.ID, "-", "_"), "match": t.Match,
 			"condition": []any{"Key_value_matches " + t.ScopeKey + " " + scope, "Key_value_matches " + accessor(path) + " " + pat},
-			"add":       "sievelog_rule " + r.ID,
+			"add":       "zeroreads_rule " + r.ID,
 		})
 	}
 	return out, nil
@@ -195,9 +195,9 @@ func (t FluentBitTarget) severityFilters() ([]any, error) {
 	var out []any
 	for i, k := range t.severityKeys() {
 		out = append(out, map[string]any{
-			"name": "modify", "alias": fmt.Sprintf("sievelog_severe_%d", i), "match": t.Match,
+			"name": "modify", "alias": fmt.Sprintf("zeroreads_severe_%d", i), "match": t.Match,
 			"condition": []any{"Key_value_matches " + accessor(k) + " " + severe},
-			"remove":    "sievelog_rule",
+			"remove":    "zeroreads_rule",
 		})
 	}
 	return out, nil
@@ -213,15 +213,15 @@ func (t FluentBitTarget) measureFilters(rules []Rule, mode Mode) ([]any, error) 
 			return nil, err
 		}
 		out = append(out, map[string]any{
-			"name": "log_to_metrics", "alias": "sievelog_measure_" + strings.ReplaceAll(r.ID, "-", "_"), "match": t.Match,
-			"tag": t.MetricsTag, "metric_mode": "counter", "metric_name": metricName("sievelog_rule_lines", r.ID),
-			"metric_description": "lines matching rule " + r.ID, "regex": "sievelog_rule " + idPat, "discard_logs": false,
+			"name": "log_to_metrics", "alias": "zeroreads_measure_" + strings.ReplaceAll(r.ID, "-", "_"), "match": t.Match,
+			"tag": t.MetricsTag, "metric_mode": "counter", "metric_name": metricName("zeroreads_rule_lines", r.ID),
+			"metric_description": "lines matching rule " + r.ID, "regex": "zeroreads_rule " + idPat, "discard_logs": false,
 		})
 		if r.Action == "aggregate" && mode == Enforce {
 			out = append(out, map[string]any{
-				"name": "log_to_metrics", "alias": "sievelog_aggregate_" + strings.ReplaceAll(r.ID, "-", "_"), "match": t.Match,
-				"tag": t.MetricsTag, "metric_mode": "counter", "metric_name": metricName("sievelog_aggregate_lines", r.ID),
-				"metric_description": "lines replaced by this counter, rule " + r.ID, "regex": "sievelog_rule " + idPat, "discard_logs": false,
+				"name": "log_to_metrics", "alias": "zeroreads_aggregate_" + strings.ReplaceAll(r.ID, "-", "_"), "match": t.Match,
+				"tag": t.MetricsTag, "metric_mode": "counter", "metric_name": metricName("zeroreads_aggregate_lines", r.ID),
+				"metric_description": "lines replaced by this counter, rule " + r.ID, "regex": "zeroreads_rule " + idPat, "discard_logs": false,
 			})
 		}
 	}
@@ -280,21 +280,21 @@ func (t FluentBitTarget) enforceFilters(rules []Rule, mode Mode) ([]any, error) 
 			return nil, err
 		}
 		// keep=false: the record leaves this stream and re-enters the pipeline tagged ArchiveTag,
-		// where it keeps the rule that archived it as sievelog_archive, as in the other runtimes.
+		// where it keeps the rule that archived it as zeroreads_archive, as in the other runtimes.
 		out = append(out,
-			map[string]any{"name": "rewrite_tag", "alias": "sievelog_archive", "match": t.Match,
-				"rule": "$sievelog_rule " + ids + " " + ArchiveTag + " false", "emitter_name": "sievelog_archive_emitter"},
-			map[string]any{"name": "modify", "alias": "sievelog_archive_rule", "match": ArchiveTag, "rename": "sievelog_rule sievelog_archive"})
+			map[string]any{"name": "rewrite_tag", "alias": "zeroreads_archive", "match": t.Match,
+				"rule": "$zeroreads_rule " + ids + " " + ArchiveTag + " false", "emitter_name": "zeroreads_archive_emitter"},
+			map[string]any{"name": "modify", "alias": "zeroreads_archive_rule", "match": ArchiveTag, "rename": "zeroreads_rule zeroreads_archive"})
 	}
 	if len(dropIDs) > 0 {
 		ids, err := dialect.Onigmo(`\A(?:` + strings.Join(dropIDs, "|") + `)\z`)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, map[string]any{"name": "grep", "alias": "sievelog_drop", "match": t.Match, "exclude": "sievelog_rule " + ids})
+		out = append(out, map[string]any{"name": "grep", "alias": "zeroreads_drop", "match": t.Match, "exclude": "zeroreads_rule " + ids})
 	}
 	if len(thresholds) > 0 {
-		out = append(out, map[string]any{"name": "lua", "alias": "sievelog_sample", "match": t.Match, "call": "sievelog_sample",
+		out = append(out, map[string]any{"name": "lua", "alias": "zeroreads_sample", "match": t.Match, "call": "zeroreads_sample",
 			"time_as_table": true, "protected_mode": true, "code": sampleLua(thresholds, paths)})
 	}
 	return out, nil
@@ -326,7 +326,7 @@ func sampleLua(thresholds map[string]int64, paths map[string][]string) string {
 		}
 		fmt.Fprintf(&ps, "  [%q] = {%s},\n", id, strings.Join(q, ", "))
 	}
-	return luaSHA256 + "\nlocal sievelog_thresholds = {\n" + th.String() + "}\nlocal sievelog_paths = {\n" + ps.String() + "}\n" + luaSample
+	return luaSHA256 + "\nlocal zeroreads_thresholds = {\n" + th.String() + "}\nlocal zeroreads_paths = {\n" + ps.String() + "}\n" + luaSample
 }
 
 const luaSHA256 = `local bit = require("bit")
@@ -376,12 +376,12 @@ local function sha256(msg)
 end
 `
 
-const luaSample = `function sievelog_sample(tag, ts, record)
-  local id = record["sievelog_rule"]
-  local t = id and sievelog_thresholds[id]
+const luaSample = `function zeroreads_sample(tag, ts, record)
+  local id = record["zeroreads_rule"]
+  local t = id and zeroreads_thresholds[id]
   if t == nil then return 0, ts, record end
   local v = record
-  for _, k in ipairs(sievelog_paths[id]) do
+  for _, k in ipairs(zeroreads_paths[id]) do
     if type(v) ~= "table" then v = nil break end
     v = v[k]
   end

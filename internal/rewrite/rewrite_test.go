@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Bisman-Singh/sievelog/internal/automaton"
-	"github.com/Bisman-Singh/sievelog/internal/logql"
-	"github.com/Bisman-Singh/sievelog/internal/usage"
+	"github.com/Bisman-Singh/zeroreads/internal/automaton"
+	"github.com/Bisman-Singh/zeroreads/internal/logql"
+	"github.com/Bisman-Singh/zeroreads/internal/usage"
 )
 
 var cache = Rule{ID: "r-cache", Language: `\ADEBUG cache (?:hit|miss) key [0-9a-f]{8}\z`, Scope: map[string]string{"service_name": "checkout"}}
@@ -108,7 +108,7 @@ func TestRollupRecordsNotCountedTwice(t *testing.T) {
 	for q, reads := range map[string]bool{
 		`sum(count_over_time({service_name="checkout"} != "/healthz" [5m]))`: true,
 		`sum(count_over_time({service_name="checkout"} !~ "DEBUG" [5m]))`:    true,
-		`{service_name="checkout"} | sievelog_rule=""`:                       false,
+		`{service_name="checkout"} | zeroreads_rule=""`:                      false,
 		`sum(count_over_time({service_name="checkout"} |= "healthz" [5m]))`:  false,
 		`{service_name="auth"}`: false,
 	} {
@@ -221,12 +221,12 @@ func TestCompensatedCombined(t *testing.T) {
 
 func TestMarkerIDs(t *testing.T) {
 	for in, want := range map[string][]string{
-		`{s="x"} |= "sievelog rollup r-1"`:                          {"r-1"},
-		`{s="x"} |= "sievelog rollup r-1" or "sievelog rollup r-2"`: {"r-1", "r-2"},
-		`{s="x"} |= "sievelog rollup r-1" or "other"`:               nil,
-		`{s="x"} |= "sievelog rollup "`:                             nil,
-		`{s="x"} != "sievelog rollup r-1"`:                          nil,
-		`{s="x"} |~ "sievelog rollup r-1"`:                          nil,
+		`{s="x"} |= "zeroreads rollup r-1"`:                           {"r-1"},
+		`{s="x"} |= "zeroreads rollup r-1" or "zeroreads rollup r-2"`: {"r-1", "r-2"},
+		`{s="x"} |= "zeroreads rollup r-1" or "other"`:                nil,
+		`{s="x"} |= "zeroreads rollup "`:                              nil,
+		`{s="x"} != "zeroreads rollup r-1"`:                           nil,
+		`{s="x"} |~ "zeroreads rollup r-1"`:                           nil,
 	} {
 		q, err := logql.Parse(in)
 		if err != nil {

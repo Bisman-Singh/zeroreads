@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/app"
-	"github.com/Bisman-Singh/sievelog/internal/emit"
-	"github.com/Bisman-Singh/sievelog/internal/gen"
+	"github.com/Bisman-Singh/zeroreads/internal/app"
+	"github.com/Bisman-Singh/zeroreads/internal/emit"
+	"github.com/Bisman-Singh/zeroreads/internal/gen"
 )
 
 // runtimeCase is one pipeline runtime taken through the same loop as the Collector.
@@ -27,7 +27,7 @@ type runtimeCase struct {
 	userFile, cm, key  string // the user config, and the ConfigMap and key it is deployed through
 	ds                 string
 	validate           func(e *loopEnv, cfgPath string)
-	section            string // the runtime's sievelog.yaml section; %s is the user config path
+	section            string // the runtime's zeroreads.yaml section; %s is the user config path
 	actions            string
 	readRaw            func(e *loopEnv, ns string) []rawRecord
 	keepDigits         int // hex digits of the SHA-256 compared with the sample threshold
@@ -49,12 +49,12 @@ func (rc runtimeCase) deploy(e *loopEnv, cfgPath string) {
 	for _, f := range rc.outputs {
 		os.Remove(filepath.Join(e.work, "out", f))
 	}
-	cm := e.kubectl("create", "configmap", rc.cm, "-n", "sievelog-system", "--from-file="+rc.key+"="+cfgPath, "--dry-run=client", "-o", "yaml")
+	cm := e.kubectl("create", "configmap", rc.cm, "-n", "zeroreads-system", "--from-file="+rc.key+"="+cfgPath, "--dry-run=client", "-o", "yaml")
 	f := filepath.Join(e.t.TempDir(), "cm.yaml")
 	os.WriteFile(f, []byte(cm), 0o644)
 	e.kubectl("apply", "-f", f)
-	e.kubectl("rollout", "restart", "daemonset/"+rc.ds, "-n", "sievelog-system")
-	e.kubectl("rollout", "status", "daemonset/"+rc.ds, "-n", "sievelog-system", "--timeout=180s")
+	e.kubectl("rollout", "restart", "daemonset/"+rc.ds, "-n", "zeroreads-system")
+	e.kubectl("rollout", "status", "daemonset/"+rc.ds, "-n", "zeroreads-system", "--timeout=180s")
 	time.Sleep(5 * time.Second) // let it start tailing before generators run
 }
 
@@ -89,7 +89,7 @@ func msgOf(service, message string) (string, bool) {
 }
 
 var vectorCase = runtimeCase{
-	name: "vector", prefix: "sievelog-vloop", userFile: "vector.yaml", cm: "vector-config", key: "vector.yaml", ds: "vector",
+	name: "vector", prefix: "zeroreads-vloop", userFile: "vector.yaml", cm: "vector-config", key: "vector.yaml", ds: "vector",
 	validate: func(e *loopEnv, cfgPath string) {
 		dir := e.t.TempDir()
 		b, _ := os.ReadFile(cfgPath)
@@ -136,9 +136,9 @@ vector:
 			c, _ := m["counter"].(map[string]any)
 			v, _ := c["value"].(float64)
 			switch m["name"] {
-			case "sievelog_rule_lines":
+			case "zeroreads_rule_lines":
 				out["lines|"+tags["rule"].(string)] += v
-			case "sievelog_rule_bytes":
+			case "zeroreads_rule_bytes":
 				out["bytes|"+tags["rule"].(string)] += v
 			}
 		})
@@ -149,7 +149,7 @@ vector:
 }
 
 var fluentBitCase = runtimeCase{
-	name: "fluentbit", prefix: "sievelog-fbloop", userFile: "fluent-bit.yaml", cm: "fluent-bit-config", key: "fluent-bit.yaml", ds: "fluent-bit",
+	name: "fluentbit", prefix: "zeroreads-fbloop", userFile: "fluent-bit.yaml", cm: "fluent-bit-config", key: "fluent-bit.yaml", ds: "fluent-bit",
 	validate: func(e *loopEnv, cfgPath string) {
 		dir := e.t.TempDir()
 		b, _ := os.ReadFile(cfgPath)
@@ -166,7 +166,7 @@ fluentbit:
   scope_key: service
   text_key: [message]
   field_keys: {orders: [msg]}
-  metrics_tag: sievelog.metrics
+  metrics_tag: zeroreads.metrics
   sinks:
     loki: {loki: true}
     logs: {exempt: "e2e local copy"}
@@ -187,8 +187,8 @@ fluentbit:
 	keepDigits: 13, threshold: emit.FluentBitSampleThreshold,
 	metrics: func(e *loopEnv) map[string]float64 {
 		out := map[string]float64{}
-		logs := e.kubectl("logs", "daemonset/fluent-bit", "-n", "sievelog-system")
-		re := regexp.MustCompile(`log_metric_counter_sievelog_rule_lines_([a-z0-9_]+)\S* = (\d+)`)
+		logs := e.kubectl("logs", "daemonset/fluent-bit", "-n", "zeroreads-system")
+		re := regexp.MustCompile(`log_metric_counter_zeroreads_rule_lines_([a-z0-9_]+)\S* = (\d+)`)
 		for _, m := range re.FindAllStringSubmatch(logs, -1) {
 			v, _ := strconv.ParseFloat(m[2], 64)
 			out["lines|"+m[1]] = v // cumulative since the last restart: the last value wins
@@ -212,8 +212,8 @@ func runtimeLoop(t *testing.T, rc runtimeCase) {
 	e.kube = filepath.Join(e.work, "kubeconfig")
 	grafanaURL := env(t, "GRAFANA_URL")
 	os.Setenv("E2E_GRAFANA_PASSWORD", grafanaPass)
-	e.bin = filepath.Join(e.work, "sievelog")
-	if out, code := e.run(e.root, "go", "build", "-o", e.bin, "./cmd/sievelog"); code != 0 {
+	e.bin = filepath.Join(e.work, "zeroreads")
+	if out, code := e.run(e.root, "go", "build", "-o", e.bin, "./cmd/zeroreads"); code != 0 {
 		t.Fatal(out)
 	}
 	src, _ := os.ReadFile(filepath.Join(e.root, "e2e", "runtimes", rc.userFile))
@@ -223,7 +223,7 @@ func runtimeLoop(t *testing.T, rc runtimeCase) {
 	pre := e.batch("pre", 41, 2000)
 	e.nsLines(pre, 6000)
 
-	cfgPath := filepath.Join(e.work, "sievelog-"+rc.name+".yaml")
+	cfgPath := filepath.Join(e.work, "zeroreads-"+rc.name+".yaml")
 	os.WriteFile(cfgPath, []byte(fmt.Sprintf(`loki:
   url: %s
 scope:
@@ -400,7 +400,7 @@ evidence:
 			}
 			text, structured := msgOf(m["service"].(string), m["message"].(string))
 			if x := ruleFor(rawRecord{service: m["service"].(string), text: text, structured: structured}); x != nil && x.Action == "dedupe" {
-				c, _ := m["sievelog_count"].(float64)
+				c, _ := m["zeroreads_count"].(float64)
 				counts[x.ID] += int(c)
 			}
 		})

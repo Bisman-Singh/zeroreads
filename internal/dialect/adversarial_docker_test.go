@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Bisman-Singh/sievelog/internal/automaton"
+	"github.com/Bisman-Singh/zeroreads/internal/automaton"
 )
 
 func vrlAll(t *testing.T, pattern string, inputs []string) []bool {

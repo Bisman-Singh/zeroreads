@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-provisioning
-  namespace: sievelog-system
+  namespace: zeroreads-system
 data:
   datasources.yaml: |
     apiVersion: 1
@@ -11,12 +11,12 @@ data:
         uid: loki
         type: loki
         access: proxy
-        url: http://loki.sievelog-system.svc:3100
+        url: http://loki.zeroreads-system.svc:3100
         isDefault: true
   dashboards.yaml: |
     apiVersion: 1
     providers:
-      - name: sievelog
+      - name: zeroreads
         folder: E2E
         type: file
         options:
@@ -54,7 +54,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-dashboards
-  namespace: sievelog-system
+  namespace: zeroreads-system
 data:
   checkout.json: |
     {
@@ -124,7 +124,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: grafana
-  namespace: sievelog-system
+  namespace: zeroreads-system
 spec:
   replicas: 1
   selector:
@@ -164,7 +164,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: grafana
-  namespace: sievelog-system
+  namespace: zeroreads-system
 spec:
   selector: {app: grafana}
   ports:

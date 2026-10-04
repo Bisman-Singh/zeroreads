@@ -7,14 +7,14 @@ From nothing to a shadow-mode report you can trust. Nothing here removes a singl
 Download a release binary, or run the image:
 
 ```sh
-docker run --rm -v "$PWD:/w" -w /w ghcr.io/bisman-singh/sievelog:0.1.0 analyze -c sievelog.yaml -o out/
+docker run --rm -v "$PWD:/w" -w /w ghcr.io/bisman-singh/zeroreads:0.1.0 analyze -c zeroreads.yaml -o out/
 ```
 
-Or build from source: `go build ./cmd/sievelog` (Go 1.27.1).
+Or build from source: `go build ./cmd/zeroreads` (Go 1.27.1).
 
 ## 2. Let Loki record what is read
 
-sievelog's strongest evidence is Loki's own query log. In Loki's configuration:
+zeroreads's strongest evidence is Loki's own query log. In Loki's configuration:
 
 ```yaml
 frontend:
@@ -22,10 +22,10 @@ frontend:
   query_stats_enabled: true       # also log pattern requests (Grafana Logs Drilldown)
 ```
 
-Ship Loki's own logs into a Loki that sievelog can query, at info level. sievelog proves all of this
+Ship Loki's own logs into a Loki that zeroreads can query, at info level. zeroreads proves all of this
 works by sending marker queries and waiting until they show up.
 
-## 3. Write sievelog.yaml
+## 3. Write zeroreads.yaml
 
 The smallest useful configuration, for an OpenTelemetry Collector pipeline:
 
@@ -55,7 +55,7 @@ collector:
 ## 4. Analyze
 
 ```sh
-sievelog analyze -c sievelog.yaml -o out/
+zeroreads analyze -c zeroreads.yaml -o out/
 ```
 
 Read `out/report.md`. Every template has a section: the exact pattern a rule would remove, the volume
@@ -65,19 +65,19 @@ sample line that query would return.
 ## 5. Shadow
 
 ```sh
-sievelog emit -c sievelog.yaml -rules out/rules.json -mode shadow -o collector-shadow.yaml
+zeroreads emit -c zeroreads.yaml -rules out/rules.json -mode shadow -o collector-shadow.yaml
 ```
 
 Deploy `collector-shadow.yaml` in place of your collector config. It removes nothing: it adds metrics
-`sievelog.rule.lines.<rule>` and `sievelog.rule.bytes.<rule>` with exactly what each rule would remove,
-measured at the point where enforcement would act. Run `sievelog verify` on a schedule (the Helm chart
-in `charts/sievelog` does this) and leave it for a period that covers your normal weekly traffic.
+`zeroreads.rule.lines.<rule>` and `zeroreads.rule.bytes.<rule>` with exactly what each rule would remove,
+measured at the point where enforcement would act. Run `zeroreads verify` on a schedule (the Helm chart
+in `charts/zeroreads` does this) and leave it for a period that covers your normal weekly traffic.
 
 Only then consider `-mode enforce`, and keep `verify` running.
 
 ## Why is everything blocked?
 
-sievelog blocks every rule while any evidence is missing, because a rule can only be safe if nothing
+zeroreads blocks every rule while any evidence is missing, because a rule can only be safe if nothing
 that reads its lines went unseen. Each missing piece is an evidence gap with a stable key, listed at
 the top of the report. For each one, either fix it, or accept it deliberately by adding its key to
 `policy.acknowledge`. Acknowledging a gap is a decision that the unseen readers do not exist or do not

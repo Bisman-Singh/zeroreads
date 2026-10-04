@@ -1,13 +1,13 @@
-{{- if not .Values.config }}{{ fail "config (sievelog.yaml) is required" }}{{ end }}
+{{- if not .Values.config }}{{ fail "config (zeroreads.yaml) is required" }}{{ end }}
 {{- if not .Values.rules }}{{ fail "rules (the enforced rules.json) is required" }}{{ end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "sievelog.fullname" . }}
+  name: {{ include "zeroreads.fullname" . }}
   labels:
-    {{- include "sievelog.labels" . | nindent 4 }}
+    {{- include "zeroreads.labels" . | nindent 4 }}
 data:
-  sievelog.yaml: |
+  zeroreads.yaml: |
     {{- .Values.config | nindent 4 }}
   rules.json: |
     {{- .Values.rules | nindent 4 }}

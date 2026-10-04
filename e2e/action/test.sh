@@ -6,22 +6,22 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "${ROOT}"
 W=.e2e/act
 mkdir -p "${W}"
-sed 's#loki.sievelog-system.svc:3100#host.docker.internal:13100#g; s#grafana.sievelog-system.svc:3000#host.docker.internal:13000#g' e2e/action/sievelog.yaml > "${W}/sievelog.yaml"
+sed 's#loki.zeroreads-system.svc:3100#host.docker.internal:13100#g; s#grafana.zeroreads-system.svc:3000#host.docker.internal:13000#g' e2e/action/zeroreads.yaml > "${W}/zeroreads.yaml"
 cp .e2e/loop-user.yaml "${W}/collector.yaml"
 cp .e2e/loop-out/rules.json "${W}/rules.json"
-K="kubectl --kubeconfig .e2e/kubeconfig --context kind-sievelog"
+K="kubectl --kubeconfig .e2e/kubeconfig --context kind-zeroreads"
 # shellcheck source=e2e/lib.sh
 source "${ROOT}/e2e/lib.sh"
-forward sievelog-system loki 13100:3100
-forward sievelog-system grafana 13000:3000
+forward zeroreads-system loki 13100:3100
+forward zeroreads-system grafana 13000:3000
 trap 'stop_forwards; curl -s -X DELETE "http://admin:e2e-only-password@localhost:13000/api/dashboards/uid/act-cache" >/dev/null || true' EXIT
 sleep 3
 # The action runs the released image. This checkout is built under a local name instead, and act runs a
 # copy of the action that names it, so the release tag on this machine always means the released image.
-docker build -q -t sievelog/sievelog:act . >/dev/null
+docker build -q -t zeroreads/zeroreads:act . >/dev/null
 mkdir -p "${W}/action"
-sed 's#image: docker://.*#image: docker://sievelog/sievelog:act#' action.yml > "${W}/action/action.yml"
-grep -q 'docker://sievelog/sievelog:act' "${W}/action/action.yml" || { echo "FAIL: the action's image line was not rewritten"; exit 1; }
+sed 's#image: docker://.*#image: docker://zeroreads/zeroreads:act#' action.yml > "${W}/action/action.yml"
+grep -q 'docker://zeroreads/zeroreads:act' "${W}/action/action.yml" || { echo "FAIL: the action's image line was not rewritten"; exit 1; }
 sed "s#uses: ./\$#uses: ./${W}/action#" e2e/action/verify.yml > "${W}/verify.yml"
 grep -q "uses: ./${W}/action" "${W}/verify.yml" || { echo "FAIL: the workflow does not use the local action copy"; exit 1; }
 run() { act push -W "${W}/verify.yml" --bind -P ubuntu-latest=node:20-bookworm-slim --pull=false 2>&1; }

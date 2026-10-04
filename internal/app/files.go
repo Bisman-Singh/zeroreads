@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 )
 
-// File permissions for what sievelog writes. Runtime configurations embed the user's whole pipeline
+// File permissions for what zeroreads writes. Runtime configurations embed the user's whole pipeline
 // configuration, which can hold credentials, so only the owner reads them. Reports, rules and
 // rewritten queries hold no credentials (URLs with credentials are refused) and are meant to be
 // shared.
@@ -22,8 +22,8 @@ const (
 // rules.json, which rewrite -apply updates in place.
 //
 // A link is written through, so the file it points to is replaced and the link stays, but only a link
-// the user running sievelog owns: one that someone else planted in a shared directory would make
-// sievelog overwrite a file of their choosing. An existing file never gets wider permissions.
+// the user running zeroreads owns: one that someone else planted in a shared directory would make
+// zeroreads overwrite a file of their choosing. An existing file never gets wider permissions.
 func WriteFile(path string, data []byte, perm os.FileMode) error {
 	if li, err := os.Lstat(path); err == nil && li.Mode()&os.ModeSymlink != 0 {
 		if !ownedByUs(li) {

@@ -3,8 +3,8 @@ package app
 import (
 	"sort"
 
-	"github.com/Bisman-Singh/sievelog/internal/analyze"
-	"github.com/Bisman-Singh/sievelog/internal/usage"
+	"github.com/Bisman-Singh/zeroreads/internal/analyze"
+	"github.com/Bisman-Singh/zeroreads/internal/usage"
 )
 
 // ReaderSummary counts the readers behind every rule's decision. A reader is exact when the query

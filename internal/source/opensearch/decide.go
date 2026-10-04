@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Bisman-Singh/sievelog/internal/automaton"
+	"github.com/Bisman-Singh/zeroreads/internal/automaton"
 )
 
 // Catalog is the cluster's current names: indices, aliases and data streams.

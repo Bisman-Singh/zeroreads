@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Bisman-Singh/sievelog/internal/gen"
+	"github.com/Bisman-Singh/zeroreads/internal/gen"
 )
 
 const tmpl = `receivers:
@@ -20,7 +20,7 @@ const tmpl = `receivers:
         id: container-parser
 
   file_log/loki:
-    include: [/var/log/pods/sievelog-system_%s_*/loki/*.log]
+    include: [/var/log/pods/zeroreads-system_%s_*/loki/*.log]
     start_at: beginning
     include_file_path: true
     operators:
@@ -44,7 +44,7 @@ processors:
         statements:
           - set(log.attributes["service.name"], resource.attributes["k8s.container.name"])
           # Bytes are captured while the body is still the raw string line.
-          - set(log.attributes["sievelog.body_bytes"], Len(log.body))
+          - set(log.attributes["zeroreads.body_bytes"], Len(log.body))
           - set(log.body, ParseJSON(log.body)) where resource.attributes["k8s.container.name"] == "orders"
   drain:
     body_field: msg
@@ -57,18 +57,18 @@ processors:
 connectors:
   signal_to_metrics:
     logs:
-      - name: sievelog.template.records
+      - name: zeroreads.template.records
         attributes: [{key: service.name}, {key: log.record.template}]
         sum:
           value: "1"
           monotonic: true
-      - name: sievelog.template.bytes
+      - name: zeroreads.template.bytes
         attributes: [{key: service.name}, {key: log.record.template}]
         sum:
-          value: log.attributes["sievelog.body_bytes"]
+          value: log.attributes["zeroreads.body_bytes"]
           monotonic: true
       # Len(body) after JSON parsing, recorded to check what Len returns for a map body.
-      - name: sievelog.template.len_after_parse
+      - name: zeroreads.template.len_after_parse
         attributes: [{key: service.name}, {key: log.record.template}]
         sum:
           value: Len(log.body)
@@ -80,7 +80,7 @@ exporters:
   file/metrics:
     path: /e2e/out/metrics.json
   otlp_http/loki:
-    endpoint: http://loki.sievelog-system.svc:3100/otlp
+    endpoint: http://loki.zeroreads-system.svc:3100/otlp
 
 service:
   telemetry:
@@ -101,18 +101,18 @@ service:
 `
 
 // loop is the "user" collector config the full-loop test analyses, emits from and deploys: logs of
-// every sievelog-loop-* namespace go to Loki and a local file, and an independent pipeline keeps a
+// every zeroreads-loop-* namespace go to Loki and a local file, and an independent pipeline keeps a
 // raw copy of every record so removal can be checked line by line.
 const loop = `receivers:
   file_log/loop:
-    include: [/var/log/pods/sievelog-loop-*_*/*/*.log]
+    include: [/var/log/pods/zeroreads-loop-*_*/*/*.log]
     start_at: end
     include_file_path: true
     operators:
       - type: container
         id: container-parser
   file_log/loki:
-    include: [/var/log/pods/sievelog-system_loki-*/loki/*.log]
+    include: [/var/log/pods/zeroreads-system_loki-*/loki/*.log]
     start_at: end
     include_file_path: true
     operators:
@@ -138,7 +138,7 @@ processors:
 
 exporters:
   otlp_http/loki:
-    endpoint: http://loki.sievelog-system.svc:3100/otlp
+    endpoint: http://loki.zeroreads-system.svc:3100/otlp
   file/logs:
     path: /e2e/out/loop-logs.json
   file/raw:

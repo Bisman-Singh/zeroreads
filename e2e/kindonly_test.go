@@ -45,7 +45,7 @@ func TestForwardRefusesATakenPort(t *testing.T) {
 	}
 	defer ln.Close()
 	taken := ln.Addr().(*net.TCPAddr).Port
-	out, err := libScript(t, fmt.Sprintf(`forward sievelog-system loki %d:3100; stop_forwards; echo started`, taken))
+	out, err := libScript(t, fmt.Sprintf(`forward zeroreads-system loki %d:3100; stop_forwards; echo started`, taken))
 	if err == nil || strings.Contains(string(out), "started") || !strings.Contains(string(out), "already in use") {
 		t.Fatalf("a forward on a taken port was not refused (%v):\n%s", err, out)
 	}
@@ -56,7 +56,7 @@ func TestForwardRefusesATakenPort(t *testing.T) {
 	}
 	port := free.Addr().(*net.TCPAddr).Port
 	free.Close()
-	out, err = libScript(t, fmt.Sprintf(`forward sievelog-system loki %d:3100; stop_forwards; echo started`, port))
+	out, err = libScript(t, fmt.Sprintf(`forward zeroreads-system loki %d:3100; stop_forwards; echo started`, port))
 	if err != nil || !strings.Contains(string(out), "started") {
 		t.Fatalf("a forward on a free port was refused (%v):\n%s", err, out)
 	}

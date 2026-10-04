@@ -177,7 +177,7 @@ func runFilter(t *testing.T, m map[string]any, recs []record) map[[2]string]bool
 	t.Helper()
 	f := filterprocessor.NewFactory()
 	cfg := f.CreateDefaultConfig()
-	componentConfig(t, m, "processors", "filter/sievelog", cfg)
+	componentConfig(t, m, "processors", "filter/zeroreads", cfg)
 	sink := new(consumertest.LogsSink)
 	proc, err := f.CreateLogs(context.Background(), processortest.NewNopSettings(f.Type()), cfg, sink)
 	if err != nil {
@@ -209,9 +209,9 @@ func runFilter(t *testing.T, m map[string]any, recs []record) map[[2]string]bool
 // OTTL reads it: every value must stay literal. Found by the v1 audit: a service named
 // "svc${env:X}" made the emitted rule read the environment variable X.
 func TestCollectorWritesDollarLiterally(t *testing.T) {
-	t.Setenv("SIEVELOG_TEST_SECRET", "leaked")
-	svc := "svc${env:SIEVELOG_TEST_SECRET}$${SIEVELOG_TEST_SECRET}$HOME"
-	text := "cost ${SIEVELOG_TEST_SECRET} $$ ok"
+	t.Setenv("ZEROREADS_TEST_SECRET", "leaked")
+	svc := "svc${env:ZEROREADS_TEST_SECRET}$${ZEROREADS_TEST_SECRET}$HOME"
+	text := "cost ${ZEROREADS_TEST_SECRET} $$ ok"
 	rules := []Rule{{ID: "r-dollar", ScopeAttr: "service.name", ScopeValue: svc, Language: `\A` + regexp.QuoteMeta(text) + `\z`, Action: "drop"}}
 	survived := runFilter(t, emittedRules(t, rules, Enforce), []record{
 		{service: svc, text: text, ts: 1},
@@ -252,7 +252,7 @@ func TestFilterRemovesExactlyTheRules(t *testing.T) {
 	m := emitted(t, Enforce)
 	f := filterprocessor.NewFactory()
 	cfg := f.CreateDefaultConfig()
-	componentConfig(t, m, "processors", "filter/sievelog", cfg)
+	componentConfig(t, m, "processors", "filter/zeroreads", cfg)
 	sink := new(consumertest.LogsSink)
 	proc, err := f.CreateLogs(context.Background(), processortest.NewNopSettings(f.Type()), cfg, sink)
 	if err != nil {
@@ -317,7 +317,7 @@ func TestMeasurementCountsExactly(t *testing.T) {
 	m := emitted(t, Enforce)
 	f := signaltometricsconnector.NewFactory()
 	cfg := f.CreateDefaultConfig()
-	componentConfig(t, m, "connectors", "signal_to_metrics/sievelog", cfg)
+	componentConfig(t, m, "connectors", "signal_to_metrics/zeroreads", cfg)
 	sink := new(consumertest.MetricsSink)
 	conn, err := f.CreateLogsToMetrics(context.Background(), connectortest.NewNopSettings(f.Type()), cfg, sink)
 	if err != nil {
@@ -379,7 +379,7 @@ func TestDedupeCollapsesOnlyItsRule(t *testing.T) {
 	m := emitted(t, Enforce)
 	f := logdedupprocessor.NewFactory()
 	cfg := f.CreateDefaultConfig()
-	componentConfig(t, m, "processors", "logdedup/sievelog", cfg)
+	componentConfig(t, m, "processors", "logdedup/zeroreads", cfg)
 	sink := new(consumertest.LogsSink)
 	proc, err := f.CreateLogs(context.Background(), processortest.NewNopSettings(f.Type()), cfg, sink)
 	if err != nil {
@@ -440,10 +440,10 @@ func TestDedupeCollapsesOnlyItsRule(t *testing.T) {
 func TestShadowAddsNoEnforcement(t *testing.T) {
 	m := emitted(t, Shadow)
 	procs, _ := m["processors"].(map[string]any)
-	if _, ok := procs["filter/sievelog"]; ok {
+	if _, ok := procs["filter/zeroreads"]; ok {
 		t.Fatal("shadow mode added a filter")
 	}
-	if _, ok := procs["logdedup/sievelog"]; ok {
+	if _, ok := procs["logdedup/zeroreads"]; ok {
 		t.Fatal("shadow mode added dedupe")
 	}
 	pipes := m["service"].(map[string]any)["pipelines"].(map[string]any)
@@ -452,12 +452,12 @@ func TestShadowAddsNoEnforcement(t *testing.T) {
 		t.Fatalf("head processors %s", got)
 	}
 	// The user's later processors run before measurement, so shadow counts what enforce would see.
-	out := pipes["logs/sievelog"].(map[string]any)
-	if got, _ := json.Marshal(out); string(got) != `{"exporters":["forward/sievelog_enforce","signal_to_metrics/sievelog"],"processors":["batch"],"receivers":["forward/sievelog"]}` {
+	out := pipes["logs/zeroreads"].(map[string]any)
+	if got, _ := json.Marshal(out); string(got) != `{"exporters":["forward/zeroreads_enforce","signal_to_metrics/zeroreads"],"processors":["batch"],"receivers":["forward/zeroreads"]}` {
 		t.Fatalf("measurement pipeline %s", got)
 	}
-	enf := pipes["logs/sievelog_enforce"].(map[string]any)
-	if got, _ := json.Marshal(enf); string(got) != `{"exporters":["debug"],"processors":[],"receivers":["forward/sievelog_enforce"]}` {
+	enf := pipes["logs/zeroreads_enforce"].(map[string]any)
+	if got, _ := json.Marshal(enf); string(got) != `{"exporters":["debug"],"processors":[],"receivers":["forward/zeroreads_enforce"]}` {
 		t.Fatalf("shadow enforcement pipeline must be empty: %s", got)
 	}
 }
@@ -508,13 +508,13 @@ func TestRollupCountsExactly(t *testing.T) {
 	if err := yaml.Unmarshal(out, &m); err != nil {
 		t.Fatal(err)
 	}
-	procs := m["service"].(map[string]any)["pipelines"].(map[string]any)["logs/sievelog_enforce"].(map[string]any)["processors"].([]any)
-	if strings.Join(toStrings(procs), ",") != "transform/sievelog_rollup,logdedup/sievelog,filter/sievelog" {
+	procs := m["service"].(map[string]any)["pipelines"].(map[string]any)["logs/zeroreads_enforce"].(map[string]any)["processors"].([]any)
+	if strings.Join(toStrings(procs), ",") != "transform/zeroreads_rollup,logdedup/zeroreads,filter/zeroreads" {
 		t.Fatalf("processor order %v", procs)
 	}
 	df := logdedupprocessor.NewFactory()
 	dcfg := df.CreateDefaultConfig()
-	componentConfig(t, m, "processors", "logdedup/sievelog", dcfg)
+	componentConfig(t, m, "processors", "logdedup/zeroreads", dcfg)
 	sink := new(consumertest.LogsSink)
 	dedup, err := df.CreateLogs(context.Background(), processortest.NewNopSettings(df.Type()), dcfg, sink)
 	if err != nil {
@@ -522,7 +522,7 @@ func TestRollupCountsExactly(t *testing.T) {
 	}
 	tf := transformprocessor.NewFactory()
 	tcfg := tf.CreateDefaultConfig()
-	componentConfig(t, m, "processors", "transform/sievelog_rollup", tcfg)
+	componentConfig(t, m, "processors", "transform/zeroreads_rollup", tcfg)
 	transform, err := tf.CreateLogs(context.Background(), processortest.NewNopSettings(tf.Type()), tcfg, dedup)
 	if err != nil {
 		t.Fatal(err)
@@ -663,7 +663,7 @@ func TestSeverityGuard(t *testing.T) {
 	}
 	f := filterprocessor.NewFactory()
 	cfg := f.CreateDefaultConfig()
-	componentConfig(t, m, "processors", "filter/sievelog", cfg)
+	componentConfig(t, m, "processors", "filter/zeroreads", cfg)
 	sink := new(consumertest.LogsSink)
 	proc, err := f.CreateLogs(context.Background(), processortest.NewNopSettings(f.Type()), cfg, sink)
 	if err != nil {
@@ -711,7 +711,7 @@ func measureRules(t *testing.T, m map[string]any, ld plog.Logs) map[string]int {
 	t.Helper()
 	f := signaltometricsconnector.NewFactory()
 	cfg := f.CreateDefaultConfig()
-	componentConfig(t, m, "connectors", "signal_to_metrics/sievelog", cfg)
+	componentConfig(t, m, "connectors", "signal_to_metrics/zeroreads", cfg)
 	sink := new(consumertest.MetricsSink)
 	conn, err := f.CreateLogsToMetrics(context.Background(), connectortest.NewNopSettings(f.Type()), cfg, sink)
 	if err != nil {
@@ -733,12 +733,12 @@ func measureRules(t *testing.T, m map[string]any, ld plog.Logs) map[string]int {
 				ms := sms.At(j).Metrics()
 				for k := 0; k < ms.Len(); k++ {
 					mt := ms.At(k)
-					if !strings.HasPrefix(mt.Name(), "sievelog.rule.lines.") {
+					if !strings.HasPrefix(mt.Name(), "zeroreads.rule.lines.") {
 						continue
 					}
 					dps := mt.Sum().DataPoints()
 					for d := 0; d < dps.Len(); d++ {
-						out[strings.TrimPrefix(mt.Name(), "sievelog.rule.lines.")] += int(dps.At(d).IntValue() + int64(dps.At(d).DoubleValue()))
+						out[strings.TrimPrefix(mt.Name(), "zeroreads.rule.lines.")] += int(dps.At(d).IntValue() + int64(dps.At(d).DoubleValue()))
 					}
 				}
 			}
@@ -758,7 +758,7 @@ func TestSampleUntimedRecords(t *testing.T) {
 	yaml.Unmarshal(out, &m)
 	f := filterprocessor.NewFactory()
 	cfg := f.CreateDefaultConfig()
-	componentConfig(t, m, "processors", "filter/sievelog", cfg)
+	componentConfig(t, m, "processors", "filter/zeroreads", cfg)
 	sink := new(consumertest.LogsSink)
 	proc, err := f.CreateLogs(context.Background(), processortest.NewNopSettings(f.Type()), cfg, sink)
 	if err != nil {

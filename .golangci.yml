@@ -12,8 +12,8 @@ linters:
     rules:
       - path: _test\.go
         linters: [gosec, errcheck, noctx, gocognit, gocyclo, nestif]
-      # Files the operator names: on the command line, in sievelog.yaml, or through GitHub Actions.
-      - path: (cmd/sievelog/main\.go|internal/app/)
+      # Files the operator names: on the command line, in zeroreads.yaml, or through GitHub Actions.
+      - path: (cmd/zeroreads/main\.go|internal/app/)
         text: (G304|G703)
         linters: [gosec]
       # Test-data generators: seeded and reproducible on purpose, never used for anything secret.

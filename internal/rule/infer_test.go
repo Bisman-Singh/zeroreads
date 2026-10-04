@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Bisman-Singh/sievelog/internal/automaton"
-	"github.com/Bisman-Singh/sievelog/internal/gen"
-	"github.com/Bisman-Singh/sievelog/internal/templating"
+	"github.com/Bisman-Singh/zeroreads/internal/automaton"
+	"github.com/Bisman-Singh/zeroreads/internal/gen"
+	"github.com/Bisman-Singh/zeroreads/internal/templating"
 )
 
 var corpusMasks = []Mask{{Name: gen.IPMaskName, Pattern: gen.IPMaskPattern}}

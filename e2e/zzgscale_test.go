@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/app"
-	"github.com/Bisman-Singh/sievelog/internal/gen"
+	"github.com/Bisman-Singh/zeroreads/internal/app"
+	"github.com/Bisman-Singh/zeroreads/internal/gen"
 )
 
 // TestGrafanaScale stores thousands of dashboards in one Grafana organisation and runs the real
@@ -114,8 +114,8 @@ func TestGrafanaScale(t *testing.T) {
 	token := scaleToken(t, base, org)
 
 	// 3. Analyze through the org's token, measuring wall time and peak memory of the real binary.
-	bin := filepath.Join(work, "sievelog")
-	if out, err := runCmd(root, "go", "build", "-o", bin, "./cmd/sievelog"); err != nil {
+	bin := filepath.Join(work, "zeroreads")
+	if out, err := runCmd(root, "go", "build", "-o", bin, "./cmd/zeroreads"); err != nil {
 		t.Fatal(out)
 	}
 	collector := filepath.Join(work, "gscale-collector.yaml")
@@ -130,7 +130,7 @@ processors:
           - set(resource.attributes["service.name"], resource.attributes["k8s.container.name"])
 exporters:
   otlp_http/loki:
-    endpoint: http://loki.sievelog-system.svc:3100/otlp
+    endpoint: http://loki.zeroreads-system.svc:3100/otlp
 service:
   pipelines:
     logs:
@@ -138,7 +138,7 @@ service:
       processors: [transform/prep]
       exporters: [otlp_http/loki]
 `), 0o644)
-	cfgPath := filepath.Join(work, "sievelog-gscale.yaml")
+	cfgPath := filepath.Join(work, "zeroreads-gscale.yaml")
 	os.WriteFile(cfgPath, []byte(fmt.Sprintf(`loki:
   url: %[2]s
 scope:
@@ -219,7 +219,7 @@ policy:
 // later tests never read its dashboards.
 func scaleOrg(t *testing.T, base string) int64 {
 	t.Helper()
-	s, b := grafanaCall(t, base, "POST", "/api/orgs", 0, map[string]any{"name": fmt.Sprintf("sievelog-gscale-%d", time.Now().UnixNano())})
+	s, b := grafanaCall(t, base, "POST", "/api/orgs", 0, map[string]any{"name": fmt.Sprintf("zeroreads-gscale-%d", time.Now().UnixNano())})
 	must(t, s, b, http.StatusOK)
 	var created struct {
 		OrgID int64 `json:"orgId"`
@@ -227,16 +227,16 @@ func scaleOrg(t *testing.T, base string) int64 {
 	json.Unmarshal(b, &created)
 	t.Cleanup(func() { dropOrg(t, base, created.OrgID) })
 	s, b = grafanaCall(t, base, "POST", "/api/datasources", created.OrgID, map[string]any{
-		"name": "scale-loki", "uid": "scale-loki", "type": "loki", "access": "proxy", "url": "http://loki.sievelog-system.svc:3100", "isDefault": true})
+		"name": "scale-loki", "uid": "scale-loki", "type": "loki", "access": "proxy", "url": "http://loki.zeroreads-system.svc:3100", "isDefault": true})
 	must(t, s, b, http.StatusOK)
 	return created.OrgID
 }
 
 // scaleToken creates an Admin service account in the org and returns a token for it: such a token
-// sees only its own org, which is how an operator would scope sievelog to one org.
+// sees only its own org, which is how an operator would scope zeroreads to one org.
 func scaleToken(t *testing.T, base string, org int64) string {
 	t.Helper()
-	s, b := grafanaCall(t, base, "POST", "/api/serviceaccounts", org, map[string]any{"name": "sievelog-scale", "role": "Admin"})
+	s, b := grafanaCall(t, base, "POST", "/api/serviceaccounts", org, map[string]any{"name": "zeroreads-scale", "role": "Admin"})
 	must(t, s, b, http.StatusOK, http.StatusCreated)
 	var sa struct {
 		ID int64 `json:"id"`

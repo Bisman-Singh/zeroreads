@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: fluent-bit
-  namespace: sievelog-system
+  namespace: zeroreads-system
 spec:
   selector:
     matchLabels: {app: fluent-bit}

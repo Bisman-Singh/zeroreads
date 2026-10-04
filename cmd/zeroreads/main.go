@@ -1,12 +1,12 @@
-// Command sievelog finds log lines nobody reads, proves it, and emits the pipeline configuration
+// Command zeroreads finds log lines nobody reads, proves it, and emits the pipeline configuration
 // that removes them.
 //
-//	sievelog analyze   -c sievelog.yaml -o out/
-//	sievelog emit      -c sievelog.yaml -rules out/rules.json -format collector|vector|fluentbit|policy -mode shadow|enforce -o FILE
-//	sievelog rewrite   -c sievelog.yaml -rules out/rules.json -o DIR [-apply]
-//	sievelog verify    -c sievelog.yaml -rules out/rules.json [-o KEEP.json] [-deployed FILE]
-//	sievelog reconcile -c sievelog.yaml -rules out/rules.json -before START,END -after START,END
-//	sievelog version
+//	zeroreads analyze   -c zeroreads.yaml -o out/
+//	zeroreads emit      -c zeroreads.yaml -rules out/rules.json -format collector|vector|fluentbit|policy -mode shadow|enforce -o FILE
+//	zeroreads rewrite   -c zeroreads.yaml -rules out/rules.json -o DIR [-apply]
+//	zeroreads verify    -c zeroreads.yaml -rules out/rules.json [-o KEEP.json] [-deployed FILE]
+//	zeroreads reconcile -c zeroreads.yaml -rules out/rules.json -before START,END -after START,END
+//	zeroreads version
 package main
 
 import (
@@ -20,18 +20,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/app"
-	"github.com/Bisman-Singh/sievelog/internal/emit"
-	"github.com/Bisman-Singh/sievelog/internal/templating"
+	"github.com/Bisman-Singh/zeroreads/internal/app"
+	"github.com/Bisman-Singh/zeroreads/internal/emit"
+	"github.com/Bisman-Singh/zeroreads/internal/templating"
 )
 
 const usage = `usage:
-  sievelog analyze -c sievelog.yaml -o DIR
-  sievelog emit    -c sievelog.yaml -rules RULES.json [-format collector|vector|fluentbit|policy] [-mode shadow|enforce] [-allow-no-severity-guard] -o FILE
-  sievelog verify  -c sievelog.yaml -rules RULES.json [-o KEEP-RULES.json] [-deployed PIPELINE.yaml] [-drift=false] [-json OUT.json]
-  sievelog rewrite -c sievelog.yaml -rules RULES.json -o DIR [-apply]
-  sievelog reconcile -c sievelog.yaml -rules RULES.json -before START,END -after START,END [-tolerance 0.05] [-o OUT.json]
-  sievelog version
+  zeroreads analyze -c zeroreads.yaml -o DIR
+  zeroreads emit    -c zeroreads.yaml -rules RULES.json [-format collector|vector|fluentbit|policy] [-mode shadow|enforce] [-allow-no-severity-guard] -o FILE
+  zeroreads verify  -c zeroreads.yaml -rules RULES.json [-o KEEP-RULES.json] [-deployed PIPELINE.yaml] [-drift=false] [-json OUT.json]
+  zeroreads rewrite -c zeroreads.yaml -rules RULES.json -o DIR [-apply]
+  zeroreads reconcile -c zeroreads.yaml -rules RULES.json -before START,END -after START,END [-tolerance 0.05] [-o OUT.json]
+  zeroreads version
 
 exit codes: 0 success, 1 error, 2 usage, 3 verify found a rule no longer safe or the deployed
 configuration differs, 4 reconcile found a mismatch, 5 rewrite could not rewrite every object
@@ -47,7 +47,7 @@ func versionString() string {
 	if err != nil {
 		drain = "unknown"
 	}
-	return fmt.Sprintf("sievelog %s (drain processor %s, %s)", version, drain, runtime.Version())
+	return fmt.Sprintf("zeroreads %s (drain processor %s, %s)", version, drain, runtime.Version())
 }
 
 func main() {
@@ -79,7 +79,7 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "sievelog:", app.Printable(err.Error()))
+		fmt.Fprintln(os.Stderr, "zeroreads:", app.Printable(err.Error()))
 		os.Exit(1)
 	}
 	os.Exit(code)
@@ -87,8 +87,8 @@ func main() {
 
 func runAnalyze(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("analyze", flag.ExitOnError)
-	cfgPath := fs.String("c", "sievelog.yaml", "config file")
-	out := fs.String("o", "sievelog-out", "output directory")
+	cfgPath := fs.String("c", "zeroreads.yaml", "config file")
+	out := fs.String("o", "zeroreads-out", "output directory")
 	_ = fs.Parse(args)
 	cfg, err := app.LoadConfig(*cfgPath)
 	if err != nil {
@@ -113,7 +113,7 @@ func runAnalyze(ctx context.Context, args []string) error {
 
 func runEmit(args []string) error {
 	fs := flag.NewFlagSet("emit", flag.ExitOnError)
-	cfgPath := fs.String("c", "sievelog.yaml", "config file")
+	cfgPath := fs.String("c", "zeroreads.yaml", "config file")
 	rulesPath := fs.String("rules", "", "rules.json from analyze")
 	mode := fs.String("mode", "shadow", "shadow or enforce (collector format)")
 	format := fs.String("format", "collector", "collector (OpenTelemetry Collector config), vector (Vector config), fluentbit (Fluent Bit YAML) or policy (Telemetry Policy JSON)")
@@ -130,7 +130,7 @@ func runEmit(args []string) error {
 		if err != nil {
 			return err
 		}
-		scratch, err := os.MkdirTemp("", "sievelog-policy")
+		scratch, err := os.MkdirTemp("", "zeroreads-policy")
 		if err != nil {
 			return err
 		}
@@ -180,9 +180,9 @@ func writeOutput(path string, b []byte) error {
 // runRewrite exits 5 when any stored query could not be rewritten.
 func runRewrite(ctx context.Context, args []string) (int, error) {
 	fs := flag.NewFlagSet("rewrite", flag.ExitOnError)
-	cfgPath := fs.String("c", "sievelog.yaml", "config file")
+	cfgPath := fs.String("c", "zeroreads.yaml", "config file")
 	rulesPath := fs.String("rules", "", "rules.json from analyze")
-	out := fs.String("o", "sievelog-rewrites", "directory for the rewritten objects")
+	out := fs.String("o", "zeroreads-rewrites", "directory for the rewritten objects")
 	apply := fs.Bool("apply", false, "write the rewritten objects back to Grafana and the Loki ruler")
 	_ = fs.Parse(args)
 	cfg, err := app.LoadConfig(*cfgPath)
@@ -229,7 +229,7 @@ func runRewrite(ctx context.Context, args []string) (int, error) {
 // runVerify exits 3 when any enforced rule is no longer safe.
 func runVerify(ctx context.Context, args []string) (int, error) {
 	fs := flag.NewFlagSet("verify", flag.ExitOnError)
-	cfgPath := fs.String("c", "sievelog.yaml", "config file")
+	cfgPath := fs.String("c", "zeroreads.yaml", "config file")
 	rulesPath := fs.String("rules", "", "rules.json being enforced")
 	out := fs.String("o", "", "write the rules that are still safe here (the revert); - prints them after the report")
 	deployed := fs.String("deployed", "", "the pipeline config actually deployed, checked against what emit produces")
@@ -339,7 +339,7 @@ func parseWindow(s string) (app.Window, error) {
 // runReconcile exits 4 when stored volume does not match what the enforced rules should leave.
 func runReconcile(ctx context.Context, args []string) (int, error) {
 	fs := flag.NewFlagSet("reconcile", flag.ExitOnError)
-	cfgPath := fs.String("c", "sievelog.yaml", "config file")
+	cfgPath := fs.String("c", "zeroreads.yaml", "config file")
 	rulesPath := fs.String("rules", "", "rules.json being enforced")
 	beforeS := fs.String("before", "", "START,END of a window before enforcement (RFC3339)")
 	afterS := fs.String("after", "", "START,END of a window after enforcement (RFC3339)")

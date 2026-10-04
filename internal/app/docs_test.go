@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// Every complete sievelog.yaml example in the documentation loads: an example that the validation
+// Every complete zeroreads.yaml example in the documentation loads: an example that the validation
 // refuses would teach a configuration that does not work.
 func TestDocumentedConfigsLoad(t *testing.T) {
 	block := regexp.MustCompile("(?s)```yaml\n(.*?)```")

@@ -1,5 +1,5 @@
 image:
-  repository: ghcr.io/bisman-singh/sievelog
+  repository: ghcr.io/bisman-singh/zeroreads
   tag: ""          # defaults to the chart appVersion
   digest: ""       # sha256:... runs exactly the image a release published and signed, whatever the tag
   pullPolicy: IfNotPresent
@@ -16,9 +16,9 @@ activeDeadlineSeconds: 900
 # config, rules, files and deployed are stored in a ConfigMap: keep credentials out of them and pass
 # them through env or envFrom instead, as the *_env settings and the pipelines' ${env:...} expect.
 
-# sievelog.yaml, verbatim. Paths inside it must point under /etc/sievelog.
+# zeroreads.yaml, verbatim. Paths inside it must point under /etc/zeroreads.
 config: ""
-# rules.json produced by `sievelog analyze` and currently enforced, verbatim.
+# rules.json produced by `zeroreads analyze` and currently enforced, verbatim.
 rules: ""
 # Extra files placed next to the config, e.g. the collector configuration: {name: content}.
 files: {}

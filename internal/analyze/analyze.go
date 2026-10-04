@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/automaton"
-	"github.com/Bisman-Singh/sievelog/internal/emit"
-	"github.com/Bisman-Singh/sievelog/internal/logql"
-	"github.com/Bisman-Singh/sievelog/internal/rewrite"
-	"github.com/Bisman-Singh/sievelog/internal/usage"
+	"github.com/Bisman-Singh/zeroreads/internal/automaton"
+	"github.com/Bisman-Singh/zeroreads/internal/emit"
+	"github.com/Bisman-Singh/zeroreads/internal/logql"
+	"github.com/Bisman-Singh/zeroreads/internal/rewrite"
+	"github.com/Bisman-Singh/zeroreads/internal/usage"
 )
 
 // Candidate is one inferred rule with its measured volume.
@@ -117,7 +117,7 @@ type Reader struct {
 	// the query really reads the rule's lines, as the witness shows.
 	Widened []string `json:"Widened,omitempty"`
 	Rewrite *Rewrite // set when a rollup can keep this reader's numbers
-	// Compensated is true for a query sievelog already rewrote for a rollup of this rule: its
+	// Compensated is true for a query zeroreads already rewrote for a rollup of this rule: its
 	// raw-line term reads the lines, and only a rollup keeps its numbers.
 	Compensated bool
 }
@@ -281,7 +281,7 @@ func (d *decision) readers(id string, c Candidate, lang *automaton.Pattern, roll
 		compensated := false
 		for _, sel := range p.query.Selections {
 			if rewrite.Compensated(p.query, sel, id, d.languages) {
-				// A sievelog rewrite's raw-line term: summed with the rollup counts, it keeps the
+				// A zeroreads rewrite's raw-line term: summed with the rollup counts, it keeps the
 				// query's numbers only if this rule is rolled up. The query's other selections are
 				// still read: one edited in after the rewrite can count the same lines again.
 				compensated = true
@@ -561,7 +561,7 @@ func proven(nq *logql.Query, id string, c Candidate, languages map[string]string
 	return true
 }
 
-// rewritable stores are the stored queries sievelog can rewrite in place.
+// rewritable stores are the stored queries zeroreads can rewrite in place.
 func rewritable(q UsageQuery) bool {
 	switch q.Store {
 	case "loki-ruler":

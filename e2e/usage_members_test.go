@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/automaton"
-	"github.com/Bisman-Singh/sievelog/internal/usage"
+	"github.com/Bisman-Singh/zeroreads/internal/automaton"
+	"github.com/Bisman-Singh/zeroreads/internal/usage"
 )
 
 // advLanguages are rule languages chosen to be hard: a packed line (Promtail/Alloy pack stage) whose

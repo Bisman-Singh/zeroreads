@@ -4,10 +4,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/rewrite"
+	"github.com/Bisman-Singh/zeroreads/internal/rewrite"
 )
 
-// A panel sievelog rewrote for a rollup, then edited to add another raw count of the same lines, reads
+// A panel zeroreads rewrote for a rollup, then edited to add another raw count of the same lines, reads
 // those lines through the added term: a rollup may go ahead only with a new rewrite of that query.
 func TestCompensatedTermDoesNotHideOtherSelections(t *testing.T) {
 	c := Candidate{Service: "checkout", Scope: map[string]string{"service_name": "checkout"},

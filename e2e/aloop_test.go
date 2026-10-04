@@ -25,10 +25,10 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 
-	"github.com/Bisman-Singh/sievelog/internal/app"
-	"github.com/Bisman-Singh/sievelog/internal/emit"
-	"github.com/Bisman-Singh/sievelog/internal/gen"
-	"github.com/Bisman-Singh/sievelog/internal/source/loki"
+	"github.com/Bisman-Singh/zeroreads/internal/app"
+	"github.com/Bisman-Singh/zeroreads/internal/emit"
+	"github.com/Bisman-Singh/zeroreads/internal/gen"
+	"github.com/Bisman-Singh/zeroreads/internal/source/loki"
 )
 
 type loopEnv struct {
@@ -70,7 +70,7 @@ func clusterSafeEnv() []string {
 
 func (e *loopEnv) kubectl(args ...string) string {
 	e.t.Helper()
-	full := append([]string{"--kubeconfig", e.kube, "--context", "kind-sievelog"}, args...)
+	full := append([]string{"--kubeconfig", e.kube, "--context", "kind-zeroreads"}, args...)
 	out, code := e.run(e.root, "kubectl", full...)
 	if code != 0 {
 		e.t.Fatalf("kubectl %v: %s", args, out)
@@ -92,12 +92,12 @@ func (e *loopEnv) deployCollector(cfgPath string) {
 	if out, code := e.run(e.root, "docker", "run", "--rm", "-v", valDir+":/cfg", "otel/opentelemetry-collector-contrib:0.161.0", "validate", "--config=/cfg/c.yaml"); code != 0 {
 		e.t.Fatalf("collector rejects %s: %s", cfgPath, out)
 	}
-	cm := e.kubectl("create", "configmap", "collector-config", "-n", "sievelog-system", "--from-file=config.yaml="+cfgPath, "--dry-run=client", "-o", "yaml")
+	cm := e.kubectl("create", "configmap", "collector-config", "-n", "zeroreads-system", "--from-file=config.yaml="+cfgPath, "--dry-run=client", "-o", "yaml")
 	f := filepath.Join(e.t.TempDir(), "cm.yaml")
 	os.WriteFile(f, []byte(cm), 0o644)
 	e.kubectl("apply", "-f", f)
-	e.kubectl("rollout", "restart", "daemonset/collector", "-n", "sievelog-system")
-	e.kubectl("rollout", "status", "daemonset/collector", "-n", "sievelog-system", "--timeout=180s")
+	e.kubectl("rollout", "restart", "daemonset/collector", "-n", "zeroreads-system")
+	e.kubectl("rollout", "status", "daemonset/collector", "-n", "zeroreads-system", "--timeout=180s")
 	time.Sleep(3 * time.Second) // let the new collector start tailing before generators run
 }
 
@@ -106,7 +106,7 @@ func (e *loopEnv) batch(name string, seed uint64, count int) string {
 	e.t.Helper()
 	prefix := e.prefix
 	if prefix == "" {
-		prefix = "sievelog-loop"
+		prefix = "zeroreads-loop"
 	}
 	ns := fmt.Sprintf("%s-%d-%s", prefix, time.Now().Unix(), name)
 	e.kubectl("create", "namespace", ns)
@@ -121,7 +121,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: %s
-          image: sievelog/loggen:e2e
+          image: zeroreads/loggen:e2e
           imagePullPolicy: Never
           args: ["--service=%s", "--seed=%d", "--count=%d", "--rate=2000"]
 `, s, ns, s, s, seed, count)
@@ -258,14 +258,14 @@ func (e *loopEnv) resetOutputs() {
 	}
 }
 
-// installChart installs charts/sievelog in the cluster with the in-cluster addresses of the stack, and
+// installChart installs charts/zeroreads in the cluster with the in-cluster addresses of the stack, and
 // returns a function that runs the verify CronJob once and reports its exit code and logs.
 func (e *loopEnv) installChart(rulesPath, collectorPath, grafanaURL string) func(string) (int, string) {
 	e.t.Helper()
 	rules, _ := os.ReadFile(rulesPath)
 	collector, _ := os.ReadFile(collectorPath)
 	cfg := fmt.Sprintf(`loki:
-  url: http://loki.sievelog-system.svc:3100
+  url: http://loki.zeroreads-system.svc:3100
 scope:
   services: [checkout, auth, orders]
   structured: {orders: msg}
@@ -277,9 +277,9 @@ evidence:
   query_log: {enabled: true, selector: '{service_name="loki"}', prove_live: true}
   ruler: true
   grafana:
-    - {url: http://grafana.sievelog-system.svc:3000, username: admin, password_env: GRAFANA_PASSWORD, datasources: [loki, loki2]}
+    - {url: http://grafana.zeroreads-system.svc:3000, username: admin, password_env: GRAFANA_PASSWORD, datasources: [loki, loki2]}
 collector:
-  config_files: [/etc/sievelog/collector.yaml]
+  config_files: [/etc/zeroreads/collector.yaml]
   pipeline: logs
   after: transform/prep
   measure_exporters: [file/metrics]
@@ -287,22 +287,22 @@ collector:
     otlp_http/loki: {loki: true}
     file/logs: {exempt: "e2e local copy"}
 policy:
-  acknowledge: ["grafana-queryhistory:grafana.sievelog-system.svc:3000", querylog-window]
+  acknowledge: ["grafana-queryhistory:grafana.zeroreads-system.svc:3000", querylog-window]
 `, gen.IPMaskName, gen.IPMaskPattern)
 	values := map[string]any{
-		"image":  map[string]any{"repository": "sievelog/sievelog", "tag": "e2e", "pullPolicy": "Never"},
+		"image":  map[string]any{"repository": "zeroreads/zeroreads", "tag": "e2e", "pullPolicy": "Never"},
 		"config": cfg, "rules": string(rules), "files": map[string]any{"collector.yaml": string(collector)},
-		"env": []any{map[string]any{"name": "GRAFANA_PASSWORD", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": "sievelog-grafana", "key": "password"}}}},
+		"env": []any{map[string]any{"name": "GRAFANA_PASSWORD", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": "zeroreads-grafana", "key": "password"}}}},
 	}
 	vb, _ := json.Marshal(values)
 	vf := filepath.Join(e.t.TempDir(), "values.json")
 	os.WriteFile(vf, vb, 0o644)
-	sec := e.kubectl("create", "secret", "generic", "sievelog-grafana", "-n", "sievelog-system", "--from-literal=password="+grafanaPass, "--dry-run=client", "-o", "yaml")
+	sec := e.kubectl("create", "secret", "generic", "zeroreads-grafana", "-n", "zeroreads-system", "--from-literal=password="+grafanaPass, "--dry-run=client", "-o", "yaml")
 	sf := filepath.Join(e.t.TempDir(), "secret.yaml")
 	os.WriteFile(sf, []byte(sec), 0o644)
 	e.kubectl("apply", "-f", sf)
-	if out, code := e.run(e.root, "helm", "upgrade", "--install", "sievelog", "./charts/sievelog", "-n", "sievelog-system",
-		"--kubeconfig", e.kube, "--kube-context", "kind-sievelog", "-f", vf, "--wait"); code != 0 {
+	if out, code := e.run(e.root, "helm", "upgrade", "--install", "zeroreads", "./charts/zeroreads", "-n", "zeroreads-system",
+		"--kubeconfig", e.kube, "--kube-context", "kind-zeroreads", "-f", vf, "--wait"); code != 0 {
 		e.t.Fatalf("helm install: %s", out)
 	}
 	// The release and its jobs go when the test does: a CronJob left behind keeps running verify
@@ -310,21 +310,21 @@ policy:
 	var jobs []string
 	e.t.Cleanup(func() {
 		for _, j := range jobs {
-			e.kubectl("delete", "job", j, "-n", "sievelog-system", "--ignore-not-found")
+			e.kubectl("delete", "job", j, "-n", "zeroreads-system", "--ignore-not-found")
 		}
-		e.run(e.root, "helm", "uninstall", "sievelog", "-n", "sievelog-system", "--kubeconfig", e.kube, "--kube-context", "kind-sievelog")
+		e.run(e.root, "helm", "uninstall", "zeroreads", "-n", "zeroreads-system", "--kubeconfig", e.kube, "--kube-context", "kind-zeroreads")
 	})
 	return func(name string) (int, string) {
 		job := "verify-" + name + "-" + strconv.FormatInt(time.Now().Unix(), 10)
 		jobs = append(jobs, job)
-		e.kubectl("create", "job", "--from=cronjob/sievelog-verify", job, "-n", "sievelog-system")
+		e.kubectl("create", "job", "--from=cronjob/zeroreads-verify", job, "-n", "zeroreads-system")
 		for deadline := time.Now().Add(4 * time.Minute); time.Now().Before(deadline); time.Sleep(3 * time.Second) {
-			st := e.kubectl("get", "job", job, "-n", "sievelog-system", "-o", "jsonpath={.status.succeeded}/{.status.failed}")
+			st := e.kubectl("get", "job", job, "-n", "zeroreads-system", "-o", "jsonpath={.status.succeeded}/{.status.failed}")
 			if st == "1/" || strings.HasSuffix(st, "/1") {
-				logs := e.kubectl("logs", "job/"+job, "-n", "sievelog-system")
+				logs := e.kubectl("logs", "job/"+job, "-n", "zeroreads-system")
 				code := 0
 				if strings.HasSuffix(st, "/1") {
-					term := e.kubectl("get", "pods", "-n", "sievelog-system", "-l", "job-name="+job, "-o", "jsonpath={.items[0].status.containerStatuses[0].state.terminated.exitCode}")
+					term := e.kubectl("get", "pods", "-n", "zeroreads-system", "-l", "job-name="+job, "-o", "jsonpath={.items[0].status.containerStatuses[0].state.terminated.exitCode}")
 					code, _ = strconv.Atoi(strings.TrimSpace(term))
 				}
 				return code, logs
@@ -354,7 +354,7 @@ func TestFullLoop(t *testing.T) {
 	}
 	userPath := filepath.Join(e.work, "loop-user.yaml")
 	os.WriteFile(userPath, []byte(userCfg), 0o644)
-	cfgPath := filepath.Join(e.work, "sievelog.yaml")
+	cfgPath := filepath.Join(e.work, "zeroreads.yaml")
 	os.WriteFile(cfgPath, []byte(fmt.Sprintf(`loki:
   url: %s
 scope:
@@ -388,8 +388,8 @@ policy:
   acknowledge: ["%s", querylog-window]
 `, e.loki, gen.IPMaskName, gen.IPMaskPattern, grafanaURL, userPath, grafanaGap("queryhistory", grafanaURL))), 0o644)
 	os.Setenv("E2E_GRAFANA_PASSWORD", grafanaPass)
-	e.bin = filepath.Join(e.work, "sievelog")
-	if out, code := e.run(e.root, "go", "build", "-o", e.bin, "./cmd/sievelog"); code != 0 {
+	e.bin = filepath.Join(e.work, "zeroreads")
+	if out, code := e.run(e.root, "go", "build", "-o", e.bin, "./cmd/zeroreads"); code != 0 {
 		t.Fatal(out)
 	}
 
@@ -539,7 +539,7 @@ policy:
 	}
 	// Dedupe keeps every line's content and its total count.
 	lc := &loki.Client{Base: e.loki}
-	sum, err := lc.Instant(context.Background(), `sum(sum_over_time({k8s_namespace_name="`+nsB+`", service_name="checkout"} |= "INFO heartbeat ok" | unwrap sievelog_dedup_count [1h]))`, time.Now())
+	sum, err := lc.Instant(context.Background(), `sum(sum_over_time({k8s_namespace_name="`+nsB+`", service_name="checkout"} |= "INFO heartbeat ok" | unwrap zeroreads_dedup_count [1h]))`, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -614,7 +614,7 @@ policy:
 
 	// 4d. A changed masking rule invalidates every rule.
 	cb, _ := os.ReadFile(cfgPath)
-	changedCfg := filepath.Join(e.work, "sievelog-changed-masks.yaml")
+	changedCfg := filepath.Join(e.work, "zeroreads-changed-masks.yaml")
 	os.WriteFile(changedCfg, []byte(strings.Replace(string(cb), "  masking_rules:\n", "  masking_rules:\n    - {name: hex, pattern: '\\b[0-9a-f]{8}\\b'}\n", 1)), 0o644)
 	out, code = e.run(e.root, e.bin, "verify", "-c", changedCfg, "-rules", filepath.Join(outDir, "rules.json"), "-drift=false")
 	if code != 3 || !strings.Contains(out, "masking rules or seed templates changed") {

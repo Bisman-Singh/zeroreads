@@ -6,7 +6,7 @@ import (
 	"unicode"
 )
 
-// Text from logs, stored queries and the systems sievelog reads is untrusted. A query can hold a
+// Text from logs, stored queries and the systems zeroreads reads is untrusted. A query can hold a
 // newline and then a GitHub workflow command, terminal escape sequences, or Markdown and HTML that
 // would rewrite a report around it. Every such value is written through Printable or Code.
 

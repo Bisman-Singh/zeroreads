@@ -10,7 +10,7 @@ import (
 // Every stage that can narrow a selection without being modelled is named, so a verdict can say what
 // it assumed. The rollup-marker filter is modelled (NoRollups) and parsers narrow nothing.
 func TestUnmodelledStages(t *testing.T) {
-	q, err := Parse(`{a="b"} |= "x" | json | level="info" | line_format "y" |= "z" | sievelog_rule=""`)
+	q, err := Parse(`{a="b"} |= "x" | json | level="info" | line_format "y" |= "z" | zeroreads_rule=""`)
 	if err != nil {
 		t.Fatal(err)
 	}

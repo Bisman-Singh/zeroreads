@@ -27,7 +27,7 @@ for l in open(os.path.join(work, "metrics-shadow.json")):
         for sm in rm.get("scopeMetrics", []):
             for m in sm.get("metrics", []):
                 name = m.get("name", "")
-                for kind, into in (("sievelog.rule.lines.", lines), ("sievelog.rule.bytes.", nbytes)):
+                for kind, into in (("zeroreads.rule.lines.", lines), ("zeroreads.rule.bytes.", nbytes)):
                     if name.startswith(kind):
                         rid = name[len(kind):]
                         for dp in m.get("sum", {}).get("dataPoints", []):
@@ -81,7 +81,7 @@ res = {
 }
 json.dump(res, open(os.path.join(work, "results.json"), "w"), indent=2)
 s, e = res["shadow"], res["enforce"]
-print(f"""# sievelog on the OpenTelemetry demo (local kind)
+print(f"""# zeroreads on the OpenTelemetry demo (local kind)
 
 - {res['services']} services, {res['rules_decided']} rules decided, {res['rules_acting']} act: {res['actions']}
 - Evidence gaps: {res['gaps'] or 'none'}

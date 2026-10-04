@@ -12,8 +12,8 @@ import urllib.parse
 import urllib.request
 
 GRAFANA, LOKI, PASSWORD = sys.argv[1], sys.argv[2], sys.argv[3]
-ORG_NAME = "sievelog-demo-readers"
-NS = '{k8s_namespace_name="sievelog-demo"}'
+ORG_NAME = "zeroreads-demo-readers"
+NS = '{k8s_namespace_name="zeroreads-demo"}'
 
 PANELS = [
     ("Checkout errors", '{service_name="checkout"} |~ "(?i)(error|fail)"'),
@@ -55,7 +55,7 @@ def main():
     org = org_id()
     try:
         call("POST", "/api/datasources", {"name": "Loki", "uid": "demo-loki", "type": "loki", "access": "proxy",
-                                          "url": "http://loki.sievelog-system.svc:3100", "isDefault": True}, org)
+                                          "url": "http://loki.zeroreads-system.svc:3100", "isDefault": True}, org)
     except urllib.error.HTTPError as e:
         if e.code != 409:
             raise
@@ -80,9 +80,9 @@ def main():
     except urllib.error.HTTPError as e:
         if e.code != 409:
             raise
-    sa = call("POST", "/api/serviceaccounts", {"name": "sievelog-demo-%d" % time.time(), "role": "Admin"}, org)
+    sa = call("POST", "/api/serviceaccounts", {"name": "zeroreads-demo-%d" % time.time(), "role": "Admin"}, org)
     # Token names are unique across the org, so each run's token gets its own.
-    token = call("POST", "/api/serviceaccounts/%d/tokens" % sa["id"], {"name": "sievelog-%d" % time.time()}, org)["key"]
+    token = call("POST", "/api/serviceaccounts/%d/tokens" % sa["id"], {"name": "zeroreads-%d" % time.time()}, org)["key"]
     now = int(time.time())
     for q in ADHOC:
         url = LOKI + "/loki/api/v1/query_range?" + urllib.parse.urlencode(

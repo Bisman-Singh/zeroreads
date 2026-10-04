@@ -13,12 +13,12 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/source/grafana"
+	"github.com/Bisman-Singh/zeroreads/internal/source/grafana"
 
 	"go.yaml.in/yaml/v3"
 )
 
-// Config is sievelog.yaml.
+// Config is zeroreads.yaml.
 type Config struct {
 	Loki      LokiConfig      `yaml:"loki"`
 	Scope     ScopeConfig     `yaml:"scope"`
@@ -158,7 +158,7 @@ type FluentBitConfig struct {
 	// SeverityKeys are record paths of level fields, in addition to the defaults.
 	SeverityKeys [][]string `yaml:"severity_keys"`
 	// ArchiveOutputs (alias, else name#index) receive archived records, which carry the tag
-	// sievelog.archive; required for the archive action.
+	// zeroreads.archive; required for the archive action.
 	ArchiveOutputs []string `yaml:"archive_outputs"`
 }
 
@@ -237,7 +237,7 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
-// LoadConfig reads and validates sievelog.yaml.
+// LoadConfig reads and validates zeroreads.yaml.
 func LoadConfig(path string) (*Config, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -316,7 +316,7 @@ func (c *Config) defaults() {
 // currencyCode matches an ISO 4217 code, printed beside every amount.
 var currencyCode = regexp.MustCompile(`\A[A-Z]{3}\z`)
 
-// labelName matches a Loki label name, which sievelog writes into LogQL unquoted.
+// labelName matches a Loki label name, which zeroreads writes into LogQL unquoted.
 var labelName = regexp.MustCompile(`\A[a-zA-Z_][a-zA-Z0-9_]*\z`)
 
 // fieldName matches a structured field name. Loki's json parser reads a dotted name as a path into

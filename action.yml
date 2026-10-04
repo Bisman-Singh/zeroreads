@@ -1,14 +1,14 @@
-name: sievelog verify
+name: zeroreads verify
 description: Fail the job when an enforced log reduction rule is no longer safe, and say why.
 inputs:
   config:
-    description: Path to sievelog.yaml in the workspace
-    default: sievelog.yaml
+    description: Path to zeroreads.yaml in the workspace
+    default: zeroreads.yaml
   rules:
     description: Path to the enforced rules.json in the workspace
     default: rules.json
 runs:
   using: docker
   # The released image, not a build from source on every run. Kept equal to the chart's appVersion.
-  image: docker://ghcr.io/bisman-singh/sievelog:0.1.0
+  image: docker://ghcr.io/bisman-singh/zeroreads:0.1.0
   args: ["verify", "-c", "${{ inputs.config }}", "-rules", "${{ inputs.rules }}"]

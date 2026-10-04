@@ -20,9 +20,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/app"
-	"github.com/Bisman-Singh/sievelog/internal/gen"
-	"github.com/Bisman-Singh/sievelog/internal/source/opensearch"
+	"github.com/Bisman-Singh/zeroreads/internal/app"
+	"github.com/Bisman-Singh/zeroreads/internal/gen"
+	"github.com/Bisman-Singh/zeroreads/internal/source/opensearch"
 )
 
 func envInt(name string, def int) int {
@@ -131,11 +131,11 @@ func TestScale(t *testing.T) {
 	pushLoki(t, lokiURL, map[string]map[string]string{"q": {"service_name": run + "-loki"}}, map[string][][2]string{"q": qlines})
 
 	// 3. Analyze, measuring wall time and peak memory of the real binary.
-	bin := filepath.Join(work, "sievelog")
-	if out, err := runCmd(root, "go", "build", "-o", bin, "./cmd/sievelog"); err != nil {
+	bin := filepath.Join(work, "zeroreads")
+	if out, err := runCmd(root, "go", "build", "-o", bin, "./cmd/zeroreads"); err != nil {
 		t.Fatal(out)
 	}
-	cfgPath := filepath.Join(work, "sievelog-scale.yaml")
+	cfgPath := filepath.Join(work, "zeroreads-scale.yaml")
 	os.WriteFile(cfgPath, []byte(fmt.Sprintf(`loki:
   url: %[2]s
 scope:

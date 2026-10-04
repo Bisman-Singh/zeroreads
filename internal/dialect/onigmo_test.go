@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Bisman-Singh/sievelog/internal/automaton"
+	"github.com/Bisman-Singh/zeroreads/internal/automaton"
 )
 
 // Where the Onigmo form is also Go syntax (no lookarounds), it must mean the same under Go: a guard

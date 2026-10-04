@@ -1,10 +1,10 @@
-# sievelog
+# zeroreads
 
-sievelog finds the log lines that no logged query, alert, dashboard or stored query reads, proves it
+zeroreads finds the log lines that no logged query, alert, dashboard or stored query reads, proves it
 for each rule, and writes the pipeline configuration that removes, shrinks or archives them.
 
 > **Before you enforce anything:** deploy the shadow configuration first and let it run, with
-> `sievelog verify` on a schedule, for a period that covers your normal weekly traffic and on-call
+> `zeroreads verify` on a schedule, for a period that covers your normal weekly traffic and on-call
 > usage. Shadow mode removes nothing; it measures, per rule, exactly what enforcement would remove.
 > Enforce only rules whose shadow numbers and verify results you have looked at.
 
@@ -51,7 +51,7 @@ versions](#supported-versions).
   record by record with the prediction on the real Collector, Vector and Fluent Bit.
 
 Most log volume is a handful of repetitive patterns: health checks, heartbeats, cache chatter. Paid
-tools can tell you which ones are safe to drop. sievelog does the same job in the open, on your own
+tools can tell you which ones are safe to drop. zeroreads does the same job in the open, on your own
 infrastructure, and shows its evidence for every decision.
 
 Start with [docs/quickstart.md](docs/quickstart.md): from nothing to a shadow-mode report, and what to
@@ -130,31 +130,31 @@ proven.
 ## Use
 
 ```sh
-sievelog analyze -c sievelog.yaml -o out/          # report.md, report.json, rules.json
-sievelog emit -c sievelog.yaml -rules out/rules.json -mode shadow  -o collector.yaml
+zeroreads analyze -c zeroreads.yaml -o out/          # report.md, report.json, rules.json
+zeroreads emit -c zeroreads.yaml -rules out/rules.json -mode shadow  -o collector.yaml
 # deploy the shadow config, run verify on a schedule, and read the numbers before going further
-sievelog emit -c sievelog.yaml -rules out/rules.json -mode enforce -o collector.yaml
-sievelog rewrite -c sievelog.yaml -rules out/rules.json -o rewrites/ -apply   # only for rollups
-sievelog verify -c sievelog.yaml -rules out/rules.json -deployed collector.yaml
+zeroreads emit -c zeroreads.yaml -rules out/rules.json -mode enforce -o collector.yaml
+zeroreads rewrite -c zeroreads.yaml -rules out/rules.json -o rewrites/ -apply   # only for rollups
+zeroreads verify -c zeroreads.yaml -rules out/rules.json -deployed collector.yaml
 # exit code 3 when a rule is no longer safe or the deployed config is not the emitted one
 ```
 
 Exit codes: 0 success, 1 error, 2 usage, 3 `verify` found a rule that is no longer safe or a
 deployed configuration that differs from the emitted one, 4 `reconcile` found stored volume that does
-not match the rules, 5 `rewrite` could not rewrite every object. `sievelog version` prints the release
+not match the rules, 5 `rewrite` could not rewrite every object. `zeroreads version` prints the release
 and the embedded drain version.
 
-sievelog sends nothing anywhere except to the Loki, Grafana and OpenSearch you configure: no
+zeroreads sends nothing anywhere except to the Loki, Grafana and OpenSearch you configure: no
 telemetry, no update checks.
 
-Run `verify` on a schedule with the Helm chart in `charts/sievelog`, or in CI with the GitHub Action in
+Run `verify` on a schedule with the Helm chart in `charts/zeroreads`, or in CI with the GitHub Action in
 this repository. When someone adds a dashboard or alert that reads removed lines, `verify` fails, says
 why, and prints the rules that remain safe: emit and deploy those to revert. It also reports drift:
 lines of a rule's template that the rule no longer covers. Those pass through untouched, so drift never
 fails `verify`; it means the template is worth re-analysing.
 
 Run the Action on pushes and on a schedule, not on pull requests with your credentials: the Action
-reads `sievelog.yaml` from the checkout, and a pull request can change where it sends them.
+reads `zeroreads.yaml` from the checkout, and a pull request can change where it sends them.
 
 See [docs/configuration.md](docs/configuration.md) for every setting,
 [docs/safety.md](docs/safety.md) for exactly what is guaranteed and what is not, and
@@ -163,7 +163,7 @@ See [docs/configuration.md](docs/configuration.md) for every setting,
 ## Build
 
 ```sh
-go build ./cmd/sievelog
+go build ./cmd/zeroreads
 ./scripts/check.sh            # formatting, vet, unit tests
 ./scripts/check-runtimes.sh   # dialect and runtime tests against real Vector, Fluent Bit and the Collector (docker)
 ./e2e/run.sh                  # on kind: Loki, Grafana, OpenSearch and Dashboards; the full loop through
@@ -180,17 +180,17 @@ With cosign:
 
 ```sh
 V=0.1.0
-ID=https://github.com/Bisman-Singh/sievelog/.github/workflows/release.yml@refs/tags/v$V
+ID=https://github.com/Bisman-Singh/zeroreads/.github/workflows/release.yml@refs/tags/v$V
 ISSUER=https://token.actions.githubusercontent.com
 cosign verify-blob --certificate checksums.txt.pem --signature checksums.txt.sig \
   --certificate-identity "$ID" --certificate-oidc-issuer "$ISSUER" checksums.txt
 sha256sum -c checksums.txt --ignore-missing
-cosign verify --certificate-identity "$ID" --certificate-oidc-issuer "$ISSUER" ghcr.io/bisman-singh/sievelog:$V
+cosign verify --certificate-identity "$ID" --certificate-oidc-issuer "$ISSUER" ghcr.io/bisman-singh/zeroreads:$V
 ```
 
 The archives also hold `THIRD_PARTY_LICENSES`, and rebuilding a commit gives the same archive bytes. To
 run exactly the verified image, set `image.digest` in the Helm chart,
-and in a workflow use the image by digest (`uses: docker://ghcr.io/bisman-singh/sievelog@sha256:...`
+and in a workflow use the image by digest (`uses: docker://ghcr.io/bisman-singh/zeroreads@sha256:...`
 with the `verify` arguments) instead of the Action's tag.
 
 ## Security

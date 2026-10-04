@@ -18,10 +18,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/app"
-	"github.com/Bisman-Singh/sievelog/internal/emit"
-	"github.com/Bisman-Singh/sievelog/internal/source/opensearch"
-	"github.com/Bisman-Singh/sievelog/internal/templating"
+	"github.com/Bisman-Singh/zeroreads/internal/app"
+	"github.com/Bisman-Singh/zeroreads/internal/emit"
+	"github.com/Bisman-Singh/zeroreads/internal/source/opensearch"
+	"github.com/Bisman-Singh/zeroreads/internal/templating"
 )
 
 var osHTTP = &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
@@ -401,7 +401,7 @@ func TestOpenSearchEvidence(t *testing.T) {
 		dir := t.TempDir()
 		col := filepath.Join(dir, "collector.yaml")
 		os.WriteFile(col, []byte("receivers: {otlp: {protocols: {grpc: {}}}}\nexporters: {opensearch/logs: {}}\nservice: {pipelines: {logs: {receivers: [otlp], exporters: [opensearch/logs]}}}\n"), 0o644)
-		cfgPath := filepath.Join(dir, "sievelog.yaml")
+		cfgPath := filepath.Join(dir, "zeroreads.yaml")
 		os.WriteFile(cfgPath, []byte(fmt.Sprintf(`loki: {url: %s}
 evidence:
   window: 1h

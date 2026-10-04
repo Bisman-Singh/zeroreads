@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/fetch"
+	"github.com/Bisman-Singh/zeroreads/internal/fetch"
 )
 
 // Client reads one Grafana.

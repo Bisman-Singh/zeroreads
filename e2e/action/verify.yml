@@ -8,5 +8,5 @@ jobs:
         env:
           GRAFANA_PASSWORD: e2e-only-password
         with:
-          config: .e2e/act/sievelog.yaml
+          config: .e2e/act/zeroreads.yaml
           rules: .e2e/act/rules.json

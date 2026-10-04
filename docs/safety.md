@@ -1,4 +1,4 @@
-# What sievelog guarantees, and what it does not
+# What zeroreads guarantees, and what it does not
 
 ## Guarantees
 
@@ -78,7 +78,7 @@ every line of the rule, in a Grafana dashboard, library panel or alert rule, or 
 Each is rewritten as the original minus the rule's lines, plus the rollup records' counts, plus any
 of the rule's lines still stored, and the rewritten query is analysed again: it must not read the
 rule's lines except through that last compensating term. The first term also excludes every rollup
-record (`| sievelog_rule=""`), because a record's marker text can pass the original filters
+record (`| zeroreads_rule=""`), because a record's marker text can pass the original filters
 (`!= "/healthz"` does). An executed query counts only when it is the same query as one of those stored
 queries, compared in a canonical form that ignores formatting and time-split offsets. Anything else
 that reads the lines keeps blocking, and so does any other query that could select the rollup records

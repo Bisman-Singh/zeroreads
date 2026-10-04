@@ -1,8 +1,8 @@
 # Configuration
 
-`sievelog.yaml` configures one analysis. Unknown keys are rejected. Credentials never go in a URL
+`zeroreads.yaml` configures one analysis. Unknown keys are rejected. Credentials never go in a URL
 (URLs appear in reports and verify output): name an environment variable in a `*_env` setting, and
-set it; a named variable that is empty is an error. Values that sievelog writes into queries and
+set it; a named variable that is empty is an error. Values that zeroreads writes into queries and
 pipeline programs are checked: label and field names are plain names, Vector paths are VRL paths
 and Fluent Bit keys are plain record keys.
 
@@ -57,7 +57,7 @@ evidence:
   opensearch:                    # clusters the pipeline also ships to, referenced by sinks
     - name: search
       url: https://opensearch:9200
-      username: sievelog
+      username: zeroreads
       password_env: OPENSEARCH_PASSWORD
       ca_file: ""                # or insecure_skip_verify: true for a self-signed test cluster
       audit_index: security-auditlog-*  # the security plugin's audit indices
@@ -111,11 +111,11 @@ fluentbit:
   scope_key: service
   text_key: [log]
   field_keys: {orders: [body, msg]}
-  metrics_tag: sievelog.metrics  # outputs matching this tag receive the measurement metrics
+  metrics_tag: zeroreads.metrics  # outputs matching this tag receive the measurement metrics
   severity_keys: []              # record paths of level fields, e.g. [[custom]], checked in addition
                                  # to the defaults at the top level and beside every structured field
   archive_outputs: []            # outputs (alias) receiving archived records; they, and no other
-                                 # output, must match the tag sievelog.archive
+                                 # output, must match the tag zeroreads.archive
   sinks: {loki: {loki: true}}
   derived_exempt: {}
 
@@ -142,12 +142,12 @@ The archive action moves a rule's lines out of Loki into a destination you alrea
 object-storage exporter, a file, or a Loki with long retention, instead of removing them. It is
 chosen under exactly the same evidence as every other action: nothing known reads those lines in
 Loki. What it adds is recovery: if someone needs the lines during an incident, they are in the
-archive, each carrying the rule that moved it (`sievelog.archive` in the Collector,
-`sievelog_archive` in Vector and Fluent Bit).
+archive, each carrying the rule that moved it (`zeroreads.archive` in the Collector,
+`zeroreads_archive` in Vector and Fluent Bit).
 
 - Collector: archived records leave the pipeline's exporters and go to `archive_exporters` only.
 - Vector: archived events leave the rest of the chain and are added to each `archive_sinks` sink.
-- Fluent Bit: archived records are re-tagged `sievelog.archive` and leave their stream. Only the
+- Fluent Bit: archived records are re-tagged `zeroreads.archive` and leave their stream. Only the
   `archive_outputs` may match that tag, and `match` must not, or emit refuses.
 - A record at warning or above is never archived, as it is never removed. Telemetry Policy files
   cannot express the action and skip it. An archive destination that is the analysed Loki is

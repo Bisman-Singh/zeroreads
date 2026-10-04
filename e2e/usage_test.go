@@ -18,11 +18,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/automaton"
-	"github.com/Bisman-Singh/sievelog/internal/gen"
-	"github.com/Bisman-Singh/sievelog/internal/logql"
-	"github.com/Bisman-Singh/sievelog/internal/rule"
-	"github.com/Bisman-Singh/sievelog/internal/usage"
+	"github.com/Bisman-Singh/zeroreads/internal/automaton"
+	"github.com/Bisman-Singh/zeroreads/internal/gen"
+	"github.com/Bisman-Singh/zeroreads/internal/logql"
+	"github.com/Bisman-Singh/zeroreads/internal/rule"
+	"github.com/Bisman-Singh/zeroreads/internal/usage"
 )
 
 // corpusRules infers one rule per (service, template) from the ground truth, exactly as the
@@ -84,7 +84,7 @@ func lokiQuery(t *testing.T, base, q string) ([]lokiLine, int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second) // the scale test leaves a million lines in this Loki
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/loki/api/v1/query_range?"+v.Encode(), nil)
-	req.Header.Set("X-Query-Tags", "Source=sievelog-e2e")
+	req.Header.Set("X-Query-Tags", "Source=zeroreads-e2e")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

@@ -15,11 +15,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/fetch"
+	"github.com/Bisman-Singh/zeroreads/internal/fetch"
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/Bisman-Singh/sievelog/internal/analyze"
+	"github.com/Bisman-Singh/zeroreads/internal/analyze"
 )
 
 // RewriteOutcome is what happened to one stored query.
@@ -256,7 +256,7 @@ func (c *Config) rewriteGrafana(ctx context.Context, base string, org int64, pat
 		meta, _ := obj["meta"].(map[string]any)
 		_, res.Replaced = replaceExprs(dash, edits)
 		body = map[string]any{"dashboard": dash, "folderUid": meta["folderUid"], "overwrite": false,
-			"message": "sievelog: rewrite counting queries for rolled-up lines"}
+			"message": "zeroreads: rewrite counting queries for rolled-up lines"}
 		put, method = "/api/dashboards/db", http.MethodPost
 	case "librarypanel":
 		r, ok := obj["result"].(map[string]any)

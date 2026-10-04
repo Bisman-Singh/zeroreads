@@ -14,14 +14,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/analyze"
-	"github.com/Bisman-Singh/sievelog/internal/logql"
-	"github.com/Bisman-Singh/sievelog/internal/pricing"
-	"github.com/Bisman-Singh/sievelog/internal/rule"
-	"github.com/Bisman-Singh/sievelog/internal/source/grafana"
-	"github.com/Bisman-Singh/sievelog/internal/source/loki"
-	"github.com/Bisman-Singh/sievelog/internal/templating"
-	"github.com/Bisman-Singh/sievelog/internal/topology"
+	"github.com/Bisman-Singh/zeroreads/internal/analyze"
+	"github.com/Bisman-Singh/zeroreads/internal/logql"
+	"github.com/Bisman-Singh/zeroreads/internal/pricing"
+	"github.com/Bisman-Singh/zeroreads/internal/rule"
+	"github.com/Bisman-Singh/zeroreads/internal/source/grafana"
+	"github.com/Bisman-Singh/zeroreads/internal/source/loki"
+	"github.com/Bisman-Singh/zeroreads/internal/templating"
+	"github.com/Bisman-Singh/zeroreads/internal/topology"
 )
 
 // Report is the full result of one analysis.
@@ -111,7 +111,7 @@ func (c *Config) linesIn(service, field, language string) string {
 	case field == "":
 		return sel + " |~ " + logql.Quote(language)
 	}
-	return fmt.Sprintf("%s | json sievelog_field=%s | sievelog_field=~%s", sel, strconv.Quote(field), logql.Quote(language))
+	return fmt.Sprintf("%s | json zeroreads_field=%s | zeroreads_field=~%s", sel, strconv.Quote(field), logql.Quote(language))
 }
 
 // rangeOf is a LogQL range covering d, in whole seconds.
@@ -547,7 +547,7 @@ func (sc streamCount) streams(ctx context.Context, rules []int) (float64, error)
 	for _, i := range rules {
 		cd := sc.recs[i].Candidate
 		if cd.Structured {
-			field = append(field, fmt.Sprintf("| json sievelog_f%d=%s | sievelog_f%d!~%s", i, strconv.Quote(cd.Field), i, logql.Quote(cd.Language)))
+			field = append(field, fmt.Sprintf("| json zeroreads_f%d=%s | zeroreads_f%d!~%s", i, strconv.Quote(cd.Field), i, logql.Quote(cd.Language)))
 		} else {
 			line = append(line, "!~ "+logql.Quote(cd.Language))
 		}

@@ -12,13 +12,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/analyze"
-	"github.com/Bisman-Singh/sievelog/internal/automaton"
-	"github.com/Bisman-Singh/sievelog/internal/emit"
-	"github.com/Bisman-Singh/sievelog/internal/logql"
-	"github.com/Bisman-Singh/sievelog/internal/rewrite"
-	"github.com/Bisman-Singh/sievelog/internal/templating"
-	"github.com/Bisman-Singh/sievelog/internal/usage"
+	"github.com/Bisman-Singh/zeroreads/internal/analyze"
+	"github.com/Bisman-Singh/zeroreads/internal/automaton"
+	"github.com/Bisman-Singh/zeroreads/internal/emit"
+	"github.com/Bisman-Singh/zeroreads/internal/logql"
+	"github.com/Bisman-Singh/zeroreads/internal/rewrite"
+	"github.com/Bisman-Singh/zeroreads/internal/templating"
+	"github.com/Bisman-Singh/zeroreads/internal/usage"
 )
 
 // RulesFile is the set of rules an analysis decided to enforce.
@@ -30,7 +30,7 @@ type RulesFile struct {
 	DrainConfigHash string         `json:"drain_config_hash"`
 	LokiLabel       string         `json:"loki_label"`
 	Rules           []EnforcedRule `json:"rules"`
-	// RewritesAppliedAt is when `sievelog rewrite -apply` rewrote the stored queries. Executions of
+	// RewritesAppliedAt is when `zeroreads rewrite -apply` rewrote the stored queries. Executions of
 	// an original query before it are history, not readers.
 	RewritesAppliedAt time.Time `json:"rewrites_applied_at,omitzero"`
 }
@@ -153,7 +153,7 @@ func humanBytes(b float64) string {
 // Markdown renders the report for people.
 func Markdown(rep *Report) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# sievelog report\n\nGenerated %s. Discovery window %s, evidence window %s, drain %s.\n\n",
+	fmt.Fprintf(&b, "# zeroreads report\n\nGenerated %s. Discovery window %s, evidence window %s, drain %s.\n\n",
 		rep.GeneratedAt.Format(time.RFC3339), rep.Window, rep.EvidenceWindow, rep.DrainVersion)
 	acted := 0
 	for _, r := range rep.Recommendations {
@@ -229,7 +229,7 @@ func markdownRule(b *strings.Builder, r analyze.Recommendation) {
 		fmt.Fprintf(b, "- Blocked: %s\n", Code(bl))
 	}
 	if len(r.Rewrites) > 0 {
-		b.WriteString("- Rewrites (apply with `sievelog rewrite -apply` before or with enforcing; each returns the same numbers before, during and after the switch):\n")
+		b.WriteString("- Rewrites (apply with `zeroreads rewrite -apply` before or with enforcing; each returns the same numbers before, during and after the switch):\n")
 		for _, rw := range r.Rewrites {
 			fmt.Fprintf(b, "  - %s %s\n    - from %s\n    - to %s\n", rw.Source, Code(rw.Origin), Code(rw.Old), Code(rw.New))
 		}
@@ -482,10 +482,10 @@ func EmitFluentBit(c *Config, rf *RulesFile, mode emit.Mode) ([]byte, error) {
 func StepSummary(res *VerifyResult, total int) string {
 	var b strings.Builder
 	if len(res.Violations) == 0 {
-		fmt.Fprintf(&b, "### sievelog verify\n\nAll %d enforced rules are still safe.\n", total)
+		fmt.Fprintf(&b, "### zeroreads verify\n\nAll %d enforced rules are still safe.\n", total)
 		return b.String()
 	}
-	fmt.Fprintf(&b, "### sievelog verify\n\n%d of %d enforced rules are no longer safe.\n\n", len(res.Violations), total)
+	fmt.Fprintf(&b, "### zeroreads verify\n\n%d of %d enforced rules are no longer safe.\n\n", len(res.Violations), total)
 	for _, v := range res.Violations {
 		fmt.Fprintf(&b, "- %s\n", Code(v.RuleID))
 		for _, r := range v.Reasons {

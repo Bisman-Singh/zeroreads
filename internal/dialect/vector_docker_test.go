@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Bisman-Singh/sievelog/internal/automaton"
+	"github.com/Bisman-Singh/zeroreads/internal/automaton"
 )
 
 const vectorImage = "timberio/vector:0.58.0-debian"

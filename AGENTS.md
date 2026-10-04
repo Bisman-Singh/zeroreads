@@ -1,4 +1,4 @@
-# Working on sievelog
+# Working on zeroreads
 
 Guidance for anyone changing this repository, people and coding agents alike.
 
@@ -10,7 +10,7 @@ a wrong "unread" removes logs someone needs.
 
 ## Stack
 
-- Go 1.27.1 (the exact version in `go.mod`), module `github.com/Bisman-Singh/sievelog`.
+- Go 1.27.1 (the exact version in `go.mod`), module `github.com/Bisman-Singh/zeroreads`.
 - Evidence: Loki 3.7.8 (query log, ruler), Grafana 13.2.2, OpenSearch and Dashboards 3.8.0 (beta).
 - Enforcement: OpenTelemetry Collector contrib 0.161.0, Vector 0.58.0, Fluent Bit 5.1.2, policy-go 1.12.1.
 - Tests: unit tests, differential tests against the real runtimes in docker, and end-to-end tests on a
@@ -18,7 +18,7 @@ a wrong "unread" removes logs someone needs.
 
 ## Layout
 
-- `cmd/sievelog`: the CLI. `internal/app`: commands wired to sources, analysis and emitters.
+- `cmd/zeroreads`: the CLI. `internal/app`: commands wired to sources, analysis and emitters.
 - `internal/analyze`: the decision per rule. `internal/usage`, `internal/automaton`: whether a query
   can read a rule's lines, decided on automata. `internal/logql`: the LogQL parser.
 - `internal/source/{loki,grafana,opensearch}`: evidence readers. `internal/fetch`: their HTTP.

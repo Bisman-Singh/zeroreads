@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 version=${1:?usage: verify-release.sh VERSION}
-repo=${GITHUB_REPOSITORY:-Bisman-Singh/sievelog}
+repo=${GITHUB_REPOSITORY:-Bisman-Singh/zeroreads}
 identity="https://github.com/${repo}/.github/workflows/release.yml@refs/tags/v${version}"
 issuer=https://token.actions.githubusercontent.com
 image="ghcr.io/$(printf '%s' "${repo}" | tr '[:upper:]' '[:lower:]'):${version}"
@@ -20,6 +20,6 @@ cosign verify --certificate-identity "${identity}" --certificate-oidc-issuer "${
 echo "the image ${image} is signed by ${identity}"
 got=$(docker run --rm "${image}" version)
 case "${got}" in
-  "sievelog ${version} "*) echo "the image runs ${got}" ;;
+  "zeroreads ${version} "*) echo "the image runs ${got}" ;;
   *) echo "the image runs ${got}, not ${version}" >&2; exit 1 ;;
 esac

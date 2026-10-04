@@ -123,12 +123,12 @@ pipeline:
     - {name: modify, match: app, alias: prep, add: x 1}
   outputs:
     - {name: stdout, match: app}
-    - {name: stdout, match: sievelog.metrics}
+    - {name: stdout, match: zeroreads.metrics}
 `
 
 func fbTarget() FluentBitTarget {
 	return FluentBitTarget{Match: "app", After: "prep", ScopeKey: "service", TextKey: []string{"text"},
-		FieldKeys: map[string][]string{"orders": {"body", "msg"}}, MetricsTag: "sievelog.metrics"}
+		FieldKeys: map[string][]string{"orders": {"body", "msg"}}, MetricsTag: "zeroreads.metrics"}
 }
 
 func TestFluentBitWiring(t *testing.T) {
@@ -147,13 +147,13 @@ func TestFluentBitWiring(t *testing.T) {
 			t.Fatal(err)
 		}
 		if cfg.Pipeline.Filters[0]["alias"] != "prep" {
-			t.Fatalf("%s: sievelog filters must run after prep: %v", mode, cfg.Pipeline.Filters[0])
+			t.Fatalf("%s: zeroreads filters must run after prep: %v", mode, cfg.Pipeline.Filters[0])
 		}
 		text := string(out)
 		if !strings.Contains(text, "log_to_metrics") {
 			t.Fatalf("%s: no measurement", mode)
 		}
-		enforcing := strings.Contains(text, "grep") || strings.Contains(text, "sievelog_sample")
+		enforcing := strings.Contains(text, "grep") || strings.Contains(text, "zeroreads_sample")
 		if enforcing != (mode == Enforce) {
 			t.Fatalf("%s: enforcement present=%v\n%s", mode, enforcing, text)
 		}
@@ -239,7 +239,7 @@ func TestFluentBitFindsCapitalisedAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if i, j := strings.Index(string(out), "Alias: prep"), strings.Index(string(out), "sievelog_tag_"); i < 0 || j < i {
+	if i, j := strings.Index(string(out), "Alias: prep"), strings.Index(string(out), "zeroreads_tag_"); i < 0 || j < i {
 		t.Fatalf("rules are not wired after the capitalised alias:\n%s", out)
 	}
 }

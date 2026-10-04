@@ -21,12 +21,12 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Bisman-Singh/sievelog/internal/automaton"
-	"github.com/Bisman-Singh/sievelog/internal/gen"
-	"github.com/Bisman-Singh/sievelog/internal/logql"
-	"github.com/Bisman-Singh/sievelog/internal/rule"
-	"github.com/Bisman-Singh/sievelog/internal/templating"
-	"github.com/Bisman-Singh/sievelog/internal/usage"
+	"github.com/Bisman-Singh/zeroreads/internal/automaton"
+	"github.com/Bisman-Singh/zeroreads/internal/gen"
+	"github.com/Bisman-Singh/zeroreads/internal/logql"
+	"github.com/Bisman-Singh/zeroreads/internal/rule"
+	"github.com/Bisman-Singh/zeroreads/internal/templating"
+	"github.com/Bisman-Singh/zeroreads/internal/usage"
 )
 
 type fzRule struct {

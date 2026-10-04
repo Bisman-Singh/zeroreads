@@ -290,7 +290,7 @@ func TestQueryLogFoldsLegsOfFrontendQueries(t *testing.T) {
 	line := func(comp, query string) string {
 		return `level=info caller=metrics.go:237 component=` + comp + ` org_id=fake query_type=metric query=` + strconv.Quote(query)
 	}
-	full := `(sum(count_over_time({a="b"} != "x" | sievelog_rule="" [5m])) + sum(count_over_time({a="b"} |~ "y" [5m])))`
+	full := `(sum(count_over_time({a="b"} != "x" | zeroreads_rule="" [5m])) + sum(count_over_time({a="b"} |~ "y" [5m])))`
 	leg := `sum(count_over_time({a="b"} |~ "y"[5m] offset 1m0s))`
 	lines := []fakeLine{
 		{"loki", at(0), line("querier", leg)},
@@ -465,10 +465,10 @@ func TestQueryLogSkipsOnlyMarkerQueries(t *testing.T) {
 		return `level=info caller=metrics.go:340 component=frontend org_id=fake query_type=filter query=` + strconv.Quote(query)
 	}
 	lines := []fakeLine{
-		{"loki", base, line(`{sievelog_probe="sievelog_probe_0a1b2c"}`)},
-		{"loki", base + 1, line(`{service_name="loki"} |= "caller=metrics.go" != "sievelog_probe_"`)},
-		{"loki", base + 2, `level=info msg="starting to tail logs" selectors="{sievelog_probe=\"sievelog_probe_0a1b2c\"}"`},
-		{"loki", base + 3, `level=info msg="starting to tail logs" selectors="{service_name=\"loki\"} != \"sievelog_probe_\""`},
+		{"loki", base, line(`{zeroreads_probe="zeroreads_probe_0a1b2c"}`)},
+		{"loki", base + 1, line(`{service_name="loki"} |= "caller=metrics.go" != "zeroreads_probe_"`)},
+		{"loki", base + 2, `level=info msg="starting to tail logs" selectors="{zeroreads_probe=\"zeroreads_probe_0a1b2c\"}"`},
+		{"loki", base + 3, `level=info msg="starting to tail logs" selectors="{service_name=\"loki\"} != \"zeroreads_probe_\""`},
 	}
 	calls := 0
 	srv := fakeLoki(t, lines, &calls)

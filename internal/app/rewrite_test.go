@@ -3,7 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"github.com/Bisman-Singh/sievelog/internal/pricing"
+	"github.com/Bisman-Singh/zeroreads/internal/pricing"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/source/grafana"
+	"github.com/Bisman-Singh/zeroreads/internal/source/grafana"
 
-	"github.com/Bisman-Singh/sievelog/internal/analyze"
-	"github.com/Bisman-Singh/sievelog/internal/emit"
+	"github.com/Bisman-Singh/zeroreads/internal/analyze"
+	"github.com/Bisman-Singh/zeroreads/internal/emit"
 )
 
 // fakeGrafanaStore keeps objects in memory and records writes and their headers.
@@ -109,8 +109,8 @@ func TestRewritesApplyExactlyOnceAndSafely(t *testing.T) {
 	}
 	srv := httptest.NewServer(store)
 	defer srv.Close()
-	os.Setenv("SIEVELOG_TEST_PW", "pw")
-	c := &Config{Evidence: EvidenceConfig{Grafana: []GrafanaConfig{{URL: srv.URL, Username: "admin", PasswordEnv: "SIEVELOG_TEST_PW"}}}}
+	os.Setenv("ZEROREADS_TEST_PW", "pw")
+	c := &Config{Evidence: EvidenceConfig{Grafana: []GrafanaConfig{{URL: srv.URL, Username: "admin", PasswordEnv: "ZEROREADS_TEST_PW"}}}}
 	rw := func(path string) analyze.Rewrite {
 		return analyze.Rewrite{Source: "grafana", Store: "grafana", StoreURL: srv.URL, Org: 1, Path: path, Old: old, New: nw}
 	}

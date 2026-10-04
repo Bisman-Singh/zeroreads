@@ -67,7 +67,7 @@ The first release. Everything below is new.
 - Robustness: every HTTP answer is bounded, transient failures of reads are retried, Loki paging always
   moves forward, query text is bounded at 256 KiB, and every regular-expression question is bounded in
   work as well as states.
-- `sievelog version`, documented exit codes, CI with lint and vulnerability scans, actions and base
+- `zeroreads version`, documented exit codes, CI with lint and vulnerability scans, actions and base
   images pinned to digests.
 - Money is reported only at your own prices (`pricing.per_gb`, `pricing.per_million_lines`,
   `pricing.currency`); no list prices are built in, since region, plan and discounts change them.
@@ -77,7 +77,7 @@ The first release. Everything below is new.
   elsewhere and a redirected write is never taken for a success. Grafana datasource URLs are kept
   without their user and password.
 - A server answering with pages without end is stopped and read as a gap. Output is written through a
-  link only when the user running sievelog owns it, and an existing file never gets wider permissions.
+  link only when the user running zeroreads owns it, and an existing file never gets wider permissions.
 - Every Grafana gap key names its Grafana and, when it is about one organisation, that org.
 - A Grafana v2 query that names its datasource by a variable or a name, as Grafana writes it when it
   converts an older panel, is read like the classic panel; it used to read nothing, so its dashboard

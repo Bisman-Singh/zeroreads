@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Bisman-Singh/sievelog/internal/automaton"
+	"github.com/Bisman-Singh/zeroreads/internal/automaton"
 )
 
 const fluentBitImage = "fluent/fluent-bit:5.1.2"

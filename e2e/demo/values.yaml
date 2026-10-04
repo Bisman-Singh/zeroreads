@@ -1,4 +1,4 @@
-# The OpenTelemetry demo as a realistic workload for sievelog, on the e2e kind cluster: its own
+# The OpenTelemetry demo as a realistic workload for zeroreads, on the e2e kind cluster: its own
 # services and load generator, its own OpenTelemetry Collector sending logs to the e2e Loki, and
 # none of its bundled backends (the e2e stack is the backend).
 default:
@@ -24,7 +24,7 @@ components:
       limits: {memory: 600Mi}
 opentelemetry-collector:
   image:
-    tag: 0.161.0                 # the Collector release sievelog's suites verify
+    tag: 0.161.0                 # the Collector release zeroreads's suites verify
   mode: deployment
   presets:
     hostMetrics: {enabled: false}
@@ -34,7 +34,7 @@ opentelemetry-collector:
     kubernetesAttributes: {enabled: true}
   resources:
     limits: {memory: 600Mi}
-  # sievelog's measurement goes to a file on the e2e host mount, as delta sums (a Prometheus exporter
+  # zeroreads's measurement goes to a file on the e2e host mount, as delta sums (a Prometheus exporter
   # would restart its totals and is refused).
   securityContext:
     runAsUser: 0 # writes to the host mount
@@ -47,9 +47,9 @@ opentelemetry-collector:
   config:
     exporters:
       otlp_http/loki:
-        endpoint: http://loki.sievelog-system.svc:3100/otlp
+        endpoint: http://loki.zeroreads-system.svc:3100/otlp
         tls: {insecure: true}
-      file/sievelog:
+      file/zeroreads:
         path: /e2e/out/demo-metrics.json
     service:
       pipelines:

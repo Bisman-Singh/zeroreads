@@ -7,7 +7,7 @@ import (
 	"syscall"
 )
 
-// ownedByUs reports whether the user running sievelog owns the file.
+// ownedByUs reports whether the user running zeroreads owns the file.
 func ownedByUs(fi os.FileInfo) bool {
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	return ok && int(st.Uid) == os.Getuid()

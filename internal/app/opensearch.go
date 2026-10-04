@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/analyze"
-	"github.com/Bisman-Singh/sievelog/internal/source/opensearch"
+	"github.com/Bisman-Singh/zeroreads/internal/analyze"
+	"github.com/Bisman-Singh/zeroreads/internal/source/opensearch"
 )
 
 // OpenSearchConfig is one OpenSearch cluster that receives the analysed logs.

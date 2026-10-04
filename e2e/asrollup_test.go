@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/analyze"
-	"github.com/Bisman-Singh/sievelog/internal/app"
-	"github.com/Bisman-Singh/sievelog/internal/gen"
-	"github.com/Bisman-Singh/sievelog/internal/rewrite"
-	"github.com/Bisman-Singh/sievelog/internal/source/loki"
+	"github.com/Bisman-Singh/zeroreads/internal/analyze"
+	"github.com/Bisman-Singh/zeroreads/internal/app"
+	"github.com/Bisman-Singh/zeroreads/internal/gen"
+	"github.com/Bisman-Singh/zeroreads/internal/rewrite"
+	"github.com/Bisman-Singh/zeroreads/internal/source/loki"
 )
 
 // TestRollupRewritesKeepCounts rolls up a template that a Grafana alert rule and a dashboard panel
@@ -48,13 +48,13 @@ func TestRollupRewritesKeepCounts(t *testing.T) {
 	preEnd := time.Now()
 
 	// The readers: an API-managed alert rule and a dashboard panel, both counting cache lines.
-	s, b := grafanaCall(t, grafanaURL, "POST", "/api/folders", 1, map[string]any{"uid": "sievelog-rollup", "title": "sievelog rollup e2e"})
+	s, b := grafanaCall(t, grafanaURL, "POST", "/api/folders", 1, map[string]any{"uid": "zeroreads-rollup", "title": "zeroreads rollup e2e"})
 	if s != 200 && s != 412 && s != 409 {
 		t.Fatalf("folder: %d %s", s, b)
 	}
 	alertExpr := `sum(count_over_time({service_name="checkout"} |= "DEBUG cache" [10m]))`
 	s, b = grafanaCall(t, grafanaURL, "POST", "/api/v1/provisioning/alert-rules", 1, map[string]any{
-		"uid": "rollup-cache", "title": "cache volume", "ruleGroup": "rollup", "folderUID": "sievelog-rollup", "orgID": 1,
+		"uid": "rollup-cache", "title": "cache volume", "ruleGroup": "rollup", "folderUID": "zeroreads-rollup", "orgID": 1,
 		"condition": "C", "for": "0s", "noDataState": "OK", "execErrState": "OK",
 		"data": []any{
 			map[string]any{"refId": "A", "datasourceUid": "loki", "relativeTimeRange": map[string]any{"from": 600, "to": 0},
@@ -68,15 +68,15 @@ func TestRollupRewritesKeepCounts(t *testing.T) {
 	}
 	defer grafanaCall(t, grafanaURL, "DELETE", "/api/v1/provisioning/alert-rules/rollup-cache", 1, nil)
 	panelExpr := `sum by (k8s_namespace_name) (count_over_time({service_name="checkout"} |~ "cache" [$__interval]))`
-	s, b = grafanaCall(t, grafanaURL, "POST", "/api/dashboards/db", 1, map[string]any{"overwrite": true, "folderUid": "sievelog-rollup", "dashboard": map[string]any{
+	s, b = grafanaCall(t, grafanaURL, "POST", "/api/dashboards/db", 1, map[string]any{"overwrite": true, "folderUid": "zeroreads-rollup", "dashboard": map[string]any{
 		"uid": "rollup-cache", "title": "Cache volume", "schemaVersion": 41,
 		"panels": []any{map[string]any{"id": 1, "type": "timeseries", "datasource": map[string]any{"type": "loki", "uid": "loki"},
 			"targets": []any{map[string]any{"refId": "A", "expr": panelExpr}}}}}})
 	must(t, s, b, 200)
 	defer grafanaCall(t, grafanaURL, "DELETE", "/api/dashboards/uid/rollup-cache", 1, nil)
-	defer grafanaCall(t, grafanaURL, "DELETE", "/api/folders/sievelog-rollup", 1, nil)
+	defer grafanaCall(t, grafanaURL, "DELETE", "/api/folders/zeroreads-rollup", 1, nil)
 
-	cfgPath := filepath.Join(e.work, "sievelog-rollup.yaml")
+	cfgPath := filepath.Join(e.work, "zeroreads-rollup.yaml")
 	os.WriteFile(cfgPath, []byte(fmt.Sprintf(`loki:
   url: %s
 scope:
@@ -110,8 +110,8 @@ policy:
   acknowledge: ["%s", querylog-window]
 `, e.loki, gen.IPMaskName, gen.IPMaskPattern, grafanaURL, userPath, grafanaGap("queryhistory", grafanaURL))), 0o644)
 	os.Setenv("E2E_GRAFANA_PASSWORD", grafanaPass)
-	e.bin = filepath.Join(e.work, "sievelog")
-	if out, code := e.run(e.root, "go", "build", "-o", e.bin, "./cmd/sievelog"); code != 0 {
+	e.bin = filepath.Join(e.work, "zeroreads")
+	if out, code := e.run(e.root, "go", "build", "-o", e.bin, "./cmd/zeroreads"); code != 0 {
 		t.Fatal(out)
 	}
 
@@ -212,7 +212,7 @@ policy:
 			t.Fatalf("rewrite -apply with a local-file ruler (exit %d): %s", code, out)
 		}
 		nsFile, _ := os.ReadFile(rulerFile)
-		cm := e.kubectl("create", "configmap", "loki-rules", "-n", "sievelog-system", "--from-literal=rules.yaml="+string(nsFile), "--dry-run=client", "-o", "yaml")
+		cm := e.kubectl("create", "configmap", "loki-rules", "-n", "zeroreads-system", "--from-literal=rules.yaml="+string(nsFile), "--dry-run=client", "-o", "yaml")
 		cmPath := filepath.Join(e.work, "rollup-loki-rules.yaml")
 		os.WriteFile(cmPath, []byte(cm), 0o644)
 		e.kubectl("apply", "-f", cmPath)
@@ -223,7 +223,7 @@ policy:
 				rules, err := lc.Rules(context.Background())
 				restored := err == nil && len(rules) > 0
 				for _, r := range rules {
-					if strings.Contains(r.Expr, "sievelog rollup ") {
+					if strings.Contains(r.Expr, "zeroreads rollup ") {
 						restored = false
 					}
 				}
@@ -238,7 +238,7 @@ policy:
 			rules, err := lc.Rules(context.Background())
 			found := false
 			for _, r := range rules {
-				if strings.Contains(r.Expr, "sievelog rollup ") {
+				if strings.Contains(r.Expr, "zeroreads rollup ") {
 					found = true
 				}
 			}

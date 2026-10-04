@@ -46,12 +46,12 @@ pipeline:
       match_regex: ^(app|raw)$
       format: otlp_json
     - name: stdout
-      match: sievelog.metrics
+      match: zeroreads.metrics
 `
 
 func fluentBitTarget() FluentBitTarget {
 	return FluentBitTarget{Match: "app", After: "prep", ScopeKey: "service", TextKey: []string{"text"},
-		FieldKeys: map[string][]string{"orders": {"body", "msg"}}, MetricsTag: "sievelog.metrics"}
+		FieldKeys: map[string][]string{"orders": {"body", "msg"}}, MetricsTag: "zeroreads.metrics"}
 }
 
 type fbRecord struct {
@@ -167,14 +167,14 @@ func runFluentBitEnv(t *testing.T, cfg []byte, recs []record, env []string) ([]f
 				for _, lr := range sl.LogRecords {
 					fields := kvlist(t, lr.Body)
 					ts, _ := strconv.ParseInt(lr.TimeUnixNano, 10, 64)
-					r := fbRecord{stream: str(fields["stream"]), service: str(fields["service"]), ts: ts, archive: str(fields["sievelog_archive"])}
+					r := fbRecord{stream: str(fields["stream"]), service: str(fields["service"]), ts: ts, archive: str(fields["zeroreads_archive"])}
 					if b, ok := fields["body"].(map[string]any); ok {
 						r.text, r.structured = str(b["msg"]), true
 					} else {
 						r.text = str(fields["text"])
 					}
-					if _, leaked := fields["sievelog_rule"]; leaked {
-						t.Fatalf("sievelog_rule leaked downstream: %v", fields)
+					if _, leaked := fields["zeroreads_rule"]; leaked {
+						t.Fatalf("zeroreads_rule leaked downstream: %v", fields)
 					}
 					res = append(res, r)
 				}
@@ -299,7 +299,7 @@ func TestFluentBitEnforcesExactly(t *testing.T) {
 		}
 	}
 	for id, n := range counts {
-		name := metricName("sievelog_rule_lines", id)
+		name := metricName("zeroreads_rule_lines", id)
 		re := regexp.MustCompile(regexp.QuoteMeta(name) + `\S* = (\d+)`)
 		m := re.FindAllStringSubmatch(metrics, -1)
 		if len(m) == 0 {
@@ -368,7 +368,7 @@ func TestFluentBitSeverityGuard(t *testing.T) {
 		}
 	}
 	for id, n := range counted {
-		re := regexp.MustCompile(regexp.QuoteMeta(metricName("sievelog_rule_lines", id)) + `\S* = (\d+)`)
+		re := regexp.MustCompile(regexp.QuoteMeta(metricName("zeroreads_rule_lines", id)) + `\S* = (\d+)`)
 		m := re.FindAllStringSubmatch(metrics, -1)
 		if len(m) == 0 || m[len(m)-1][1] != strconv.Itoa(n) {
 			t.Fatalf("%s: counted %v, want %d (severe records must not be measured)", id, m, n)

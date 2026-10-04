@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/app"
+	"github.com/Bisman-Singh/zeroreads/internal/app"
 )
 
 // TestZDriftReportedExactly pushes lines of an enforced rule's template that the rule does not
@@ -20,9 +20,9 @@ import (
 func TestZDriftReportedExactly(t *testing.T) {
 	e := &loopEnv{t: t, work: env(t, "E2E_WORK"), loki: env(t, "LOKI_URL")}
 	e.root, _ = filepath.Abs("..")
-	cfgPath := filepath.Join(e.work, "sievelog.yaml")
+	cfgPath := filepath.Join(e.work, "zeroreads.yaml")
 	outDir := filepath.Join(e.work, "loop-out")
-	e.bin = filepath.Join(e.work, "sievelog")
+	e.bin = filepath.Join(e.work, "zeroreads")
 	rf, err := app.LoadRules(filepath.Join(outDir, "rules.json"))
 	if err != nil {
 		t.Fatalf("needs the rules TestFullLoop wrote: %v", err)

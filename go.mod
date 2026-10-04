@@ -1,4 +1,4 @@
-module github.com/Bisman-Singh/sievelog
+module github.com/Bisman-Singh/zeroreads
 
 go 1.27.1
 

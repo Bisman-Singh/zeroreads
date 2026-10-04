@@ -1,4 +1,4 @@
-// Package pricing turns removed volume into money at the operator's own prices. sievelog measures
+// Package pricing turns removed volume into money at the operator's own prices. zeroreads measures
 // volume exactly, and only the operator knows what a gigabyte or a million lines costs them once
 // region, plan, retention and discounts are applied, so no price is built in.
 package pricing

@@ -10,7 +10,7 @@ import (
 
 func write(t *testing.T, s string) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "sievelog.yaml")
+	p := filepath.Join(t.TempDir(), "zeroreads.yaml")
 	os.WriteFile(p, []byte(s), 0o644)
 	return p
 }
@@ -99,9 +99,9 @@ func TestConfigValidation(t *testing.T) {
 // A setting that names an empty environment variable fails where the client is built, and the query
 // log gets loki's credentials only when it is that same Loki.
 func TestCredentials(t *testing.T) {
-	t.Setenv("SIEVELOG_TEST_PW", "pw")
-	t.Setenv("SIEVELOG_TEST_EMPTY", "")
-	c := &Config{Loki: LokiConfig{URL: "http://l", Username: "u", PasswordEnv: "SIEVELOG_TEST_PW", OrgID: "t1"},
+	t.Setenv("ZEROREADS_TEST_PW", "pw")
+	t.Setenv("ZEROREADS_TEST_EMPTY", "")
+	c := &Config{Loki: LokiConfig{URL: "http://l", Username: "u", PasswordEnv: "ZEROREADS_TEST_PW", OrgID: "t1"},
 		Evidence: EvidenceConfig{QueryLog: QueryLogConfig{URL: "http://l/"}}}
 	lc, err := c.lokiClient()
 	if err != nil || lc.Username != "u" || lc.Password != "pw" || lc.OrgID != "t1" {
@@ -119,14 +119,14 @@ func TestCredentials(t *testing.T) {
 	if ql, _ = c.queryLogClient(); ql.Username != "" || ql.Password != "" || ql.OrgID != "" {
 		t.Fatalf("another Loki received loki's credentials: %+v", ql)
 	}
-	c.Loki.BearerTokenEnv = "SIEVELOG_TEST_EMPTY"
-	if _, err := c.lokiClient(); err == nil || !strings.Contains(err.Error(), "SIEVELOG_TEST_EMPTY") {
+	c.Loki.BearerTokenEnv = "ZEROREADS_TEST_EMPTY"
+	if _, err := c.lokiClient(); err == nil || !strings.Contains(err.Error(), "ZEROREADS_TEST_EMPTY") {
 		t.Fatalf("empty token: %v", err)
 	}
-	if _, err := (GrafanaConfig{URL: "http://g", TokenEnv: "SIEVELOG_TEST_UNSET"}).client(); err == nil {
+	if _, err := (GrafanaConfig{URL: "http://g", TokenEnv: "ZEROREADS_TEST_UNSET"}).client(); err == nil {
 		t.Fatal("unset Grafana token accepted")
 	}
-	if _, err := (OpenSearchConfig{Name: "os", URL: "https://o", PasswordEnv: "SIEVELOG_TEST_UNSET"}).client(); err == nil {
+	if _, err := (OpenSearchConfig{Name: "os", URL: "https://o", PasswordEnv: "ZEROREADS_TEST_UNSET"}).client(); err == nil {
 		t.Fatal("unset OpenSearch password accepted")
 	}
 }

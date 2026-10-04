@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Bisman-Singh/sievelog/internal/automaton"
+	"github.com/Bisman-Singh/zeroreads/internal/automaton"
 )
 
 // The printed pattern must mean the same as the original under Go itself: a guard against printer

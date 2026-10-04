@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/logql"
-	"github.com/Bisman-Singh/sievelog/internal/rewrite"
-	"github.com/Bisman-Singh/sievelog/internal/source/loki"
+	"github.com/Bisman-Singh/zeroreads/internal/logql"
+	"github.com/Bisman-Singh/zeroreads/internal/rewrite"
+	"github.com/Bisman-Singh/zeroreads/internal/source/loki"
 )
 
 // Window is a closed time range.
@@ -41,7 +41,7 @@ type ServiceReconciliation struct {
 	AfterBytesRate  float64 `json:"after_bytes_per_hour"`
 }
 
-// Reconciliation is the result of `sievelog reconcile`.
+// Reconciliation is the result of `zeroreads reconcile`.
 type Reconciliation struct {
 	Before   Window                  `json:"before"`
 	After    Window                  `json:"after"`

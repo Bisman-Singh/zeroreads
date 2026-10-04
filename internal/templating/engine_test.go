@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Bisman-Singh/sievelog/internal/gen"
+	"github.com/Bisman-Singh/zeroreads/internal/gen"
 )
 
 var ipMask = MaskRule{Name: gen.IPMaskName, Pattern: gen.IPMaskPattern}

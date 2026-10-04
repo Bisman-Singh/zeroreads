@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/logfmt"
-	"github.com/Bisman-Singh/sievelog/internal/logql"
+	"github.com/Bisman-Singh/zeroreads/internal/logfmt"
+	"github.com/Bisman-Singh/zeroreads/internal/logql"
 )
 
 // QueryLog reads the queries Loki executed from Loki's own logs. Loki writes one line per query
@@ -268,7 +268,7 @@ func selectionsWithin(leg, query []logql.Selection) bool {
 
 // probePrefix starts every liveness marker. The marker selects a label no stream carries, so it
 // reads nothing, and it is never counted as usage.
-const probePrefix = "sievelog_probe_"
+const probePrefix = "zeroreads_probe_"
 
 // isProbe reports whether a logged query is a liveness marker: every selection names the marker label
 // with a marker value, so it reads no stream. A query that only mentions the prefix, in a line filter
@@ -281,7 +281,7 @@ func isProbe(query string) bool {
 	for _, sel := range q.Selections {
 		marked := false
 		for _, m := range sel.Matchers {
-			if m.Name == "sievelog_probe" && m.Op == "=" && strings.HasPrefix(m.Value, probePrefix) {
+			if m.Name == "zeroreads_probe" && m.Op == "=" && strings.HasPrefix(m.Value, probePrefix) {
 				marked = true
 			}
 		}
@@ -293,7 +293,7 @@ func isProbe(query string) bool {
 }
 
 // isOwnQuery recognises the analyzer's tag. Loki lower-cases query-tag values in its log line.
-func isOwnQuery(source string) bool { return strings.EqualFold(source, "sievelog") }
+func isOwnQuery(source string) bool { return strings.EqualFold(source, "zeroreads") }
 
 // ProveLive sends a unique marker query to target and waits until it shows up in the query log.
 // It proves the query log is being written and is readable, end to end. The marker is sent without
@@ -306,7 +306,7 @@ func (q *QueryLog) ProveLive(ctx context.Context, target *Client, timeout time.D
 	probe := *target
 	probe.untagged = true
 	sent := time.Now().Add(-time.Second)
-	if _, err := probe.QueryRange(ctx, `{sievelog_probe="`+marker+`"}`, sent.Add(-time.Minute), sent.Add(time.Minute), 1); err != nil {
+	if _, err := probe.QueryRange(ctx, `{zeroreads_probe="`+marker+`"}`, sent.Add(-time.Minute), sent.Add(time.Minute), 1); err != nil {
 		return fmt.Errorf("sending marker query: %w", err)
 	}
 	return q.waitFor(ctx, marker, timeout, func(m map[string]string) bool {
@@ -326,7 +326,7 @@ func (q *QueryLog) ProveTail(ctx context.Context, target *Client, timeout time.D
 	}
 	probe := *target
 	probe.untagged = true
-	if err := probe.OpenTail(ctx, `{sievelog_probe="`+marker+`"}`); err != nil {
+	if err := probe.OpenTail(ctx, `{zeroreads_probe="`+marker+`"}`); err != nil {
 		return err
 	}
 	return q.waitFor(ctx, marker, timeout, func(m map[string]string) bool {
@@ -344,7 +344,7 @@ func (q *QueryLog) ProvePatterns(ctx context.Context, target *Client, timeout ti
 	probe := *target
 	probe.untagged = true
 	v := url.Values{}
-	v.Set("query", `{sievelog_probe="`+marker+`"}`)
+	v.Set("query", `{zeroreads_probe="`+marker+`"}`)
 	v.Set("start", strconv.FormatInt(time.Now().Add(-time.Hour).UnixNano(), 10))
 	v.Set("end", strconv.FormatInt(time.Now().UnixNano(), 10))
 	if _, err := probe.get(ctx, "/loki/api/v1/patterns", v); err != nil {

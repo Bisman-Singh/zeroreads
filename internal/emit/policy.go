@@ -11,7 +11,7 @@ import (
 	"github.com/usetero/policy-go/backend/teroscan"
 	"github.com/usetero/policy-go/policy"
 
-	"github.com/Bisman-Singh/sievelog/internal/automaton"
+	"github.com/Bisman-Singh/zeroreads/internal/automaton"
 )
 
 // PolicySkip is a rule that is not written as a Telemetry Policy, and why.
@@ -65,7 +65,7 @@ func Policies(rules []Rule, dir string) ([]byte, []PolicySkip, error) {
 			continue
 		}
 		pf.Policies = append(pf.Policies, policyDoc{
-			ID: r.ID, Name: "sievelog " + r.ID, Enabled: true,
+			ID: r.ID, Name: "zeroreads " + r.ID, Enabled: true,
 			Log: policyLog{Keep: keep, Match: []map[string]any{
 				{"resource_attribute": map[string]any{"path": []string{r.ScopeAttr}}, "equals": r.ScopeValue},
 				{"log_field": "body", "regex": r.Language},

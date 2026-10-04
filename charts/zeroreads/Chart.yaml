@@ -1,5 +1,5 @@
 apiVersion: v2
-name: sievelog
+name: zeroreads
 description: Re-checks enforced log reduction rules against fresh usage evidence on a schedule.
 type: application
 version: 0.1.0

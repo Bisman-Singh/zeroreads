@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/analyze"
+	"github.com/Bisman-Singh/zeroreads/internal/analyze"
 )
 
 // The report says how many readers are exact and what was assumed for the rest: each kind counts a

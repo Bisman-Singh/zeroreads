@@ -9,8 +9,8 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/Bisman-Singh/sievelog/internal/dialect"
-	"github.com/Bisman-Singh/sievelog/internal/topology"
+	"github.com/Bisman-Singh/zeroreads/internal/dialect"
+	"github.com/Bisman-Singh/zeroreads/internal/topology"
 )
 
 // VectorTarget is where in a Vector configuration rules are enforced.
@@ -34,16 +34,16 @@ type VectorTarget struct {
 
 // Vector component names this package adds.
 const (
-	vTag          = "sievelog_tag"
-	vMeasure      = "sievelog_measure"
-	vMeasureAgg   = "sievelog_measure_aggregate"
-	vSink         = "sievelog_metrics"
-	vEnforce      = "sievelog_enforce"
-	vRoute        = "sievelog_route"
-	vReduce       = "sievelog_dedupe"
-	vClean        = "sievelog_clean"
-	vArchive      = "sievelog_archive"
-	vArchiveClean = "sievelog_archive_clean"
+	vTag          = "zeroreads_tag"
+	vMeasure      = "zeroreads_measure"
+	vMeasureAgg   = "zeroreads_measure_aggregate"
+	vSink         = "zeroreads_metrics"
+	vEnforce      = "zeroreads_enforce"
+	vRoute        = "zeroreads_route"
+	vReduce       = "zeroreads_dedupe"
+	vClean        = "zeroreads_clean"
+	vArchive      = "zeroreads_archive"
+	vArchiveClean = "zeroreads_archive_clean"
 )
 
 // VectorSampleThreshold is the integer below which the first 15 hex digits of the SHA-256 of a
@@ -189,7 +189,7 @@ func Vector(files [][]byte, t VectorTarget, rules []Rule, mode Mode) ([]byte, er
 	if len(dedupe) > 0 {
 		cleanInputs = t.addDedupe(transforms, dedupe, main)
 	}
-	transforms[vClean] = map[string]any{"type": "remap", "inputs": cleanInputs, "source": "del(.sievelog_rule)\ndel(.sievelog_bytes)\ndel(.sievelog_aggregate)\n"}
+	transforms[vClean] = map[string]any{"type": "remap", "inputs": cleanInputs, "source": "del(.zeroreads_rule)\ndel(.zeroreads_bytes)\ndel(.zeroreads_aggregate)\n"}
 	// Rewire every original consumer of t.After to read from the enforcement chain.
 	for _, section := range []map[string]any{transforms, sinks} {
 		if err := rewireConsumers(section, t.After); err != nil {
@@ -224,11 +224,11 @@ func (t VectorTarget) tagProgram(rules []Rule, mode Mode) (string, error) {
 		return "", err
 	}
 	var tag strings.Builder
-	tag.WriteString("sievelog_severe = is_integer(.severity_number) && int!(.severity_number) >= 13\n")
+	tag.WriteString("zeroreads_severe = is_integer(.severity_number) && int!(.severity_number) >= 13\n")
 	for _, p := range t.severityPaths() {
-		fmt.Fprintf(&tag, "if is_string(%s) && match(string!(%s), r'%s') { sievelog_severe = true }\n", p, p, severe)
+		fmt.Fprintf(&tag, "if is_string(%s) && match(string!(%s), r'%s') { zeroreads_severe = true }\n", p, p, severe)
 	}
-	tag.WriteString("if !sievelog_severe {\n")
+	tag.WriteString("if !zeroreads_severe {\n")
 	for i, r := range rules {
 		path, err := t.textPath(r)
 		if err != nil {
@@ -242,10 +242,10 @@ func (t VectorTarget) tagProgram(rules []Rule, mode Mode) (string, error) {
 		if i == 0 {
 			kw = "if"
 		}
-		fmt.Fprintf(&tag, "%s %s == %s && is_string(%s) && match(string!(%s), r'%s') {\n  .sievelog_rule = %s\n  .sievelog_bytes = length(string!(%s))\n",
+		fmt.Fprintf(&tag, "%s %s == %s && is_string(%s) && match(string!(%s), r'%s') {\n  .zeroreads_rule = %s\n  .zeroreads_bytes = length(string!(%s))\n",
 			kw, t.ScopePath, vrlString(r.ScopeValue), path, path, pat, vrlString(r.ID), path)
 		if r.Action == "aggregate" && mode == Enforce {
-			tag.WriteString("  .sievelog_aggregate = 1\n")
+			tag.WriteString("  .zeroreads_aggregate = 1\n")
 		}
 	}
 	if len(rules) > 0 {
@@ -258,8 +258,8 @@ func (t VectorTarget) tagProgram(rules []Rule, mode Mode) (string, error) {
 // addMeasurement adds the per-rule counters and the sink that receives them.
 func (t VectorTarget) addMeasurement(transforms, sinks map[string]any, mode Mode) {
 	metrics := []any{
-		map[string]any{"type": "counter", "field": "sievelog_rule", "name": "sievelog_rule_lines", "tags": map[string]any{"rule": "{{ sievelog_rule }}"}},
-		map[string]any{"type": "counter", "field": "sievelog_bytes", "name": "sievelog_rule_bytes", "increment_by_value": true, "tags": map[string]any{"rule": "{{ sievelog_rule }}"}},
+		map[string]any{"type": "counter", "field": "zeroreads_rule", "name": "zeroreads_rule_lines", "tags": map[string]any{"rule": "{{ zeroreads_rule }}"}},
+		map[string]any{"type": "counter", "field": "zeroreads_bytes", "name": "zeroreads_rule_bytes", "increment_by_value": true, "tags": map[string]any{"rule": "{{ zeroreads_rule }}"}},
 	}
 	// One log_to_metric per field set: when any metric of a log_to_metric fails for an event (a missing
 	// field), Vector emits none of that transform's metrics for it.
@@ -267,7 +267,7 @@ func (t VectorTarget) addMeasurement(transforms, sinks map[string]any, mode Mode
 	measureInputs := []any{vMeasure}
 	if mode == Enforce {
 		transforms[vMeasureAgg] = map[string]any{"type": "log_to_metric", "inputs": []any{vTag}, "metrics": []any{
-			map[string]any{"type": "counter", "field": "sievelog_aggregate", "name": "sievelog_aggregate_lines", "tags": map[string]any{"rule": "{{ sievelog_rule }}"}}}}
+			map[string]any{"type": "counter", "field": "zeroreads_aggregate", "name": "zeroreads_aggregate_lines", "tags": map[string]any{"rule": "{{ zeroreads_rule }}"}}}}
 		measureInputs = append(measureInputs, vMeasureAgg)
 	}
 	measureSink := map[string]any{}
@@ -288,12 +288,12 @@ func (t VectorTarget) enforceProgram(rules []Rule) (program string, dedupe, arch
 		case "archive":
 			archive = append(archive, r.ID)
 		case "drop", "aggregate":
-			fmt.Fprintf(&enf, "if .sievelog_rule == %s { abort }\n", vrlString(r.ID))
+			fmt.Fprintf(&enf, "if .zeroreads_rule == %s { abort }\n", vrlString(r.ID))
 		case "sample":
-			fmt.Fprintf(&enf, "if .sievelog_rule == %s {\n  sievelog_key = string!(%s) + \"|\" + to_string(to_unix_timestamp(timestamp!(.timestamp), unit: \"nanoseconds\"))\n  if parse_int!(slice!(sha2(sievelog_key, variant: \"SHA-256\"), 0, 15), base: 16) >= %d { abort }\n}\n",
+			fmt.Fprintf(&enf, "if .zeroreads_rule == %s {\n  zeroreads_key = string!(%s) + \"|\" + to_string(to_unix_timestamp(timestamp!(.timestamp), unit: \"nanoseconds\"))\n  if parse_int!(slice!(sha2(zeroreads_key, variant: \"SHA-256\"), 0, 15), base: 16) >= %d { abort }\n}\n",
 				vrlString(r.ID), path, VectorSampleThreshold(r.Keep))
 		case "dedupe":
-			fmt.Fprintf(&enf, "if .sievelog_rule == %s { .sievelog_count = 1 }\n", vrlString(r.ID))
+			fmt.Fprintf(&enf, "if .zeroreads_rule == %s { .zeroreads_count = 1 }\n", vrlString(r.ID))
 			dedupe = append(dedupe, r.ID)
 		default:
 			return "", nil, nil, fmt.Errorf("emit: rule %s: Vector cannot enforce %s; re-run analyze for runtime vector", r.ID, r.Action)
@@ -303,18 +303,18 @@ func (t VectorTarget) enforceProgram(rules []Rule) (program string, dedupe, arch
 }
 
 // addArchive routes archived rules' events away from the enforcement chain into every archive sink.
-// Each archived event keeps the rule that archived it in .sievelog_archive.
+// Each archived event keeps the rule that archived it in .zeroreads_archive.
 func (t VectorTarget) addArchive(transforms, sinks map[string]any, archive []string) error {
 	if len(t.ArchiveSinks) == 0 {
 		return fmt.Errorf("emit: rules archive but no vector archive sink is configured")
 	}
 	var conds []string
 	for _, id := range archive {
-		conds = append(conds, ".sievelog_rule == "+vrlString(id))
+		conds = append(conds, ".zeroreads_rule == "+vrlString(id))
 	}
 	transforms[vArchive] = map[string]any{"type": "route", "inputs": []any{vEnforce}, "route": map[string]any{"archive": strings.Join(conds, " || ")}}
 	transforms[vArchiveClean] = map[string]any{"type": "remap", "inputs": []any{vArchive + ".archive"},
-		"source": ".sievelog_archive = del(.sievelog_rule)\ndel(.sievelog_bytes)\ndel(.sievelog_aggregate)\n"}
+		"source": ".zeroreads_archive = del(.zeroreads_rule)\ndel(.zeroreads_bytes)\ndel(.zeroreads_aggregate)\n"}
 	for _, id := range t.ArchiveSinks {
 		sink, ok := sinks[id].(map[string]any)
 		if !ok {
@@ -331,10 +331,10 @@ func (t VectorTarget) addArchive(transforms, sinks map[string]any, archive []str
 func (t VectorTarget) addDedupe(transforms map[string]any, dedupe []string, input any) []any {
 	var conds []string
 	for _, id := range dedupe {
-		conds = append(conds, ".sievelog_rule == "+vrlString(id))
+		conds = append(conds, ".zeroreads_rule == "+vrlString(id))
 	}
 	transforms[vRoute] = map[string]any{"type": "route", "inputs": []any{input}, "route": map[string]any{"dedupe": strings.Join(conds, " || ")}}
-	groupBy := []any{"sievelog_rule", strings.TrimPrefix(t.ScopePath, ".")}
+	groupBy := []any{"zeroreads_rule", strings.TrimPrefix(t.ScopePath, ".")}
 	for _, g := range t.GroupBy {
 		groupBy = append(groupBy, g)
 	}
@@ -343,7 +343,7 @@ func (t VectorTarget) addDedupe(transforms map[string]any, dedupe []string, inpu
 		expireMS = 10000
 	}
 	transforms[vReduce] = map[string]any{"type": "reduce", "inputs": []any{vRoute + ".dedupe"}, "group_by": groupBy,
-		"expire_after_ms": expireMS, "merge_strategies": map[string]any{"sievelog_count": "sum"}}
+		"expire_after_ms": expireMS, "merge_strategies": map[string]any{"zeroreads_count": "sum"}}
 	return []any{vRoute + "._unmatched", vReduce}
 }
 

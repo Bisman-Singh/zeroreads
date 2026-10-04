@@ -3,7 +3,7 @@
 # names the e2e cluster's kubeconfig and context explicitly, like run.sh.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-K="kubectl --kubeconfig ${ROOT}/.e2e/kubeconfig --context kind-sievelog"
+K="kubectl --kubeconfig ${ROOT}/.e2e/kubeconfig --context kind-zeroreads"
 echo "== machine"
 nproc 2>/dev/null || sysctl -n hw.ncpu
 free -m 2>/dev/null || vm_stat

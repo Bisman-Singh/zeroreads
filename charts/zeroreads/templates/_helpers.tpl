@@ -1,4 +1,4 @@
-{{- define "sievelog.fullname" -}}
+{{- define "zeroreads.fullname" -}}
 {{- if contains .Chart.Name .Release.Name -}}
 {{- .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
@@ -6,7 +6,7 @@
 {{- end -}}
 {{- end -}}
 
-{{- define "sievelog.labels" -}}
+{{- define "zeroreads.labels" -}}
 app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
@@ -14,9 +14,9 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
 {{- end -}}
 
-{{- define "sievelog.serviceAccountName" -}}
+{{- define "zeroreads.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
-{{- default (include "sievelog.fullname" .) .Values.serviceAccount.name -}}
+{{- default (include "zeroreads.fullname" .) .Values.serviceAccount.name -}}
 {{- else -}}
 {{- default "default" .Values.serviceAccount.name -}}
 {{- end -}}

@@ -1,14 +1,14 @@
 version: 2
-project_name: sievelog
+project_name: zeroreads
 
 before:
   hooks:
     - go mod verify
 
 builds:
-  - id: sievelog
-    main: ./cmd/sievelog
-    binary: sievelog
+  - id: zeroreads
+    main: ./cmd/zeroreads
+    binary: zeroreads
     env: [CGO_ENABLED=0]
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
@@ -49,14 +49,14 @@ signs:
 # The image the Helm chart and the GitHub Action run, at the release version.
 dockers_v2:
   - id: image
-    ids: [sievelog]
-    images: [ghcr.io/bisman-singh/sievelog]
+    ids: [zeroreads]
+    images: [ghcr.io/bisman-singh/zeroreads]
     tags: ["{{ .Version }}", "v{{ .Major }}"]
     dockerfile: Dockerfile.release
     platforms: [linux/amd64, linux/arm64]
     extra_files: [LICENSE, NOTICE, THIRD_PARTY_LICENSES]
     labels:
-      org.opencontainers.image.source: https://github.com/Bisman-Singh/sievelog
+      org.opencontainers.image.source: https://github.com/Bisman-Singh/zeroreads
       org.opencontainers.image.version: "{{ .Version }}"
       org.opencontainers.image.licenses: Apache-2.0
 
@@ -73,5 +73,5 @@ changelog:
 release:
   github:
     owner: Bisman-Singh
-    name: sievelog
+    name: zeroreads
   draft: true

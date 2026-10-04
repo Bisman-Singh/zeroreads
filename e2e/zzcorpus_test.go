@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Bisman-Singh/sievelog/internal/logql"
-	"github.com/Bisman-Singh/sievelog/internal/source/grafana"
-	"github.com/Bisman-Singh/sievelog/internal/usage"
+	"github.com/Bisman-Singh/zeroreads/internal/logql"
+	"github.com/Bisman-Singh/zeroreads/internal/source/grafana"
+	"github.com/Bisman-Singh/zeroreads/internal/usage"
 )
 
 // corpusLokiTag is the Loki release whose mixin dashboards are measured: the tested Loki version.
@@ -29,7 +29,7 @@ type corpusDashboard struct {
 	Model             []byte
 }
 
-// TestCorpusCoverage measures how much of the public Loki dashboard corpus sievelog decides
+// TestCorpusCoverage measures how much of the public Loki dashboard corpus zeroreads decides
 // exactly: every dashboard in the public Grafana dashboard directory that uses Loki, and the Loki
 // mixin's dashboards at the tested Loki version. They are downloaded at run time into the e2e work
 // directory, never into the repository (their licences are their authors'), imported into a
@@ -214,7 +214,7 @@ func corpusGet(t *testing.T, url string) []byte {
 	for attempt := 0; attempt < 4; attempt++ {
 		time.Sleep(time.Duration(attempt*attempt) * time.Second)
 		req, _ := http.NewRequest("GET", url, nil)
-		req.Header.Set("User-Agent", "sievelog-e2e-corpus")
+		req.Header.Set("User-Agent", "zeroreads-e2e-corpus")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			last = err
@@ -300,7 +300,7 @@ func mixinDashboards(t *testing.T, work string) []corpusDashboard {
 // deletes it when the test ends so no other test reads the corpus.
 func corpusOrg(t *testing.T, base string) int64 {
 	t.Helper()
-	s, b := grafanaCall(t, base, "POST", "/api/orgs", 0, map[string]any{"name": fmt.Sprintf("sievelog-corpus-%d", time.Now().Unix())})
+	s, b := grafanaCall(t, base, "POST", "/api/orgs", 0, map[string]any{"name": fmt.Sprintf("zeroreads-corpus-%d", time.Now().Unix())})
 	must(t, s, b, http.StatusOK)
 	var created struct {
 		OrgID int64 `json:"orgId"`
@@ -308,7 +308,7 @@ func corpusOrg(t *testing.T, base string) int64 {
 	json.Unmarshal(b, &created)
 	t.Cleanup(func() { dropOrg(t, base, created.OrgID) })
 	for _, ds := range []map[string]any{
-		{"name": "corpus-loki", "uid": "corpus-loki", "type": "loki", "access": "proxy", "url": "http://loki.sievelog-system.svc:3100", "isDefault": true},
+		{"name": "corpus-loki", "uid": "corpus-loki", "type": "loki", "access": "proxy", "url": "http://loki.zeroreads-system.svc:3100", "isDefault": true},
 		{"name": "corpus-prom", "uid": "corpus-prom", "type": "prometheus", "access": "proxy", "url": "http://localhost:9"},
 	} {
 		s, b := grafanaCall(t, base, "POST", "/api/datasources", created.OrgID, ds)

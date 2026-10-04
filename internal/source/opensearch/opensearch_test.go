@@ -128,7 +128,7 @@ func TestReadAudit(t *testing.T) {
 		{"audit_request_layer": "REST", "audit_category": "AUTHENTICATED", "audit_rest_request_method": "POST", "audit_rest_request_path": "/%3Clogs-%7Bnow%2Fd%7D%3E/_search"},
 		{"audit_request_layer": "REST", "audit_category": "MISSING_PRIVILEGES", "audit_rest_request_method": "POST", "audit_rest_request_path": "/logs-*/_search"},
 		{"audit_request_layer": "REST", "audit_category": "AUTHENTICATED", "audit_rest_request_method": "POST", "audit_rest_request_path": "/logs-*/_search",
-			"audit_rest_request_headers": map[string]any{"x-sievelog": []string{"1"}}},
+			"audit_rest_request_headers": map[string]any{"x-zeroreads": []string{"1"}}},
 		{"audit_request_layer": "REST", "audit_category": "AUTHENTICATED", "audit_rest_request_method": "POST", "audit_rest_request_path": "/" + probePrefix + "ab/_search"},
 		{"audit_request_layer": "REST", "audit_category": "AUTHENTICATED", "audit_rest_request_method": "POST", "audit_rest_request_path": "/_bulk"},
 		{"audit_request_layer": "REST", "audit_category": "AUTHENTICATED", "audit_rest_request_method": "POST", "audit_rest_request_path": "/logs-*/_search",

@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Bisman-Singh/sievelog/internal/automaton"
+	"github.com/Bisman-Singh/zeroreads/internal/automaton"
 )
 
 // FluentBitConfig is a merged Fluent Bit YAML configuration.

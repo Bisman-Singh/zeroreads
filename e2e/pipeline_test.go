@@ -18,8 +18,8 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 
-	"github.com/Bisman-Singh/sievelog/internal/gen"
-	"github.com/Bisman-Singh/sievelog/internal/templating"
+	"github.com/Bisman-Singh/zeroreads/internal/gen"
+	"github.com/Bisman-Singh/zeroreads/internal/templating"
 )
 
 // observed is one record as the pipeline exported it.
@@ -27,7 +27,7 @@ type observed struct {
 	service  string
 	body     string // raw string body, or canonical JSON for map bodies
 	template string
-	bytes    int64 // sievelog.body_bytes captured before JSON parsing
+	bytes    int64 // zeroreads.body_bytes captured before JSON parsing
 }
 
 type key struct{ service, template string }
@@ -79,7 +79,7 @@ func readLogs(t *testing.T, path string) []observed {
 					if v, ok := lr.Attributes().Get("log.record.template"); ok {
 						o.template = v.Str()
 					}
-					if v, ok := lr.Attributes().Get("sievelog.body_bytes"); ok {
+					if v, ok := lr.Attributes().Get("zeroreads.body_bytes"); ok {
 						o.bytes = v.Int()
 					}
 					if lr.Body().Type() == pcommon.ValueTypeMap {
@@ -301,9 +301,9 @@ func checkSums(recs []gen.Record, obs []observed, sums map[string]map[key]float6
 		}
 	}
 	for name, want := range map[string]map[key]float64{
-		"sievelog.template.records":         wantRecords,
-		"sievelog.template.bytes":           wantBytes,
-		"sievelog.template.len_after_parse": wantLen,
+		"zeroreads.template.records":         wantRecords,
+		"zeroreads.template.bytes":           wantBytes,
+		"zeroreads.template.len_after_parse": wantLen,
 	} {
 		got := sums[name]
 		if len(got) != len(want) {
@@ -355,8 +355,8 @@ func TestPipelineMatchesGroundTruthAndOffline(t *testing.T) {
 		if err := checkSums(recs, obs, sums); err != nil {
 			t.Fatal(err)
 		}
-		for k := range sums["sievelog.template.bytes"] {
-			sums["sievelog.template.bytes"][k]++
+		for k := range sums["zeroreads.template.bytes"] {
+			sums["zeroreads.template.bytes"][k]++
 			break
 		}
 		if checkSums(recs, obs, sums) == nil {
@@ -364,5 +364,5 @@ func TestPipelineMatchesGroundTruthAndOffline(t *testing.T) {
 		}
 	})
 
-	t.Logf("records=%d templates=%d", len(obs), len(sums["sievelog.template.records"]))
+	t.Logf("records=%d templates=%d", len(obs), len(sums["zeroreads.template.records"]))
 }

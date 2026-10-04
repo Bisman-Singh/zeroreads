@@ -1,0 +1,6 @@
+zeroreads re-checks the enforced rules on schedule {{ .Values.schedule | quote }}.
+
+A failed Job means an enforced rule is no longer safe. Its logs list every reason and print the rules
+that remain safe as JSON: emit and deploy those to revert. Run it now with:
+
+  kubectl create job --from=cronjob/{{ include "zeroreads.fullname" . }}-verify {{ include "zeroreads.fullname" . }}-verify-now -n {{ .Release.Namespace }}
