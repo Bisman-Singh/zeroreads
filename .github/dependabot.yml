@@ -3,9 +3,15 @@ updates:
   - package-ecosystem: gomod
     directory: /
     schedule: {interval: weekly}
+    commit-message: {prefix: deps}
+    groups:
+      opentelemetry-collector: # its modules are released together and must move together
+        patterns: ["go.opentelemetry.io/collector*", "github.com/open-telemetry/opentelemetry-collector-contrib/*"]
   - package-ecosystem: github-actions
     directories: ["/", "/.github/actions/release-tools"]
     schedule: {interval: weekly}
+    commit-message: {prefix: deps}
   - package-ecosystem: docker
     directory: /
     schedule: {interval: weekly}
+    commit-message: {prefix: deps}
