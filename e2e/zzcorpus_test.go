@@ -72,13 +72,28 @@ func TestCorpusCoverage(t *testing.T) {
 	}
 	t.Logf("corpus: %d dashboards downloaded, %d imported; the Grafana reader returned %d Loki queries from them in %s, %d distinct per dashboard",
 		len(dashboards), imported, read, time.Since(start).Round(time.Millisecond), len(queries))
-	if len(queries) < 100 {
-		for _, g := range res.Gaps {
-			if g.Org == org {
-				t.Logf("gap %s: %s", g.Origin, g.Reason)
-			}
+	// Any gap in the corpus org other than other users' query history means some dashboard was not read,
+	// and the measure would count fewer queries than the corpus holds.
+	incomplete := 0
+	for _, g := range res.Gaps {
+		if g.Org == org && g.Origin != "queryhistory" {
+			t.Logf("gap %s: %s", g.Origin, g.Reason)
+			incomplete++
 		}
-		t.Fatalf("only %d queries (orgs read %v): the corpus or the reader is broken", len(queries), res.Orgs)
+	}
+	if incomplete > 0 || len(queries) < 100 {
+		t.Fatalf("%d gaps and %d queries (orgs read %v): the corpus was not read whole", incomplete, len(queries), res.Orgs)
+	}
+	// Every distinct query read, so two runs can be compared dashboard by dashboard.
+	var read2 []string
+	for _, q := range queries {
+		dashboard, _, _ := strings.Cut(q.Origin, "/")
+		read2 = append(read2, dashboard+"\t"+q.Expr)
+	}
+	sort.Strings(read2)
+	qb, _ := json.MarshalIndent(read2, "", "  ")
+	if err := os.WriteFile(filepath.Join(env(t, "E2E_WORK"), "corpus-queries.json"), qb, 0o644); err != nil {
+		t.Fatal(err)
 	}
 	cov := classifyCorpus(queries)
 	t.Logf("corpus: %s", cov)
