@@ -23,30 +23,30 @@ for each rule, and writes the pipeline configuration that removes, shrinks or ar
 Every number below comes from the test suites, run against the real engines listed under [Supported
 versions](#supported-versions).
 
-- **"Nobody reads this" was never wrong.** 9,570 such answers were checked against what Loki
+- **"Nobody reads this" was never wrong.** 9,114 such answers were checked against what Loki
   actually returned, over three generated query sets (random, fuzzed from real rules, and
   adversarial members of hard patterns): none was wrong. On those query distributions that bounds
   the error rate below 0.03% at 95% confidence (3/n). 144 OpenSearch answers were each confirmed by
   OpenSearch itself; with that few, the bound is only 2.1%.
 - **Over-blocking, the other side, is measured too.** Of the "reads" answers on the same query sets,
-  42% were exact, and every exact one was confirmed (492 of 492: the line shown was stored in Loki
+  38% were exact, and every exact one was confirmed (388 of 388: the line shown was stored in Loki
   and the query returned it). The rest were assumed readers, which can block a rule that is in fact
   safe; the report names each assumption, so an install can see its own.
-- **Real dashboards.** 357 public Loki dashboards (the Grafana dashboard directory and the Loki
-  mixin, downloaded at test time), 2,363 Loki queries: 88.2% parse, and every one that does not is
-  rejected by Loki 3.7.8 as well; the line filters of 41% are modelled exactly; with the scope label
-  set to the label each query selects by, 31% are exact end to end. 53% pick their streams with
+- **Real dashboards.** 358 public Loki dashboards (the Grafana dashboard directory and the Loki
+  mixin, downloaded at test time), 2,365 Loki queries: 90.3% parse, and every one that does not is
+  rejected by Loki 3.7.8 as well; the line filters of 40% are modelled exactly; with the scope label
+  set to the label each query selects by, 30% are exact end to end. 52% pick their streams with
   template variables, which count as reading every service they could name.
 - **A realistic app.** The OpenTelemetry demo (13 services, its own load generator) on a local kind
   cluster, logging through its own Collector into Loki, with a small set of dashboards, one alert
-  and a few ad-hoc queries written for it: 17 of 29 rules acted. In a 10-minute shadow window their
-  lines were 24.0% of the stored lines (17.2% of the bytes), and the Collector's own measurement
-  counted 834 of them where Loki stored 832 (the windows' edges differ by seconds); while enforcing,
-  none of them was stored (reconcile: 17 ok), and verify passed. No production cluster has been
+  and a few ad-hoc queries written for it: 29 of 46 rules acted. In a 15-minute shadow window their
+  lines were 42.7% of the stored lines (23.8% of the bytes), and the Collector's own measurement
+  counted 2,328 lines where Loki stored 2,322 (the windows' edges differ by seconds); while enforcing,
+  none of them was stored (reconcile: 29 ok), and verify passed. No production cluster has been
   measured yet.
-- **Scale.** 999,999 log lines and 300,000 query executions analysed in 1m42s at 59 MB peak; a
-  Grafana with 5,000 dashboards (20,008 queries) in 1m55s at 331 MB; 1,000,000 OpenSearch audit
-  entries read in 44s.
+- **Scale.** 999,999 log lines and 300,000 query executions analysed in 2m27s at 70 MB peak; a
+  Grafana with 5,000 dashboards (20,008 queries) in 2m54s at 382 MB; 1,000,000 OpenSearch audit
+  entries read in 2m4s.
 - **Removal is exact.** Each runtime's output, shadow and enforce, archive included, was compared
   record by record with the prediction on the real Collector, Vector and Fluent Bit.
 
