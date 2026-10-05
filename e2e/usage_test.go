@@ -35,11 +35,8 @@ func corpusRules(t *testing.T, recs []gen.Record) []usage.Rule {
 		isJSON[s.Name] = s.JSON
 	}
 	texts := map[string][]string{}
-	idx := map[string]int{}
-	for _, r := range recs {
-		tpl := offline[r.Service][idx[r.Service]]
-		idx[r.Service]++
-		k := r.Service + "|" + tpl
+	for i, r := range recs {
+		k := r.Service + "|" + offline[i]
 		texts[k] = append(texts[k], r.Message)
 	}
 	var keys []string

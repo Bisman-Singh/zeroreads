@@ -177,44 +177,57 @@ func expectedBody(r gen.Record, isJSON bool) string {
 	return canonicalJSON(m)
 }
 
-// checkDelivery verifies the pipeline exported exactly the generated lines, per service, in
-// order, with the bytes of each original line.
-func checkDelivery(recs []gen.Record, obs []observed) error {
+// pairRecords gives every exported record the generated record it came from, matched by content
+// within its service: the file receiver can hand lines on out of order, which no total depends on.
+// Identical lines pair in the order they occur. A record exported that was never generated, or
+// generated and never exported, is an error.
+func pairRecords(recs []gen.Record, obs []observed) ([]gen.Record, error) {
 	isJSON := map[string]bool{}
 	for _, s := range gen.Corpus() {
 		isJSON[s.Name] = s.JSON
 	}
-	want := map[string][]gen.Record{}
+	type line struct{ service, body string }
+	pending := map[line][]gen.Record{}
 	for _, r := range recs {
-		want[r.Service] = append(want[r.Service], r)
+		k := line{r.Service, expectedBody(r, isJSON[r.Service])}
+		pending[k] = append(pending[k], r)
 	}
-	got := map[string][]observed{}
-	for _, o := range obs {
-		got[o.service] = append(got[o.service], o)
-	}
-	if len(got) != len(want) {
-		return fmt.Errorf("services: got %d, want %d", len(got), len(want))
-	}
-	for svc, w := range want {
-		g := got[svc]
-		if len(g) != len(w) {
-			return fmt.Errorf("%s: got %d records, want %d", svc, len(g), len(w))
+	paired := make([]gen.Record, len(obs))
+	for i, o := range obs {
+		k := line{o.service, o.body}
+		if len(pending[k]) == 0 {
+			return nil, fmt.Errorf("%s: exported %q, which was not generated, or not that often", o.service, o.body)
 		}
-		for i := range w {
-			if eb := expectedBody(w[i], isJSON[svc]); g[i].body != eb {
-				return fmt.Errorf("%s[%d]: body %q, want %q", svc, i, g[i].body, eb)
-			}
-			if g[i].bytes != int64(len(w[i].Line)) {
-				return fmt.Errorf("%s[%d]: bytes %d, want %d", svc, i, g[i].bytes, len(w[i].Line))
-			}
+		paired[i] = pending[k][0]
+		pending[k] = pending[k][1:]
+	}
+	for k, left := range pending {
+		if len(left) > 0 {
+			return nil, fmt.Errorf("%s: %d generated records were not exported, such as %q", k.service, len(left), k.body)
+		}
+	}
+	return paired, nil
+}
+
+// checkDelivery verifies the pipeline exported exactly the generated lines, each once, with the
+// bytes of each original line.
+func checkDelivery(recs []gen.Record, obs []observed) error {
+	paired, err := pairRecords(recs, obs)
+	if err != nil {
+		return err
+	}
+	for i, o := range obs {
+		if o.bytes != int64(len(paired[i].Line)) {
+			return fmt.Errorf("%s: %q exported with bytes %d, want %d", o.service, o.body, o.bytes, len(paired[i].Line))
 		}
 	}
 	return nil
 }
 
 // offlineTemplates runs the embedded engine with the pipeline's configuration over the same
-// records and returns the template per record, keyed by service and position.
-func offlineTemplates(t *testing.T, recs []gen.Record) map[string][]string {
+// records, in the order the pipeline exported them since templates depend on order, and returns
+// the template of each.
+func offlineTemplates(t *testing.T, recs []gen.Record) []string {
 	t.Helper()
 	ctx := context.Background()
 	cfg := templating.DefaultConfig()
@@ -246,28 +259,20 @@ func offlineTemplates(t *testing.T, recs []gen.Record) map[string][]string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := map[string][]string{}
-	for i, r := range recs {
-		out[r.Service] = append(out[r.Service], tmpl[i])
-	}
-	return out
+	return tmpl
 }
 
 // checkTemplatesEqual verifies every pipeline record carries exactly the offline template.
-func checkTemplatesEqual(offline map[string][]string, obs []observed) error {
-	idx := map[string]int{}
-	for _, o := range obs {
-		i := idx[o.service]
-		idx[o.service]++
-		want := offline[o.service]
-		if i >= len(want) {
-			return fmt.Errorf("%s: more pipeline records than offline", o.service)
-		}
+func checkTemplatesEqual(offline []string, obs []observed) error {
+	if len(offline) != len(obs) {
+		return fmt.Errorf("%d pipeline records, %d offline", len(obs), len(offline))
+	}
+	for i, o := range obs {
 		if o.template == "" {
 			return fmt.Errorf("%s[%d]: no template in pipeline", o.service, i)
 		}
-		if o.template != want[i] {
-			return fmt.Errorf("%s[%d]: pipeline %q, offline %q", o.service, i, o.template, want[i])
+		if o.template != offline[i] {
+			return fmt.Errorf("%s[%d]: pipeline %q, offline %q", o.service, i, o.template, offline[i])
 		}
 	}
 	return nil
@@ -275,7 +280,7 @@ func checkTemplatesEqual(offline map[string][]string, obs []observed) error {
 
 // checkSums verifies the per-template metric totals equal the ground truth grouped by the
 // template each record received.
-func checkSums(recs []gen.Record, obs []observed, sums map[string]map[key]float64) error {
+func checkSums(paired []gen.Record, obs []observed, sums map[string]map[key]float64) error {
 	wantRecords := map[key]float64{}
 	wantBytes := map[key]float64{}
 	wantLen := map[key]float64{}
@@ -283,14 +288,8 @@ func checkSums(recs []gen.Record, obs []observed, sums map[string]map[key]float6
 	for _, s := range gen.Corpus() {
 		isJSON[s.Name] = s.JSON
 	}
-	byService := map[string][]gen.Record{}
-	for _, r := range recs {
-		byService[r.Service] = append(byService[r.Service], r)
-	}
-	idx := map[string]int{}
-	for _, o := range obs {
-		r := byService[o.service][idx[o.service]]
-		idx[o.service]++
+	for i, o := range obs {
+		r := paired[i]
 		k := key{o.service, o.template}
 		wantRecords[k]++
 		wantBytes[k] += float64(len(r.Line))
@@ -323,7 +322,7 @@ func TestPipelineMatchesGroundTruthAndOffline(t *testing.T) {
 	recs, _ := groundTruth(t)
 	obs := readLogs(t, filepath.Join(dir, "logs.json"))
 	sums := readSums(t, filepath.Join(dir, "metrics.json"))
-	offline := offlineTemplates(t, recs)
+	paired, pairErr := pairRecords(recs, obs)
 
 	t.Run("delivery is exact", func(t *testing.T) {
 		if err := checkDelivery(recs, obs); err != nil {
@@ -338,9 +337,18 @@ func TestPipelineMatchesGroundTruthAndOffline(t *testing.T) {
 		if checkDelivery(recs, bad) == nil {
 			t.Fatal("negative: a wrong byte count was not detected")
 		}
+		swapped := append([]observed(nil), obs...)
+		swapped[1], swapped[len(swapped)-1] = swapped[len(swapped)-1], swapped[1]
+		if err := checkDelivery(recs, swapped); err != nil {
+			t.Fatalf("lines handed on out of order are still each delivered once: %v", err)
+		}
 	})
 
 	t.Run("pipeline templates equal offline templates", func(t *testing.T) {
+		if pairErr != nil {
+			t.Fatal(pairErr)
+		}
+		offline := offlineTemplates(t, paired)
 		if err := checkTemplatesEqual(offline, obs); err != nil {
 			t.Fatal(err)
 		}
@@ -352,14 +360,17 @@ func TestPipelineMatchesGroundTruthAndOffline(t *testing.T) {
 	})
 
 	t.Run("per-template sums equal ground truth", func(t *testing.T) {
-		if err := checkSums(recs, obs, sums); err != nil {
+		if pairErr != nil {
+			t.Fatal(pairErr)
+		}
+		if err := checkSums(paired, obs, sums); err != nil {
 			t.Fatal(err)
 		}
 		for k := range sums["zeroreads.template.bytes"] {
 			sums["zeroreads.template.bytes"][k]++
 			break
 		}
-		if checkSums(recs, obs, sums) == nil {
+		if checkSums(paired, obs, sums) == nil {
 			t.Fatal("negative: a wrong byte sum was not detected")
 		}
 	})
