@@ -41,6 +41,11 @@ echo "${CHART_SHA256}  ${CHART}" | sha256 -c - >/dev/null
 
 restore() {
   local rc=$?
+  if [ "${rc}" = 0 ] && [ "${DEMO_KEEP:-${DEMO_REUSE:-0}}" != "1" ]; then
+    # the readers' org goes with the demo, while the forward to Grafana is still open
+    python3 "${ROOT}/e2e/demo/readers.py" http://localhost:13000 http://localhost:13100 "${GRAFANA_PASSWORD}" remove ||
+      log "could not empty the readers' Grafana org"
+  fi
   stop_forwards
   if [ "${rc}" != 0 ]; then
     log "failed (exit ${rc}): the demo stays installed to look at; DEMO_REUSE=1 runs again on it"

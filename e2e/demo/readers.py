@@ -3,6 +3,7 @@ dashboard panels and one alert rule written for the app, and a few ad-hoc querie
 (they land in its query log). None is chosen by looking at the logs first.
 
 Usage: readers.py GRAFANA_URL LOKI_URL PASSWORD  -> prints an org-scoped service account token.
+       readers.py GRAFANA_URL LOKI_URL PASSWORD remove  -> empties the readers' org and deletes it.
 """
 import base64
 import json
@@ -100,5 +101,27 @@ def folder_exists(org):
         return False
 
 
+def remove():
+    """Empties the readers' organisation and deletes it, or renames it when Grafana refuses, so evidence in
+    later runs is not read through its datasource."""
+    try:
+        org = call("GET", "/api/orgs/name/" + urllib.parse.quote(ORG_NAME))["id"]
+    except urllib.error.HTTPError:
+        return
+    for path in ("/api/v1/provisioning/alert-rules/checkout-failures", "/api/dashboards/uid/shop-logs",
+                 "/api/folders/shop-alerts", "/api/datasources/uid/demo-loki"):
+        try:
+            call("DELETE", path, org=org)
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+    for sa in call("GET", "/api/serviceaccounts/search?perpage=100", org=org).get("serviceAccounts", []):
+        call("DELETE", "/api/serviceaccounts/%d" % sa["id"], org=org)
+    try:
+        call("DELETE", "/api/orgs/%d" % org)
+    except urllib.error.HTTPError:
+        call("PUT", "/api/orgs/%d" % org, {"name": "zeroreads-emptied-%d" % org})
+
+
 if __name__ == "__main__":
-    main()
+    remove() if sys.argv[4:] == ["remove"] else main()

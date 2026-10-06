@@ -14,7 +14,7 @@ K="kubectl --kubeconfig .e2e/kubeconfig --context kind-zeroreads"
 source "${ROOT}/e2e/lib.sh"
 forward zeroreads-system loki 13100:3100
 forward zeroreads-system grafana 13000:3000
-trap 'stop_forwards; curl -s -X DELETE "http://admin:e2e-only-password@localhost:13000/api/dashboards/uid/act-cache" >/dev/null || true' EXIT
+trap 'curl -s -X DELETE "http://admin:e2e-only-password@localhost:13000/api/dashboards/uid/act-cache" >/dev/null || true; stop_forwards' EXIT # delete through the forward before closing it
 sleep 3
 # The action runs the released image. This checkout is built under a local name instead, and act runs a
 # copy of the action that names it, so the release tag on this machine always means the released image.
