@@ -26,7 +26,7 @@ versions](#supported-versions).
 - **"Nobody reads this" was never wrong.** 9,114 such answers were checked against what Loki
   actually returned, over three generated query sets (random, fuzzed from real rules, and
   adversarial members of hard patterns): none was wrong. On those query distributions that bounds
-  the error rate below 0.03% at 95% confidence (3/n). 144 OpenSearch answers were each confirmed by
+  the error rate under 0.033% at 95% confidence (3/n). 144 OpenSearch answers were each confirmed by
   OpenSearch itself; with that few, the bound is only 2.1%.
 - **Over-blocking, the other side, is measured too.** Of the "reads" answers on the same query sets,
   38% were exact, and every exact one was confirmed (388 of 388: the line shown was stored in Loki
@@ -37,13 +37,14 @@ versions](#supported-versions).
   rejected by Loki 3.7.8 as well; the line filters of 40% are modelled exactly; with the scope label
   set to the label each query selects by, 30% are exact end to end. 52% pick their streams with
   template variables, which count as reading every service they could name.
-- **A realistic app.** The OpenTelemetry demo (13 services, its own load generator) on a local kind
-  cluster, logging through its own Collector into Loki, with a small set of dashboards, one alert
-  and a few ad-hoc queries written for it: 29 of 46 rules acted. In a 15-minute shadow window their
-  lines were 42.7% of the stored lines (23.8% of the bytes), and the Collector's own measurement
-  counted 2,328 lines where Loki stored 2,322 (the windows' edges differ by seconds); while enforcing,
-  none of them was stored (reconcile: 29 ok), and verify passed. No production cluster has been
-  measured yet.
+- **A realistic app.** The OpenTelemetry demo and its load generator on a local kind cluster, logging
+  through its own Collector into Loki (12 of its services and the Collector sent logs), with one
+  dashboard, one alert and three ad-hoc queries written for it: 29 of 46 rules acted. In a 15-minute
+  shadow window their lines were 42.7% of the stored lines (23.8% of the bytes), and the Collector's
+  own measurement counted 2,328 lines where Loki stored 2,322 (the windows' edges differ by seconds);
+  while enforcing, none of them was stored (reconcile: 29 ok), and verify passed. The full report from
+  that run is in [docs/demo-report.md](docs/demo-report.md). No production cluster has been measured
+  yet.
 - **Scale.** 999,999 log lines and 300,000 query executions analysed in 2m27s at 70 MB peak; a
   Grafana with 5,000 dashboards (20,008 queries) in 2m54s at 382 MB; 1,000,000 OpenSearch audit
   entries read in 2m4s.
