@@ -118,7 +118,7 @@ proven.
 
 | Component | Version |
 |---|---|
-| Go (build) | 1.27.1 |
+| Go (build) | 1.27.2 |
 | Loki | 3.7.8 |
 | Grafana | 13.2.2 |
 | OpenTelemetry Collector contrib | 0.161.0 |
