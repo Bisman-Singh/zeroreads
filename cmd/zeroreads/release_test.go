@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"regexp"
+	"runtime/debug"
 	"testing"
 )
 
@@ -20,6 +21,33 @@ func TestActionAndChartShareTheReleasedVersion(t *testing.T) {
 	c := regexp.MustCompile(`appVersion: "?([^"\s]+)"?`).FindSubmatch(chart)
 	if a == nil || c == nil || string(a[1]) != string(c[1]) {
 		t.Fatalf("action image %q, chart appVersion %q", a, c)
+	}
+}
+
+// A binary from `go install ...@vX` names its release from the module version Go recorded, and a build
+// in a git checkout the pseudo-version Go records for it; a release build's own version always wins,
+// and without a recorded version it stays "dev".
+func TestReleaseVersion(t *testing.T) {
+	for _, c := range []struct {
+		set, module string
+		ok          bool
+		want        string
+	}{
+		{"0.1.1", "v9.9.9", true, "0.1.1"},
+		{"dev", "v0.1.1", true, "0.1.1"},
+		{"dev", "v0.1.2-0.20261019120000-abcdef123456", true, "0.1.2-0.20261019120000-abcdef123456"},
+		{"dev", "v0.1.2-0.20261019120000-abcdef123456+dirty", true, "0.1.2-0.20261019120000-abcdef123456+dirty"},
+		{"dev", "(devel)", true, "dev"},
+		{"dev", "", true, "dev"},
+		{"dev", "", false, "dev"},
+	} {
+		var info *debug.BuildInfo
+		if c.ok {
+			info = &debug.BuildInfo{Main: debug.Module{Version: c.module}}
+		}
+		if got := releaseVersion(c.set, info, c.ok); got != c.want {
+			t.Errorf("releaseVersion(%q, module %q, ok %v) = %q, want %q", c.set, c.module, c.ok, got, c.want)
+		}
 	}
 }
 

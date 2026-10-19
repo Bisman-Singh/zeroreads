@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -47,7 +48,22 @@ func versionString() string {
 	if err != nil {
 		drain = "unknown"
 	}
-	return fmt.Sprintf("zeroreads %s (drain processor %s, %s)", version, drain, runtime.Version())
+	info, ok := debug.ReadBuildInfo()
+	return fmt.Sprintf("zeroreads %s (drain processor %s, %s)", releaseVersion(version, info, ok), drain, runtime.Version())
+}
+
+// releaseVersion is the version a binary reports. `go install ...@v0.1.1` does not set it, but Go
+// records the module version in the binary, and that names the release just as well. A build in a git
+// checkout records a pseudo-version with the commit, which a bug report needs too.
+func releaseVersion(set string, info *debug.BuildInfo, ok bool) string {
+	if set != "dev" || !ok {
+		return set
+	}
+	v := info.Main.Version
+	if v == "" || v == "(devel)" {
+		return set
+	}
+	return strings.TrimPrefix(v, "v")
 }
 
 func main() {
