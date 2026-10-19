@@ -10,5 +10,5 @@ inputs:
 runs:
   using: docker
   # The released image, not a build from source on every run. Kept equal to the chart's appVersion.
-  image: docker://ghcr.io/bisman-singh/zeroreads:0.1.0
+  image: docker://ghcr.io/bisman-singh/zeroreads:0.1.1
   args: ["verify", "-c", "${{ inputs.config }}", "-rules", "${{ inputs.rules }}"]

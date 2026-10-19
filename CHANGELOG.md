@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.1.1
+
+### Security
+
+- Built with Go 1.27.2 and golang.org/x/net 0.60.0, which fix nine published vulnerabilities that
+  govulncheck finds zeroreads's code reaching. Four are in the standard library's `crypto/tls`,
+  `net/http` and `net/textproto` (GO-2026-6605, GO-2026-6607, GO-2026-6608, GO-2026-6613), and five
+  are in the HTTP/2 code that the standard library and golang.org/x/net both carry (GO-2026-6603,
+  GO-2026-6610, GO-2026-6611, GO-2026-6612, GO-2026-6617). Upgrade from 0.1.0.
+
+### Fixed
+
+- `zeroreads version` names the release in a binary installed with `go install ...@v0.1.1`, and the
+  commit in one built from a git checkout; both printed `dev`.
+
+### Documentation
+
+- The README's error bound reads under 0.033%, since 3/9,114 is 0.0329%; it said below 0.03%.
+- The README describes the demo as it ran: one dashboard, one alert and three ad-hoc queries, with 12
+  of its services and its Collector sending logs. It said a small set of dashboards and 13 services.
+- The README answers the common questions: incidents, sampling and tiers, retention duties, JSON logs,
+  fixing logs at the source, billing, runtime cost and ad-hoc queries.
+- `docs/safety.md` says which queries a Grafana that is not configured hides: only stored ones that did
+  not run in the window, since any query that runs reaches Loki's query log.
+- The full report from the OpenTelemetry demo run is in `docs/demo-report.md`.
+
 ## 0.1.0
 
 The first release. Everything below is new.
