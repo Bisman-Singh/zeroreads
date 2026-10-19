@@ -123,8 +123,9 @@ under, and, given `-deployed`, when the deployed pipeline config is not exactly 
 ## Limits
 
 - **Evidence covers what is connected and what happened in the window.** A query run before the
-  window, from a Grafana that is not configured, or against a backend that is not analysed, is not
-  seen. Grafana only exposes the query history of the user the credentials belong to.
+  window or against a backend that is not analysed is not seen, and neither is a query stored in a
+  Grafana that is not configured unless it ran in the window. Grafana only exposes the query history
+  of the user the credentials belong to.
 - **A line nobody reads today may matter in a future incident.** Severity floors and the preference for
   aggregation over dropping reduce this. Nothing removes it.
 - **`verify` catches a new reader after the fact; it does not bring lines back.** If someone searches

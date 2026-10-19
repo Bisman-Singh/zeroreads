@@ -58,6 +58,47 @@ infrastructure, and shows its evidence for every decision.
 Start with [docs/quickstart.md](docs/quickstart.md): from nothing to a shadow-mode report, and what to
 do when every rule is blocked.
 
+## Common questions
+
+**A line nobody reads today may be needed in an incident.** True, and nothing removes that risk. It is
+why drop is off by default and the default actions are aggregate (a counter), dedupe (one line with a
+count) and sample (a share of the lines), why a runtime guard in the Collector, Vector and Fluent Bit
+keeps every record marked warning or worse, and why there is an archive action that moves lines to
+storage you choose and keeps every one. `verify` catches a new reader after the fact, but it does not
+bring removed lines back.
+
+**Why not sample everything, or move logs to a cheaper tier?** Sampling everything cuts the lines your
+alerts and dashboards read as much as the ones nobody reads, and a cheaper tier keeps paying to store
+lines nobody reads. zeroreads acts only on templates that no known query, alert or dashboard reads (the
+experimental rollup, off by default, is the one exception), and can sample those deterministically if
+you want some kept. They combine: tiers and retention for what is read, zeroreads for what is not.
+
+**Some logs must be kept by law or contract.** zeroreads does not know your obligations. Drop is off
+unless you add it to `policy.actions`, `policy.exempt` lists rule IDs or template patterns that never
+get an action, and the archive action keeps every line outside Loki.
+
+**What about JSON logs?** They rarely qualify. A line filter on a JSON line can match any field, so a
+query that selects a structured service counts as reading every line of it. Plain-text logs gain the
+most.
+
+**Why not fix the logging at the source?** Do that where you can. The report names the service, the
+template and its volume, which is the evidence a team needs to delete a log statement. Much of the
+volume comes from software you do not write: in the OpenTelemetry demo's 15-minute shadow window, 82%
+of the lines the acting rules would remove came from Kafka and the demo's own Collector.
+
+**Will it lower the bill?** Shadow mode measures, per rule, the lines and (where the runtime can count
+them) the bytes that enforcement would remove. Measured bytes are not billed bytes, so compare with your
+log service's own usage meters before and after enforcing.
+
+**What does applying the rules cost in the Collector, Vector or Fluent Bit?** Not measured yet. The
+scale numbers above are for the analysis, not for a runtime applying the rules.
+
+**How does it see ad-hoc queries?** Through Loki's query log, which records every query Loki runs,
+from Explore, dashboards or the API, once Loki is set to log all of them (see the quickstart). It does
+not see queries run before the evidence window or against a backend it does not read, nor queries
+stored in a Grafana it is not connected to unless they ran in the window.
+[docs/safety.md](docs/safety.md) lists every guarantee and limit.
+
 ## How it decides
 
 1. **Templates.** It samples your logs from Loki and groups them into templates with the Drain
