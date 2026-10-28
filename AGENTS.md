@@ -75,5 +75,5 @@ gitleaks git --config .gitleaks.toml --redact .   # v8.30.1, every commit, as CI
 - Never disable a check, a linter rule or a test to make a change pass; fix the cause, or document an
   exclusion with its reason in `.golangci.yml`.
 - Never release without the full e2e, the runtime suite and a goreleaser snapshot passing. The release
-  workflow refuses a tag whose commit is not on main or has no passing CI run; rehearse it first by
-  running it by hand, which builds everything and signs and publishes nothing.
+  workflow refuses a tag whose commit is not on main or has no passing CI run from a push to main;
+  rehearse it first by running it by hand, which builds everything and signs and publishes nothing.

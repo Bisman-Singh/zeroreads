@@ -23,8 +23,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          passed=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" --status success --json databaseId --jq length)
-          if [ "$passed" -lt 1 ]; then echo "no successful CI run for $GITHUB_SHA"; exit 1; fi
+          passed=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" --event push --branch main --status success --json databaseId --jq length)
+          if [ "$passed" -lt 1 ]; then echo "no successful CI run of a push to main for $GITHUB_SHA"; exit 1; fi
   release:
     needs: gate
     runs-on: ubuntu-24.04
