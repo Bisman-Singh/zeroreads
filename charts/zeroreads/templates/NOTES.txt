@@ -4,3 +4,8 @@ A failed Job means an enforced rule is no longer safe. Its logs list every reaso
 that remain safe as JSON: emit and deploy those to revert. Run it now with:
 
   kubectl create job --from=cronjob/{{ include "zeroreads.fullname" . }}-verify {{ include "zeroreads.fullname" . }}-verify-now -n {{ .Release.Namespace }}
+{{- if not .Values.image.digest }}
+
+The image is chosen by tag. Set image.digest to the digest a release published and signed, so the Job
+always runs exactly that image.
+{{- end }}
