@@ -7,7 +7,7 @@ From nothing to a shadow-mode report you can trust. Nothing here removes a singl
 Download a release binary, or run the image:
 
 ```sh
-docker run --rm -v "$PWD:/w" -w /w ghcr.io/bisman-singh/zeroreads:0.1.1 analyze -c zeroreads.yaml -o out/
+docker run --rm -v "$PWD:/w" -w /w ghcr.io/bisman-singh/zeroreads:0.1.2 analyze -c zeroreads.yaml -o out/
 ```
 
 Or build from source: `go build ./cmd/zeroreads` (Go 1.27.3).

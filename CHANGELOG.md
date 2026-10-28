@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.2
+
+### Security
+
+- Built with Go 1.27.3, which fixes a published vulnerability that govulncheck finds zeroreads's code
+  reaching: `crypto/x509` now rejects intermediate certificates known to be compromised
+  (GO-2026-6809). Upgrade from 0.1.1.
+- golang.org/x/net 0.62.0, with x/sys 0.49.0 and x/text 0.43.0, fixes two vulnerabilities in its
+  `html` package (GO-2026-6860, GO-2026-6866). zeroreads does not call that package, but the module
+  is in the binary, so scanners that read its module list reported them.
+- The image is built on distroless static-debian13. Its certificate bundle no longer trusts the
+  emSign ECC Root CA - G3 and Comodo AAA Certificate Services roots, which Debian removed after the
+  same eMudhra compromise, and its tzdata is current. The Debian 12 base still carried both roots.
+
+### Changed
+
+- The image runs as the numeric user 65532, so a pod that only sets `runAsNonRoot` can check it.
+- The Helm chart sets the group as well as the user, on the container as well as the pod, limits
+  `/tmp` to 256Mi with `tmpSizeLimit`, and suggests pinning `image.digest` when it is not set.
+- The release workflow accepts a tag only when `ci.yml` passed on a push of that commit to main; a
+  pull request run no longer counts.
+- CI checkouts no longer keep the GitHub token in the git config.
+- Dependabot waits seven days before proposing a new version. Security updates are not delayed.
+
 ## 0.1.1
 
 ### Security

@@ -221,7 +221,7 @@ Each release's checksums and image are signed keylessly by the release workflow 
 With cosign:
 
 ```sh
-V=0.1.1
+V=0.1.2
 ID=https://github.com/Bisman-Singh/zeroreads/.github/workflows/release.yml@refs/tags/v$V
 ISSUER=https://token.actions.githubusercontent.com
 cosign verify-blob --certificate checksums.txt.pem --signature checksums.txt.sig \
