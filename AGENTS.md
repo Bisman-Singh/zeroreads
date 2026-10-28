@@ -10,7 +10,7 @@ a wrong "unread" removes logs someone needs.
 
 ## Stack
 
-- Go 1.27.2 (the exact version in `go.mod`), module `github.com/Bisman-Singh/zeroreads`.
+- Go 1.27.3 (the exact version in `go.mod`), module `github.com/Bisman-Singh/zeroreads`.
 - Evidence: Loki 3.7.8 (query log, ruler), Grafana 13.2.2, OpenSearch and Dashboards 3.8.0 (beta).
 - Enforcement: OpenTelemetry Collector contrib 0.161.0, Vector 0.58.0, Fluent Bit 5.1.2, policy-go 1.12.1.
 - Tests: unit tests, differential tests against the real runtimes in docker, and end-to-end tests on a

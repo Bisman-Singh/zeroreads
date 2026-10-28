@@ -10,7 +10,7 @@ Download a release binary, or run the image:
 docker run --rm -v "$PWD:/w" -w /w ghcr.io/bisman-singh/zeroreads:0.1.1 analyze -c zeroreads.yaml -o out/
 ```
 
-Or build from source: `go build ./cmd/zeroreads` (Go 1.27.2).
+Or build from source: `go build ./cmd/zeroreads` (Go 1.27.3).
 
 ## 2. Let Loki record what is read
 

@@ -2,7 +2,7 @@ zeroreads includes the Go standard library and runtime, and the modules below. E
 with its version, followed by its licence and notice files as published.
 
 ================================================================================
-Go 1.27.2: LICENSE
+Go 1.27.3: LICENSE
 ================================================================================
 
 Copyright 2009 The Go Authors.
@@ -7983,7 +7983,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ================================================================================
-golang.org/x/net v0.60.0: LICENSE
+golang.org/x/net v0.62.0: LICENSE
 ================================================================================
 
 Copyright 2009 The Go Authors.
@@ -8015,7 +8015,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ================================================================================
-golang.org/x/sys v0.48.0: LICENSE
+golang.org/x/sys v0.49.0: LICENSE
 ================================================================================
 
 Copyright 2009 The Go Authors.
@@ -8047,7 +8047,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ================================================================================
-golang.org/x/text v0.42.0: LICENSE
+golang.org/x/text v0.43.0: LICENSE
 ================================================================================
 
 Copyright 2009 The Go Authors.

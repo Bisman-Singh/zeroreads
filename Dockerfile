@@ -1,5 +1,5 @@
 # Release image: a static binary on distroless, running as non-root.
-FROM golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8 AS build
+FROM golang:1.27.3@sha256:2669ec97bbb6e54602952b4171211116e3fe90e5f9c47619920c74554b3d7d09 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
