@@ -21,7 +21,7 @@ require (
 	go.opentelemetry.io/collector/pdata v1.67.0
 	go.opentelemetry.io/collector/processor v1.67.0
 	go.opentelemetry.io/collector/processor/processortest v0.161.0
-	go.yaml.in/yaml/v3 v3.0.5
+	go.yaml.in/yaml/v3 v3.0.6
 )
 
 require (
